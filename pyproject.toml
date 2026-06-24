@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bed"
+version = "1.0.0"
+description = "BED - BBS Engine Daemon"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "Zoid6 Technologies", email = "sysop@zoid6.com"}
+]
+dependencies = [
+    "bbsengine6>=9.0.0",
+    "websockets>=12.0",
+]
+
+[project.scripts]
+bed = "bed.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+bed = ["data/bed.json"]
