@@ -87,46 +87,48 @@ class TestBEDMocked(unittest.IsolatedAsyncioTestCase):
 class TestBEDParseArgs(unittest.IsolatedAsyncioTestCase):
     """Test BED argument parsing."""
 
+    def _parse_args(self):
+        """Helper to parse args using buildargs."""
+        import argparse
+        from bed.main import buildargs
+        parser = argparse.ArgumentParser(description="BED - BBS Engine Daemon")
+        buildargs(parser)
+        return parser.parse_args()
+
     def test_default_port(self):
         """Test default port is 8765."""
         with patch("sys.argv", ["bed"]):
-            from bed.main import parse_args
-            args = parse_args()
+            args = self._parse_args()
             self.assertEqual(args.port, 8765)
 
     def test_default_host(self):
         """Test default host is 0.0.0.0."""
         with patch("sys.argv", ["bed"]):
-            from bed.main import parse_args
-            args = parse_args()
+            args = self._parse_args()
             self.assertEqual(args.host, "0.0.0.0")
 
     def test_custom_port(self):
         """Test custom port can be specified."""
         with patch("sys.argv", ["bed", "--port", "9999"]):
-            from bed.main import parse_args
-            args = parse_args()
+            args = self._parse_args()
             self.assertEqual(args.port, 9999)
 
     def test_custom_host(self):
         """Test custom host can be specified."""
         with patch("sys.argv", ["bed", "--host", "localhost"]):
-            from bed.main import parse_args
-            args = parse_args()
+            args = self._parse_args()
             self.assertEqual(args.host, "localhost")
 
     def test_default_router(self):
         """Test default router is DefaultRouter."""
         with patch("sys.argv", ["bed"]):
-            from bed.main import parse_args
-            args = parse_args()
+            args = self._parse_args()
             self.assertEqual(args.router, "bbsengine6.net.defaultrouter.DefaultRouter")
 
     def test_custom_router(self):
         """Test custom router can be specified."""
         with patch("sys.argv", ["bed", "--router", "mymodule.MyRouter"]):
-            from bed.main import parse_args
-            args = parse_args()
+            args = self._parse_args()
             self.assertEqual(args.router, "mymodule.MyRouter")
 
 

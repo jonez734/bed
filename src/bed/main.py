@@ -82,65 +82,63 @@ class BED:
         await self.start()
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="BED - BBS Engine Daemon")
-    databasebuildargs(parser)
-    parser.add_argument(
+def buildargs(parentparser: argparse.ArgumentParser) -> None:
+    """Add BED arguments to parent parser."""
+    databasebuildargs(parentparser)
+    parentparser.add_argument(
         "--host",
         default="0.0.0.0",
         help="Host to bind to (default: 0.0.0.0)",
     )
-    parser.add_argument(
+    parentparser.add_argument(
         "--port",
         type=int,
         default=8765,
         help="Port to listen on (default: 8765)",
     )
-    parser.add_argument(
+    parentparser.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug logging",
     )
-    parser.add_argument(
+    parentparser.add_argument(
         "--foreground", "-f",
         action="store_true",
         help="Run in foreground (don't daemonize)",
     )
-    parser.add_argument(
+    parentparser.add_argument(
         "--pidfile",
         help="Path to PID file",
     )
-    parser.add_argument(
+    parentparser.add_argument(
         "--router",
         default="bbsengine6.net.defaultrouter.DefaultRouter",
         help="Module path to MessageRouter class (default: bbsengine6.net.defaultrouter.DefaultRouter)",
     )
-    parser.add_argument(
+    parentparser.add_argument(
         "--autorestart",
         action="store_true",
         default=None,
         help="Enable auto-restart on crash (default: from bed.json, or True)",
     )
-    parser.add_argument(
+    parentparser.add_argument(
         "--no-autorestart",
         action="store_true",
         default=False,
         help="Disable auto-restart on crash",
     )
-    parser.add_argument(
+    parentparser.add_argument(
         "--restart-delay",
         type=int,
         default=None,
         help="Seconds to wait before restarting (default: from bed.json, or 5)",
     )
-    parser.add_argument(
+    parentparser.add_argument(
         "--max-restarts",
         type=int,
         default=None,
         help="Max consecutive restarts before giving up (default: from bed.json, or 10)",
     )
-    return parser.parse_args()
 
 
 def get_autorestart_config(args: argparse.Namespace) -> tuple[bool, int, int]:
@@ -173,7 +171,9 @@ def load_router_class(router_path: str) -> Type:
 
 async def main_async() -> None:
     """Async main entry point."""
-    args = parse_args()
+    parser = argparse.ArgumentParser(description="BED - BBS Engine Daemon")
+    buildargs(parser)
+    args = parser.parse_args()
 
     autorestart, restart_delay, max_restarts = get_autorestart_config(args)
 
