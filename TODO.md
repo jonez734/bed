@@ -318,6 +318,195 @@ mistermcfeely, murdermotel, zoid6. See individual TODOs for the wording.
 
 ---
 
+## `menu` — single-pick option list, server-side hotkeys
+
+### Why `bed` owns this
+The casino menu (Blackjack "Hit / Stand / Double / Split", Poker "Fold / Check / Call / Raise", Roulette "Inside / Outside / …") and most empyre sub-menus (Town "Bank / Train / Tax / …", Combat "Attack / Spy / Diplomat / …") all want the same primitive: **show a labelled list of options with one keystroke per option, get the pick back, and let the server define the hotkeys.** A generic `menu` message type sits between the low-level `inputchoice` (which is one keystroke with no menu layout) and a full `listbox` (which supports paging, cursors, multi-column rendering, KEY_INSERT, etc.). The casino menus do not need any of that listbox machinery; they are flat, single-pick, hotkey-driven.
+
+Owning `menu` in `bed` gives every game:
+- one canonical wire shape for "display this option list, get one pick",
+- one place to handle hotkey collisions, case-insensitivity, and `[Q]uit` /
+  `[X]it` convention,
+- one place to add per-game style overrides (so empyre can use its own
+  colour scheme without redefining the wire shape),
+- one place to add tracing, metrics, and rate limiting.
+
+### Wire shape
+```json
+# Server → client: present a menu and wait for a single keystroke
+S→C {"type":"menu",
+     "request_id":"r100",
+     "title":"Blackjack — Hand #42",
+     "prompt":"Your move:",
+     "options":[
+        {"hotkey":"H","label":"Hit",          "enabled":true, "hint":"Take another card"},
+        {"hotkey":"S","label":"Stand",        "enabled":true},
+        {"hotkey":"D","label":"Double down",  "enabled":true, "hint":"Double bet, take one card"},
+        {"hotkey":"P","label":"Split",        "enabled":false,"hint":"Not available on this hand"},
+        {"hotkey":"Q","label":"Quit",         "enabled":true, "style":"danger"}],
+     "default":"S",
+     "timeout":60,
+     "ts":"2026-06-25T11:31:00.000Z"}
+
+# Client → server: the user picked one option
+C→S {"type":"menu_reply",
+     "request_id":"r100",
+     "hotkey":"H",
+     "cancelled":false,
+     "picked_at":"2026-06-25T11:31:04.123Z"}
+
+# Client → server: the user hit ESC / ^C / a cancel hotkey
+C→S {"type":"menu_reply",
+     "request_id":"r100",
+     "cancelled":true}
+
+# Server → client: the menu timed out (default option was chosen or it was
+# cancelled, depending on the menu's policy)
+S→C {"type":"menu_timeout",
+     "request_id":"r100",
+     "default_hotkey":"S"}
+
+# Server → client: cancel a pending menu (e.g. player disconnected from
+# the table, the round ended, or a higher-priority state transition fired)
+S→C {"type":"menu_cancel",
+     "request_id":"r100",
+     "reason":"round_ended"}
+```
+
+### Semantics
+- **One keystroke per pick.** The client renders the menu and waits for
+  exactly one `hotkey`. Pressing an unknown key is silently ignored (the
+  client may re-prompt; the server does not see it). Pressing `ESC` or
+  `^C` produces `menu_reply{cancelled:true}`.
+- **Hotkeys are case-insensitive by default.** A menu with `hotkey:"H"`
+  accepts both `H` and `h`. Case-sensitive menus opt in via
+  `{"case_sensitive":true}` in the menu envelope.
+- **Hotkey collisions are a server error.** The server MUST NOT ship a
+  menu with two options that have the same (case-folded) hotkey; the
+  `MenuService` validates this on the server side and raises
+  `DuplicateHotkeyError` at send time, surfacing as
+  `error{code:"menu_duplicate_hotkey"}` to the client.
+- **Disabled options.** `{enabled:false}` options are displayed but
+  cannot be picked — the client re-prompts on those keystrokes. This is
+  used for "Split — not available on this hand" style hints in the
+  casino.
+- **Default option.** If `default` is set, the server uses it as the
+  result of a `menu_timeout`. If `default` is not set, a timeout produces
+  `menu_reply{cancelled:true}`.
+- **Reconnect resume.** On `reconnect`, the server replays any unacked
+  `menu` from the pending-request table (same table as `echo` /
+  bearer-token plans). The client renders it, the user picks, and the
+  reply is delivered to the in-memory future.
+- **Cancellation.** The server may send `menu_cancel` to withdraw a
+  pending menu. The client must drop it and NOT send a `menu_reply` for
+  that `request_id` (the server treats a late `menu_reply` after
+  `menu_cancel` as a protocol error and discards it).
+
+### Style and layout
+- v1 default: the client renders the menu as a numbered list with the
+  hotkey in square brackets (`[H]it`, `[S]tand`, `[D]ouble down`,
+  `[P]plit`, `[Q]uit`) and the prompt on its own line below. The
+  `style` field on each option may override colour/bold for that
+  option's label.
+- v1 default: the client renders the `title` as a centred heading above
+  the options, and the `prompt` as the trailing line.
+- v1 default: the disabled `hint` is rendered dimmed/inverse next to
+  the label, in parentheses.
+- The wire shape is **layout-agnostic** — a future web client may
+  render the same envelope as a `<select>` or a list of buttons; the
+  server doesn't care.
+
+### `bed` package additions
+- [ ] Add `bed/api/menu.py` with `MenuService` (registers `menu`,
+      `menu_reply`, `menu_timeout`, `menu_cancel`).
+- [ ] Add `bed/api/menu_validator.py` with `validate_menu(envelope)`
+      enforcing: unique (case-folded) hotkeys, valid `default` if set,
+      `timeout > 0` if set, `prompt` non-empty if set, at least one
+      enabled option.
+- [ ] Add `bed/api/menu_default.py` with the canonical
+      `[Q]uit` / `[X]it` / `[B]ack` convention handler: if any of
+      these is present in the `options` list, the client binds
+      `ESC` / `^C` to the first one and reports `cancelled:true`
+      on that pick.
+- [ ] Extend `bed.api.session` (the shared pending-request table from
+      the bearer-token and echo plans) to track `menu` requests the
+      same way: monotonic `request_id`, replay on reconnect,
+      `cancel` on disconnect.
+- [ ] Extend `bed.main.BED.start` to register `MenuService` after
+      `EchoService` and before any game router is loaded.
+- [ ] Document `MenuService` in `bed/docs/BED_MENU.md` and add a
+      `bed/protocol/MENU.md` reference page.
+- [ ] Add `bed/tests/test_menu_service.py`: pick / cancel / timeout /
+      disabled option / case-insensitive hotkey / case-sensitive opt-in
+      / duplicate-hotkey error / `default` on timeout / no-default
+      timeout cancels / reconnect-resume / `menu_cancel` after late
+      `menu_reply` is a no-op.
+- [ ] Add `bed/tests/test_menu_validator.py` for the static validator.
+
+### Relationship to other primitives
+- `menu` is **higher-level** than `inputchoice` and **lower-level**
+  than `listbox`. Use it when the game wants a one-keystroke option
+  list with no paging, no cursor, no insert/edit.
+- `menu` is **not** a substitute for `inputstring` (free text),
+  `inputinteger` (numeric), `inputboolean` (yes/no), or `listbox`
+  (paged, multi-column, editable). The casino still uses those for
+  bet amounts, hand selection from a long list, etc.
+- `menu` and `echo` are complementary: a `menu` is preceded by one or
+  more `echo` frames (e.g. "Blackjack — Hand #42" banner + the
+  visible hand) and is followed by more `echo` frames (the result of
+  the pick). The `flush:true` echo just before the `menu` is the
+  prompt cursor's anchor; the client MUST NOT send `menu_reply` before
+  the matching `echo_ack`.
+
+### Decisions
+- [ ] v1 default: case-insensitive hotkeys; `[Q]uit` / `[X]it` /
+      `[B]ack` are reserved and `ESC`/`^C` bind to the first one in
+      the list (no opt-out in v1).
+- [ ] v1 default: `timeout` is in seconds; default 0 (no timeout) if
+      omitted; default option on timeout is taken from `default`, else
+      cancelled.
+- [ ] v1 default: `menu` does NOT support multi-pick. A future
+      `menu_multi` primitive may (e.g. casino's "select your lucky
+      numbers"); for v1, a multi-pick UI uses `listbox` with
+      `mode:"multi"`.
+- [ ] v1 default: `menu_cancel` after a late `menu_reply` is a
+      silent no-op on the server (the reply has already been
+      delivered to the in-memory future). The server logs a
+      `logentry` debug message with the `request_id` and the
+      `late_reply_at` timestamp.
+- [ ] Future: per-game style palettes for option labels, the
+      `style` field may carry an icon hint for a future web client.
+
+### Adoption
+- [ ] **casino** (primary driver): replace every `bbsengine6.io.inputchoice`
+      call in `src/casino/games/blackjack/`, `src/casino/games/poker/`,
+      `src/casino/games/roulette/`, `src/casino/lobby/`, and
+      `src/casino/api/handler.py` with a `menu` envelope. The casino
+      `MessageRouter` exposes a `casino_menu` service for non-menu
+      consumers (bots, lobby clients) that wraps the same envelope.
+- [ ] **empyre**: `Phase 2 — Router rework` in `empyre/TODO.md` adopts
+      `menu` for the top-level menu (`I`nstructions / `M`aintenance /
+      `N`ews / `P`lay / `T`own / `Y`our Status / `Q`uit) and the
+      sub-menus in `town/`, `combat/`, `dock/`, `shipyard/`,
+      `investments/`, etc. The `bbsengine6.io.inputchoice` calls in
+      the empyre modules are swapped for `menu` envelopes via the
+      IO shim in `empyre/io_bridge.py`.
+- [ ] **murdermotel**: adopt `menu` for the night-action / day-vote
+      menus.
+- [ ] **zoid6**: adopt `menu` for the dashboard "switch to casino /
+      switch to empyre / check bank / log out" picker.
+- [ ] **mistermcfeely (postoffice)**: adopt `menu` for the
+      "read / reply / forward / delete / next" folder menu.
+- [ ] **bbsengine6 bank service**: adopt `menu` for the
+      "balance / deposit / withdraw / transfer / history" picker.
+- [ ] External consumers (third-party clients, mobile apps): the
+      `menu` envelope is the most consumer-friendly primitive; bots
+      that drive games should prefer it over `inputchoice`.
+
+---
+
+---
+
 ## Implementation order
 1. `bed/api/auth.py` + `bed/api/token_store.py` (in-memory) + `bed/api/credential_provider.py` protocol.
 2. `bed.main.BED.start` wires `AuthService` first; `DefaultRouter` keeps its stub `auth`.
