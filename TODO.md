@@ -98,6 +98,188 @@ S→C {"type":"error","code":"bed_instance_mismatch","message":"…","recoverabl
 
 ---
 
+## `echo` and `echo_ack` — generic push-based text channel
+
+### Why `bed` owns this, not individual game routers
+Every BED-hosted game (empyre, casino, mistermcfeely, murdermotel, zoid6) needs a
+way to push a render fragment to the connected client and to know that the
+fragment was displayed before continuing (e.g. before issuing the next IO
+request). If each game rolls its own `echo`/`echo_ack` pair, the wire shapes
+will drift and BED's transport will end up carrying N slightly-different
+protocols. Owning the pair in `bed` gives every game:
+- a stable, documented fragment envelope,
+- a uniform backpressure / flow-control primitive (`echo_ack`),
+- free transport-level framing (chunking, ordering, reconnect-resume),
+- one place to add tracing, metrics, and rate limiting.
+
+`bed` defines the **envelope and transport contract**. Games define the
+**content schema** (`text`, `style`, `style_color`, `mci`, etc.) inside
+`echo.payload`.
+
+### Wire shape
+```json
+# Server → client: push one render fragment (or a batch via echo_batch)
+S→C {"type":"echo",
+     "request_id":"r42",
+     "stream":"main",
+     "seq":17,
+     "payload":{
+       "text":"Welcome to Empyre.\n",
+       "style":{"fg":"white","bg":"black","bold":false,"underline":false},
+       "mci":{"code":"{f6}","args":{}}},
+     "flush":true,
+     "ts":"2026-06-25T11:30:01.123Z"}
+
+# Server → client: a batch of fragments sharing one request_id (chunking)
+S→C {"type":"echo_batch",
+     "request_id":"r42",
+     "stream":"main",
+     "seq_start":17,
+     "fragments":[
+        {"seq":17,"text":"Welcome "},
+        {"seq":18,"text":"to "},
+        {"seq":19,"text":"Empyre.\n","flush":true}]}
+
+# Client → server: I rendered the fragment / batch
+C→S {"type":"echo_ack",
+     "request_id":"r42",
+     "last_seq":19,
+     "rendered_at":"2026-06-25T11:30:01.456Z"}
+
+# Client → server: I can't render this fragment (e.g. unknown MCI code)
+C→S {"type":"echo_nack",
+     "request_id":"r42",
+     "last_seq":18,
+     "reason":"unknown_mci_code",
+     "detail":"code={f99}"}
+
+# Server → client: cancel a pending echo (e.g. menu redraw replaced it)
+S→C {"type":"echo_cancel",
+     "request_id":"r42",
+     "reason":"superseded"}
+```
+
+### Semantics
+- **At-least-once, in-order delivery.** `seq` is monotonic per `stream` per
+  session. `request_id` is monotonic per session (see `bed.api.session` in the
+  bearer-token plan above — the same `request_id` counter is reused here).
+- **One outstanding `echo_ack` per session.** The server may have multiple
+  `echo`s in flight across streams (`main`, `bottombar`, `statusline`) but a
+  single client only ever owes one `echo_ack` for the most-recently-pushed
+  fragment.
+- **`flush:true` means "I'm about to ask the client for input next".** The
+  client must render every prior `seq` for that stream before sending
+  `echo_ack`. `flush:false` means "more fragments coming, no need to ack yet,
+  but feel free to render streaming".
+- **Reconnect resume.** On `reconnect`, the server replays any unacked
+  `echo`/`echo_batch` from the persistent request table (see bearer-token
+  plan: pending-request table keyed by `session_id`). The client renders the
+  replay, then sends a single `echo_ack` with the highest `seq` it actually
+  showed. Server resumes from `last_seq + 1`.
+- **Cancellation.** When the game replaces a screen (e.g. menu redraw, the
+  player hits `^C`, or a state transition fires), the server sends
+  `echo_cancel` for any in-flight `request_id` that is no longer relevant.
+  The client must drop those fragments and may send `echo_ack{last_seq: <prior
+  visible seq>}` to confirm the cancellation point.
+
+### Streams
+A session has up to three named render streams, each with its own `seq`:
+- `main` — the primary game UI (menus, listboxes, prompts).
+- `bottombar` — the BBS-style status bar (registered fragments in
+  `bbsengine6.io.screen`). Pushed by `setbottombar` / `register_*` calls.
+- `statusline` — optional, for in-game top-of-screen status (turn count,
+  bank balance, unread mail). Pushed by empyre's `lib.init` bottom-bar-style
+  fragments if/when migrated.
+
+Each stream is independent: `main` can be paused waiting on an
+`inputchoice_reply` while `bottombar` continues to receive updates (turn
+count ticking, new mail arriving, etc.).
+
+### `bed` package additions
+- [ ] Add `bed/api/echo.py` with `EchoService` (registers `echo`, `echo_batch`,
+      `echo_ack`, `echo_nack`, `echo_cancel`).
+- [ ] Add `bed/api/fragment.py` with `Fragment` dataclass
+      (`request_id`, `stream`, `seq`, `text`, `style`, `mci`, `flush`, `ts`)
+      and `FragmentQueue` (per-session, per-stream ordered queue with
+      `last_acked_seq` cursor).
+- [ ] Add `bed/api/style.py` defining the canonical style schema
+      (`fg`, `bg`, `bold`, `underline`, `inverse`, `blink`, palette indices)
+      and an MCI codec stub that round-trips the legacy `{f6}` / `{labelcolor}`
+      tokens used by `bbsengine6.io.echo`.
+- [ ] Extend `bed.api.session` to add a per-session monotonic `request_id`
+      counter and a per-session `pending_ack` future (shared with the
+      bearer-token plan's pending-request table).
+- [ ] Extend `bed.main.BED.start` to register `EchoService` after `AuthService`
+      and before any game router is loaded, so the first fragment after
+      `auth_result` is an `echo` (e.g. login banner) — not a game-specific
+      frame.
+- [ ] Document `EchoService` in `bed/docs/BED_ECHO.md` and add a
+      `bed/protocol/ECHO.md` reference page.
+- [ ] Add `bed/tests/test_echo_service.py`: in-order delivery, batch chunking,
+      `flush` semantics, `echo_cancel` supersession, reconnect-resume from
+      `last_seq`, `echo_nack` handling, multi-stream independence.
+- [ ] Add `bed/tests/test_echo_mci_roundtrip.py` for the MCI codec
+      (parse `{f6}` / `{labelcolor}` / `{var:valuecolor}` into structured
+      style, and back).
+
+### `echo_ack` backpressure rules
+- The server **may** issue IO requests (`inputstring`, `inputchoice`, etc.)
+  only after the matching `echo_ack` arrives for the most-recent
+  `flush:true` echo. This guarantees the client has rendered the prompt
+  before the server blocks on input.
+- The server **may** push `flush:false` echoes as fast as it likes; the
+  client acks them at its own cadence (e.g. on natural render boundaries
+  every N fragments, or on a 50ms timer).
+- The client **may** send a single `echo_ack` for a batch by setting
+  `last_seq` to the highest `seq` it actually rendered. The server
+  treats every `seq` ≤ `last_seq` as acked.
+- If the server times out waiting for `echo_ack` (configurable, default
+  30s), it sends `echo_cancel{reason:"ack_timeout"}` and proceeds with an
+  error envelope to the client.
+
+### Style / MCI compatibility
+- The `payload.style` field is the **canonical** form. `payload.mci` is a
+  **legacy escape hatch** for fragments that originate from a `bbsengine6.io`
+  shim and haven't been transcoded yet.
+- The MCI codec MUST be a strict superset of `bbsengine6.io.echo`'s
+  tokenizer — i.e. anything that works in the door mode of empyre must
+  render identically in a thin client that uses the same `style` schema.
+- v1 default: the thin client renders `text` only and ignores `style` /
+  `mci`; the server is responsible for any pre-transcoding it wants to do
+  (e.g. the headless test client asserts the raw `text` and a separate
+  TUI client applies the `style` field).
+
+### Decisions
+- [ ] v1 default: at-least-once delivery with reconnect-resume; in-order per
+      stream; one outstanding `flush:true` per session.
+- [ ] v1 default: `echo` and `echo_ack` are mandatory on every connection —
+      no game may use a different text-push primitive.
+- [ ] v1 default: `flush:false` echoes may be dropped by the server under
+      memory pressure (low watermark); `flush:true` echoes are always
+      delivered. The server sends `echo_cancel{reason:"dropped"}` for any
+      dropped non-flush fragment.
+- [ ] v1 default: `payload.mci` round-trips through the codec; future
+      versions may require structured `payload.style` only.
+- [ ] v1 default: 30s default `ack_timeout`, configurable via
+      `--echo-ack-timeout SECONDS` in `bed.main.parse_args`.
+- [ ] Future: per-game style palettes (so empyre can use its own colour
+      scheme without redefining the wire shape).
+
+### Adoption
+- [ ] empyre: adopt `EchoService` as the first vertical slice of the
+      thin-client BED conversion (Phase 1 of `empyre/TODO.md`).
+- [ ] casino: adopt `EchoService` for lobby chat and table-event pushes.
+- [ ] mistermcfeely (postoffice): adopt `EchoService` for "new mail"
+        notifications and folder rendering.
+- [ ] murdermotel: adopt `EchoService` for narrative pushes and
+        status-line updates.
+- [ ] zoid6: adopt `EchoService` for dashboard tiles and shared-wallet
+        notifications.
+- [ ] bbsengine6 bank service: adopt `EchoService` for transaction
+        notifications.
+
+---
+
 ## Games and apps that will benefit from `bed`'s bearer token
 
 When `bed`'s `AuthService` is implemented, the following games/apps in the monorepo
