@@ -953,5 +953,189 @@ support; v1 does not need it.
 
 ---
 
+## BED `Sink` integration with `bbsengine6.io`
+
+This section describes how `bed` consumes the sink infrastructure
+defined in `bbsengine6/TODO.md` "`bbsengine6.io` sink infrastructure
+for thin-client BED conversion". The bbsengine6 work is foundational;
+this work is the consumer. The dependency direction is:
+`bbsengine6` → `bed` → game repos.
+
+### Phase 0 — `BEDSink` for the BED process
+
+- [ ] Add `bed/sinks/bed_sink.py` with `BEDSink(websocket, server,
+      router)`. The `BEDSink` is a per-connection adapter that
+      implements the `bbsengine6.io.sink.Sink` protocol.
+- [ ] The `BEDSink` holds three references:
+  - `self.websocket`: the per-connection WebSocket (so it can call
+    `server.send_to(websocket, envelope)`).
+  - `self.server`: a reference to the `WebSocketServer` (so it can
+    call `send_to`).
+  - `self.router`: a reference to the per-process `MessageRouter`
+    (from `bbsengine6/net/router.py`, gained the `MessageRouterMixin`
+    API in bbsengine6 Phase 5).
+- [ ] Each `BEDSink` method builds the appropriate BED envelope and
+  calls `await self.server.send_to(self.websocket, envelope)`:
+  - `echo(text, **kwargs)`: calls `bbsengine6.io.echo_render(text,
+    **kwargs)` to get the rendered string, builds an `echo` envelope
+    (per the `echo` / `echo_ack` section above), sends it.
+  - `inputchoice(prompt, options, default="", **kwargs)`: builds a
+    `menu` envelope, awaits `menu_reply`. The `request_id` is
+    allocated via `router.next_request_id(websocket)`; the future
+    is `router.get_pending_request(websocket, request_id)`.
+  - `inputstring(prompt, default="", **kwargs)`: builds an
+    `inputstring` envelope, awaits `inputstring_reply`.
+  - `inputboolean`, `inputinteger`, `inputchar`, `inputdate`,
+    `inputfilename`, `inputpassword`: analogous.
+  - `screen_setbottombar(text)`: pushes an `echo` frame on
+    `stream="bottombar"`.
+  - `screen_register_bottombar_fragment(name, text)`: same.
+  - `screen_unregister_bottombar_fragment(name)`: same with
+    `unregister=true`.
+- [ ] The `BEDSink` does NOT own the message loop. It only owns the
+  outgoing-send side. Incoming `*_reply` messages are dispatched by
+  `WebSocketServer.dispatch_message` → `MessageRouter.handle_message`
+  → the right service handler (e.g. `IOServiceHandler` for
+  `menu_reply`, `inputstring_reply`, etc.). The `IOServiceHandler`
+  calls `router.resolve_pending_request(websocket, request_id,
+  value)` to resolve the future in the `BEDSink`.
+- [ ] **No new `MessageRouter` is created.** The `BEDSink` is a
+  per-connection writer-adapter that uses the existing per-process
+  `MessageRouter` (loaded via `--router`) for session access and
+  pending-request resolution. The `MessageRouter` is the
+  incoming-dispatch side; the `BEDSink` is the outgoing-send side.
+  This is the cleanest separation.
+- [ ] **Backward compat check**: door-mode game routers (which run
+  in a process without `WebSocketServer` / `BED`) don't install a
+  `BEDSink`; they get the default `DefaultSink` behavior. The
+  `bbsengine6/tests/test_io_backward_compat.py` suite passes.
+- [ ] Add `bed/tests/test_bed_sink.py`:
+  - `BEDSink.echo` builds an `echo` envelope and calls
+    `server.send_to` (not a write to stdout).
+  - `BEDSink.inputchoice` builds a `menu` envelope, records the
+    pending request, and (when the `IOServiceHandler` resolves the
+    `menu_reply`) returns the hotkey.
+  - `BEDSink.inputstring` builds an `inputstring` envelope and
+    returns the value.
+  - `BEDSink.screen_setbottombar` pushes an `echo` frame on
+    `stream="bottombar"`.
+  - `BEDSink` does not own the message loop; it only sends
+    outgoing envelopes.
+
+### Phase 1 — `BEDSink` installed via `WebSocketServer.on_connect_hook`
+
+- [ ] In `bed/main.py`, when constructing the `WebSocketServer`,
+  register an `on_connect_hook` that:
+  1. Builds a per-connection `BEDSink(websocket, server, router)`.
+  2. Installs the sink via `token = set_io_sink(bed_sink)` (from
+     `bbsengine6.io.sink`).
+  3. Runs the message loop (reads envelopes from the WebSocket,
+     dispatches to `router.handle_message`, sends responses).
+  4. In the `finally` block, calls `reset_io_sink(token)` and
+     `router.cleanup_session(websocket)`.
+- [ ] The hook signature is
+  `async def on_connect_hook(websocket, router)`. The `router` is
+  the per-process `MessageRouter` (passed in by the
+  `WebSocketServer`).
+- [ ] This is **option (e)** in the prior plan: the hook owns the
+  message loop. The `WebSocketServer.on_connect` delegates the
+  message loop to the hook when one is registered; otherwise it
+  runs the existing message loop (backward compat).
+- [ ] **Backward compat**: door-mode game routers (which run in a
+  process without `WebSocketServer`) don't install a sink; they get
+  the default `DefaultSink` behavior.
+- [ ] Add `bed/tests/test_bed_sink_on_connect.py`:
+  - The `BEDSink` is installed via the hook.
+  - The `BEDSink` persists for the connection lifetime.
+  - The `BEDSink` is reset on disconnect.
+  - The `BEDSink` doesn't leak across connections (two connections
+    get two different `BEDSink` instances).
+  - `router.cleanup_session(websocket)` is called on disconnect.
+
+### Phase 2 — Thin-client `IOSink` for `bed/client/`
+
+- [ ] In `bed/client/io_sink.py` (shared across all thin clients),
+  add `ThinClientIOSink(websocket)` — a client-side `Sink`
+  implementation. Each method builds the appropriate envelope and
+  sends it over the WebSocket to the BED process; the response is
+  awaited and returned to the caller.
+- [ ] The thin client uses this `IOSink` to replace the existing
+  `sys.modules['bbsengine6.io']` swap in `empyre/io_bridge.py` (and
+  equivalent in casino / murdermotel / etc.). The `sys.modules` swap
+  continues to work as a v1 default; the `IOSink` is a future
+  option. See `empyre/TODO.md` "Phase 1 — IO shim" for the
+  migration plan.
+- [ ] **Backward compat**: the `sys.modules` swap is unchanged; the
+  `IOSink` is an additive alternative.
+- [ ] Add `bed/tests/test_thin_client_io_sink.py`:
+  - `ThinClientIOSink.echo` sends an `echo` envelope over the
+    WebSocket.
+  - `ThinClientIOSink.inputchoice` sends a `menu_reply` envelope
+    and awaits `menu_reply` (with `request_id` matching).
+  - `ThinClientIOSink` does not own the WebSocket; it only uses the
+    one passed in.
+
+### Phase 3 — Thin client uses `echo_render` for the `text` field
+
+- [ ] In `bed/sinks/bed_sink.py`, the `BEDSink.echo` method calls
+  `bbsengine6.io.echo_render(text, **kwargs)` to get the rendered
+  string, then ships it in the `echo` envelope's `text` field.
+- [ ] The thin client renders `text` verbatim. No client-side MCI
+  rendering.
+- [ ] **Backward compat**: door-mode callers (who don't install a
+  sink) get the current behavior. The `echo_render` call is internal
+  to the sink.
+- [ ] Add `bed/tests/test_bed_sink_echo_render.py`:
+  - `BEDSink.echo("{f6}hello")` builds an `echo` envelope with
+    `text` = the MCI-substituted string.
+  - The same input in door mode produces the same stdout output
+    (verified by `bbsengine6/tests/test_io_backward_compat.py`).
+
+### Phase 4 — Thin client uses `mci.parse` for the `mci` field
+
+- [ ] In `bed/sinks/bed_sink.py`, the `BEDSink.echo` method calls
+  `bbsengine6.io.mci.parse(text)` to get the token list, then ships
+  it in the `echo` envelope's `payload.mci` field.
+- [ ] The `mci` field is optional in v1 (a future client can ignore
+  it). The `text` field is always populated.
+- [ ] **Backward compat**: door-mode callers don't see the `mci`
+  field. The `parse` call is internal to the sink.
+- [ ] Add `bed/tests/test_bed_sink_mci.py`:
+  - `BEDSink.echo("{f6}hello {var:foo}")` builds an `echo` envelope
+    with `payload.mci` = the parsed token list.
+  - The same input in door mode produces the same stdout output
+    (verified by `bbsengine6/tests/test_io_backward_compat.py`).
+
+### Decisions (sink integration)
+- [ ] v1 default: `BEDSink` is installed via the
+  `WebSocketServer.on_connect_hook` (option e: the hook owns the
+  message loop). The hook signature is
+  `async def on_connect_hook(websocket, router)`.
+- [ ] v1 default: the `BEDSink` does not own the message loop. It
+  only owns the outgoing-send side. The `MessageRouter` is the
+  incoming-dispatch side. The `IOServiceHandler` (a service on the
+  `MessageRouter`) resolves pending-request futures via
+  `router.resolve_pending_request(...)`.
+- [ ] v1 default: the thin-client `IOSink` lives in
+  `bed/client/io_sink.py` (shared across all games). The
+  `sys.modules` swap continues to work as the v1 default; the
+  `IOSink` is a future option.
+- [ ] v1 default: `BEDSink.echo` populates the `echo` envelope's
+  `text` field via `bbsengine6.io.echo_render` (door-mode
+  byte-for-byte parity) and the `mci` field via
+  `bbsengine6.io.mci.parse` (structured token list for future
+  clients).
+
+### Cross-references
+- [ ] The bbsengine6 sink infrastructure is defined in
+  `bbsengine6/TODO.md` "`bbsengine6.io` sink infrastructure for
+  thin-client BED conversion" (Phases 0–5). This section is the
+  consumer.
+- [ ] Game-repo adoption (empyre, casino, murdermotel, mistermcfeely,
+  zoid6) is tracked in each repo's `TODO.md` cross-reference
+  section.
+
+---
+
 ## Legacy
 (none yet — first entry in this file)
