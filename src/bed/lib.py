@@ -2,6 +2,15 @@ import argparse
 
 from bbsengine6.database import buildargs as databasebuildargs
 
+from . import config as _bed_config
+
+
+def _default_config_path() -> str:
+    """Default value for --config: the bed.json shipped in the bed package's
+    data/ subdirectory. Returned as a string so argparse can use it as a
+    default without re-resolving at every parse."""
+    return str(_bed_config.get_package_data_path("bed.json"))
+
 
 def buildargs(parentparser: argparse.ArgumentParser) -> None:
     """Add BED arguments to parent parser."""
@@ -23,7 +32,8 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         help="Enable debug logging",
     )
     parentparser.add_argument(
-        "--foreground", "-f",
+        "--foreground",
+        "-f",
         action="store_true",
         help="Run in foreground (don't daemonize)",
     )
@@ -59,4 +69,14 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         type=int,
         default=None,
         help="Max consecutive restarts before giving up (default: from bed.json, or 10)",
+    )
+    parentparser.add_argument(
+        "--config",
+        dest="config_file",
+        default=_default_config_path(),
+        help="Path to a JSON config file. Defaults to the bed.json shipped in "
+        "bed's package data directory. Overrides packaged defaults for "
+        "bed.*, bind.*, and database.*. CLI flags for --host, --port, and "
+        "database args retain highest priority when explicitly set. No "
+        "path expansion is performed.",
     )

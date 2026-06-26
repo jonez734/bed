@@ -1,27 +1,75 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "bed"
-version = "1.0.0"
+dynamic = ["version"]
 description = "BED - BBS Engine Daemon"
 readme = "README.md"
-requires-python = ">=3.11"
-license = {text = "MIT"}
+requires-python = ">=3.9,<3.13"
+license = {text = "gpl-2.0-or-greater"}
 authors = [
-    {name = "Zoid6 Technologies", email = "sysop@zoid6.com"}
+    {name = "bbsengine.org", email = "bed@projects.zoidtechnologies.com"}
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: BBS",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Terminals",
 ]
 dependencies = [
-    "bbsengine6>=9.0.0",
+    "bbsengine6>=0.0.1.dev202606",
     "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
 ]
 
 [project.scripts]
 bed = "bed.main:main"
 
+[project.urls]
+Homepage = "https://bbsengine.org/"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.dynamic]
+version = { attr = "bed._version.__version__" }
+
 [tool.setuptools.package-data]
-bed = ["data/bed.json"]
+bed = ["data/bed.json", "daemon/*.service"]
+
+[tool.pytest.ini_options]
+markers = [
+    "unit: marks tests as unit tests (no database required)",
+    "integration: marks tests as integration tests (require networking)",
+]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "off"
+reportMissingTypeHints = false
+reportGeneralTypeIssues = false
+reportTypedDictItemRequired = false
+reportOptionalMemberAccess = false
+reportAttributeAccessIssue = false
+reportCallIssue = false
+reportReturnType = false
+reportUnionConsistency = false
+reportUnknownVariableType = false
+reportUnknownMemberType = false
+include = ["src"]
+exclude = ["**/__pycache__", "**/tests"]
+

@@ -1139,3 +1139,176 @@ this work is the consumer. The dependency direction is:
 
 ## Legacy
 (none yet — first entry in this file)
+
+---
+
+## CLI `--config` flag
+
+`bed` accepts a `--config PATH` argument. **The default value is the
+`bed.json` shipped in the bed package's `data/` subdirectory**
+(`bed/data/bed.json`, resolved via `bed.config.get_package_data_path`).
+Passing `--config` overrides the default and points bed at an external
+JSON file. The file's keys are deep-merged on top of the packaged
+defaults, and the result is consulted during startup.
+
+### Syntax
+```
+bed --config /opt/zoid6/src/zoid6/data/bed.json --router zoid6.api.handler.MessageRouter
+```
+
+### Priority order (highest wins)
+1. CLI flag (e.g. `--host`, `--no-autorestart`, `--databasename`).
+2. The file passed via `--config`.
+3. `BED_*` environment variables.
+4. Packaged `bed/src/bed/data/bed.json` defaults.
+
+### Recognized top-level keys
+- `bed.autorestart` (bool), `bed.restart_delay` (int), `bed.max_restarts` (int)
+  — drive `bed`'s in-process restart loop.
+- `bind.host` (str), `bind.port` (int) — applied to the WebSocket
+  server **only if** the user did not pass `--host` / `--port` on the
+  CLI (detected by comparing the parsed value against the argparse
+  default).
+- `database.name` / `database.host` / `database.port` / `database.user` /
+  `database.password` — same precedence rule against
+  `--databasename` / `--databasehost` / etc. The zoid6 `bed.json`
+  carries only `name` / `host` / `port`; `user` and `password` stay on
+  the CLI or in `BED_DATABASEUSER` / `BED_DATABASEPASSWORD` env.
+
+### `services.*` is intentionally NOT consumed by `bed`
+The zoid6 `bed.json` carries a `services` map that the **router**
+(`zoid6.api.handler.MessageRouter`) iterates to load enabled module
+routers. `bed` itself stays router-agnostic. The systemd unit (or
+shell invocation) must pass `--router zoid6.api.handler.MessageRouter`
+to select the unified router.
+
+### Missing / unreadable config file
+A missing `--config` path causes `bed` to exit 1 with
+`Config file not found: <path>`. There is no silent fallback to the
+packaged defaults — fail loud so the systemd unit catches the typo
+immediately.
+
+### Path resolution
+No `~` expansion, no `Path.resolve()`, no relative-path magic. Whatever
+the user (or the systemd unit) passes is used verbatim. Pass an
+absolute path from the systemd unit (`/opt/zoid6/src/zoid6/data/bed.json`).
+
+### Systemd invocation shape (no unit file in this commit)
+The systemd unit is out of scope for this change, but the expected
+shape is:
+```
+ExecStart=/usr/bin/bed \
+  --config /opt/zoid6/src/zoid6/data/bed.json \
+  --router zoid6.api.handler.MessageRouter \
+  --no-autorestart
+Restart=on-failure
+User=zoid6
+WorkingDirectory=/opt/zoid6
+```
+`--no-autorestart` lets systemd own the restart loop; `bed` exits on
+crash and `Restart=on-failure` brings it back.
+
+Note: with the default `--config` now pointing at the packaged
+`bed/data/bed.json`, the systemd unit does **not** need to pass
+`--config` at all to use bed's own defaults. A zoid6 deployment
+wanting the unified router still needs to pass
+`--config /opt/zoid6/src/zoid6/data/bed.json` (or its own service
+file under zoid6's package). See the "Systemd deployment" section
+below.
+
+### zoid6 dependency
+`zoid6/src/pyproject.toml` declares `bed>=0.0.1.dev2026` as a runtime
+dependency so the unified router can rely on `bed`'s CLI being
+installed alongside it.
+
+---
+
+## Systemd deployment
+
+A `bed.service` unit ships with the package at
+`bed/daemon/bed.service` (also included in wheel sdist via
+`tool.setuptools.package-data`). It is `Type=simple`, runs as
+`User=zoid6`/`Group=zoid6`, and is the **generic** bed service —
+it uses the packaged `bed/data/bed.json` config (via the new
+`--config` default) and the default `bbsengine6` router.
+
+```
+ExecStart=/usr/bin/bed --no-autorestart
+```
+
+This unit is intentionally minimal so it works out-of-the-box for
+operators who just want "bed, with its defaults, supervised by
+systemd." It does **not** load any zoid6 module routers, and it
+does not pass `--config` — the packaged default is used.
+
+For the zoid6 deployment, ship a separate `zoid6-bed.service` (in
+the zoid6 repo, not bed) that does:
+```
+ExecStart=/usr/bin/bed \
+  --config /opt/zoid6/src/zoid6/data/bed.json \
+  --router zoid6.api.handler.MessageRouter \
+  --no-autorestart
+```
+The zoid6 unit will be a thin customization of the bed unit and
+reuses the same `EnvironmentFile=`, `User=`, `Group=`, and
+hardening settings.
+
+### Install
+```
+sudo make install-systemd
+sudo systemctl enable --now bed
+sudo systemctl status bed
+```
+
+The `install-systemd` target copies `bed/daemon/bed.service` to
+`/etc/systemd/system/bed.service` (mode 0644) and runs
+`systemctl daemon-reload`. It does **not** start or enable the
+service — that is left to the operator so they can review the
+installed unit first.
+
+`make uninstall-systemd` stops, disables, and removes the unit.
+
+### Environment file
+The unit loads `/etc/zoid6/bed.env` (the leading `-` means missing
+file is non-fatal). Create it on the deploy host with the database
+credentials that are intentionally absent from `bed.json`:
+```
+# /etc/zoid6/bed.env
+BED_DATABASEUSER=zoid6
+BED_DATABASEPASSWORD=...
+```
+`BBSENGINE6_DB*` env vars are also honored by `bbsengine6`'s
+`databasebuildargs` (e.g. `BBSENGINE6_DBNAME`, `BBSENGINE6_DBHOST`,
+`BBSENGINE6_DBPORT`).
+
+### Reload
+```
+sudo systemctl reload bed     # sends SIGHUP; bed logs a config reload
+```
+bed wires `SIGHUP` to a `config.reload_config()` call (informational
+log only — the live WebSocket server keeps the args it was started
+with). A true config-change-then-restart is `systemctl restart bed`.
+
+### Logs
+```
+journalctl -u bed -f
+```
+The unit sets `SyslogIdentifier=bed`, so `journalctl` filters
+cleanly. `bed` writes via `bbsengine6.io.echo`, which goes to
+stdout/stderr (captured by `StandardOutput=journal`).
+
+### Why `Type=simple` (not `Type=notify`)
+The unit uses `Type=simple` so it works without the `systemd`
+Python package. This means systemd considers the service "started"
+as soon as `bed` is exec'd, *before* the WebSocket server has
+finished its database connection probe. In practice this is a few
+hundred milliseconds of "active (running)" status where the WS
+socket is not yet accepting connections.
+
+If/when we want exact "ready" signaling, switch to `Type=notify` and
+add a `sd_notify("READY=1")` call (via the `systemd` Python package)
+in `bed.main.main_async` immediately after `await self.server.start()`.
+The trade-off: a soft dependency on the `systemd` PyPI package and a
+check at startup that the `NOTIFY_SOCKET` env var is present before
+calling `sd_notify` (so dev runs without systemd keep working).
+

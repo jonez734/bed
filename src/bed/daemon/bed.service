@@ -1,0 +1,37 @@
+[Unit]
+Description=BED - BBS Engine Daemon
+Documentation=https://bbsengine.org/
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=bed
+Group=bed
+WorkingDirectory=/opt/bed
+
+EnvironmentFile=-/etc/bed/bed.env
+
+ExecStart=/usr/bin/bed --no-autorestart
+
+ExecReload=/bin/kill -HUP $MAINPID
+
+Restart=on-failure
+RestartSec=5s
+
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bed
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/log/bed
+
+[Install]
+WantedBy=multi-user.target
