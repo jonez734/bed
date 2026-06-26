@@ -1255,13 +1255,19 @@ hardening settings.
 
 ### Install
 ```
+cd /opt/bed         # or wherever the bed repo is checked out
 sudo make install-systemd
 sudo systemctl enable --now bed
 sudo systemctl status bed
 ```
 
-The `install-systemd` target copies `bed/daemon/bed.service` to
-`/etc/systemd/system/bed.service` (mode 0644) and runs
+The Makefile lives at the **bed repo root** (`bed/Makefile`,
+sibling to `bed/pyproject.toml`) because bed's `pyproject.toml` is
+not under `bed/src/` like empyre/zoid6's are. All paths inside the
+Makefile are relative to the project root (`src/bed/...`).
+
+The `install-systemd` target copies `bed/src/bed/daemon/bed.service`
+to `/etc/systemd/system/bed.service` (mode 0644) and runs
 `systemctl daemon-reload`. It does **not** start or enable the
 service — that is left to the operator so they can review the
 installed unit first.
