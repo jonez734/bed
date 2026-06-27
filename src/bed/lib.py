@@ -130,7 +130,7 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         "--no-autorestart",
         action="store_true",
         default=False,
-        help="Disable auto-restart on crash",
+        help="Disable auto-restart on crash (default: off)",
     )
     parentparser.add_argument(
         "--restart-delay",
