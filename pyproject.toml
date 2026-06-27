@@ -49,7 +49,7 @@ where = ["src"]
 version = { attr = "bed._version.__version__" }
 
 [tool.setuptools.package-data]
-bed = ["data/bed.json", "daemon/*.service"]
+bed = ["data/bed.json", "data/sql/*.sql", "daemon/*.service"]
 
 [tool.pytest.ini_options]
 markers = [

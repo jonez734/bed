@@ -8,7 +8,9 @@
   "auth": {
     "bed_secret_path": "~/.config/bed/bed.secret",
     "token_ttl": 900,
-    "token_persistence": "memory"
+    "token_persistence": "memory",
+    "credential_provider": "password",
+    "bed_instance_id": null
   },
   "echo": {
     "ack_timeout": 30

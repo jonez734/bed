@@ -16,6 +16,14 @@ from bbsengine6.database import getpool
 from bbsengine6.net import WebSocketServer
 
 from . import config, lib
+from .api import (
+    AuthService,
+    InMemoryTokenStore,
+    DBTokenStore,
+    SessionRegistry,
+    get_provider,
+    load_or_create_secret,
+)
 
 
 _BED_DEFAULTS: Optional[dict] = None
@@ -38,6 +46,10 @@ def _get_bed_defaults() -> dict:
         "databaseport": parser.get_default("databaseport"),
         "databaseuser": parser.get_default("databaseuser"),
         "databasepassword": parser.get_default("databasepassword"),
+        "bed_secret": parser.get_default("bed_secret"),
+        "token_ttl": parser.get_default("token_ttl"),
+        "token_persistence": parser.get_default("token_persistence"),
+        "credential_provider": parser.get_default("credential_provider"),
     }
     return _BED_DEFAULTS
 
@@ -75,8 +87,38 @@ def _apply_database_config(args: argparse.Namespace, cfg: dict) -> None:
         args.databasepassword = db["password"]
 
 
+def _apply_auth_config(args: argparse.Namespace, cfg: dict) -> None:
+    """Apply auth.* from a loaded config when the CLI did not explicitly
+    set those flags. Mirrors _apply_bind_config / _apply_database_config."""
+    auth = cfg.get("auth")
+    if not isinstance(auth, dict):
+        return
+    defaults = _get_bed_defaults()
+    if (
+        "bed_secret_path" in auth
+        and args.bed_secret == defaults["bed_secret"]
+    ):
+        args.bed_secret = auth["bed_secret_path"]
+    if "token_ttl" in auth and args.token_ttl == defaults["token_ttl"]:
+        args.token_ttl = int(auth["token_ttl"])
+    if (
+        "token_persistence" in auth
+        and args.token_persistence == defaults["token_persistence"]
+    ):
+        args.token_persistence = auth["token_persistence"]
+    if (
+        "credential_provider" in auth
+        and args.credential_provider == defaults["credential_provider"]
+    ):
+        args.credential_provider = auth["credential_provider"]
+    if "bed_instance_id" in auth and args.bed_instance_id is None:
+        args.bed_instance_id = auth["bed_instance_id"]
+
+
 class BED:
     """BBS Engine Daemon - WebSocket server with dynamic router loading."""
+
+    DEFAULT_ROUTER_FQCN = "bbsengine6.net.defaultrouter.DefaultRouter"
 
     def __init__(
         self, args: argparse.Namespace, MessageRouterClass: Optional[Type] = None
@@ -85,7 +127,21 @@ class BED:
         self.MessageRouterClass = MessageRouterClass
         self.server: Optional[WebSocketServer] = None
         self.router: Any = None
+        self.auth_service: Optional[AuthService] = None
+        self.token_store: Any = None
+        self._session_registry: Optional[SessionRegistry] = None
+        self._gc_task: Optional[asyncio.Task] = None
         self._running = False
+
+    def _is_default_router(self) -> bool:
+        if self.MessageRouterClass is None:
+            return True
+        fqcn = f"{self.MessageRouterClass.__module__}.{self.MessageRouterClass.__name__}"
+        return fqcn == self.DEFAULT_ROUTER_FQCN
+
+    def _auth_enabled(self) -> bool:
+        persistence = getattr(self.args, "token_persistence", "memory")
+        return persistence != "none" and not self._is_default_router()
 
     async def start(self) -> None:
         """Start the daemon."""
@@ -114,6 +170,9 @@ class BED:
             )
             return
 
+        if self._auth_enabled():
+            await self._start_auth(db_args)
+
         if self.MessageRouterClass is not None:
             self.router = self.MessageRouterClass(db_args)
             self.router.register_all(self.server)
@@ -127,6 +186,8 @@ class BED:
                 f"Router: {self.MessageRouterClass.__module__}.{self.MessageRouterClass.__name__}",
                 level="info",
             )
+        if self.auth_service is not None:
+            self._gc_task = asyncio.create_task(self._gc_loop())
         io.echo(f"Registered services: {self.server.list_services()}", level="info")
 
         try:
@@ -135,9 +196,75 @@ class BED:
         except asyncio.CancelledError:
             io.echo("BED cancelled", level="info")
 
+    async def _start_auth(self, db_args: argparse.Namespace) -> None:
+        """Load secret, build token store + provider, register AuthService."""
+        secret_path = getattr(self.args, "bed_secret", None) or os.path.expanduser(
+            "~/.config/bed/bed.secret"
+        )
+        explicit_id = getattr(self.args, "bed_instance_id", None)
+        try:
+            secret_bytes, instance_id = load_or_create_secret(
+                secret_path, explicit_instance_id=explicit_id
+            )
+        except Exception as e:
+            io.echo(
+                f"BED refusing to start: cannot load bed secret at "
+                f"{secret_path!r}: {e}",
+                level="error",
+            )
+            raise
+
+        persistence = getattr(self.args, "token_persistence", "memory")
+        if persistence == "db":
+            self.token_store = DBTokenStore(db_args)
+        else:
+            self.token_store = InMemoryTokenStore()
+
+        provider = get_provider(getattr(self.args, "credential_provider", "password"))
+        self._session_registry = SessionRegistry()
+        ttl = int(getattr(self.args, "token_ttl", 900) or 900)
+        self.auth_service = AuthService(
+            args=db_args,
+            session_registry=self._session_registry,
+            token_store=self.token_store,
+            credential_provider=provider,
+            secret=secret_bytes,
+            instance_id=instance_id,
+            ttl_seconds=ttl,
+        )
+        self.auth_service.register_all(self.server)
+        io.echo(
+            f"BED AuthService: instance={instance_id[:8]}… "
+            f"ttl={ttl}s persistence={persistence} "
+            f"provider={getattr(self.args, 'credential_provider', 'password')}",
+            level="info",
+        )
+
+    async def _gc_loop(self) -> None:
+        """Periodic token-store garbage collection. Cancelled by stop()."""
+        try:
+            while self._running and self.token_store is not None:
+                try:
+                    self.token_store.gc_expired()
+                except Exception as e:
+                    io.echo(
+                        f"BED token gc error: {e}",
+                        level="warning",
+                    )
+                await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            return
+
     async def stop(self) -> None:
         """Stop the daemon."""
         self._running = False
+        if self._gc_task is not None:
+            self._gc_task.cancel()
+            try:
+                await self._gc_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._gc_task = None
         if self.server:
             await self.server.stop()
         io.echo("BED stopped", level="info")
@@ -224,6 +351,7 @@ async def main_async() -> None:
             io.echo(f"Using config file: {args.config_file}", level="info")
         _apply_bind_config(args, loaded_config)
         _apply_database_config(args, loaded_config)
+        _apply_auth_config(args, loaded_config)
 
     autorestart, restart_delay, max_restarts = get_autorestart_config(
         args, loaded_config
