@@ -35,7 +35,7 @@ version:
 	@echo 'datestamp = "$(VERSION)"' >> src/$(PROJECT)/_version.py
 	@cat src/$(PROJECT)/_version.py
 
-build:
+build: version
 	$(PYTHON) -m build --outdir $(OUTDIR)
 
 rename-sdist:
