@@ -72,6 +72,7 @@ S→C {"type":"error","code":"bed_instance_mismatch","message":"…","recoverabl
 - [ ] Extend `bed.main.BED.start` to wire `AuthService` into the `WebSocketServer` before any game router is loaded, so `auth` is the first thing every new connection sees.
 - [ ] Add a generic pending-request table in `bed.api.session` keyed by `session_id` with monotonic `request_id` counter; replay on reconnect.
 - [ ] Keep the existing `bed.api.default.DefaultRouter._handle_auth` as a no-credential stub for development and `wscat` smoke tests.
+- [ ] Document `zoid6.api.handler.MonikerAuthRouter` (in `zoid6/api/monikerrouter.py`) in `bed/README.md` and `--router` help as the next-step example: validates the moniker exists in the database via `bbsengine6.member.moniker_exists`; password still not checked.
 - [ ] Document `AuthService` in `bed/README.md` and add `bed/docs/BED_AUTH.md` covering wire format, TTL knobs, secret rotation, and threat model.
 - [ ] Add `bed/tests/test_auth_service.py`: issue/validate/expire/refresh/revoke/replay/cross-instance.
 - [ ] Add `bed/tests/test_bed_token_persistence.py` for the `db` storage mode.
@@ -1134,6 +1135,77 @@ this work is the consumer. The dependency direction is:
 - [ ] Game-repo adoption (empyre, casino, murdermotel, mistermcfeely,
   zoid6) is tracked in each repo's `TODO.md` cross-reference
   section.
+
+---
+
+## `bed.client.messages` — shared base for per-project message-family clients
+
+**Status:** v1 base in `bed/src/bed/client/messages.py`
+(`BedMessageClient`). v1 message-family client:
+`bed.client.bank.BedBankClient` (empyre shape).
+
+### Why a base class
+
+The five-line pattern
+
+    async def _request(self, message):
+        reply = await self._conn.send(message)
+        if reply.get("type") == "error":
+            raise BedUnavailable(f"...")
+        return reply
+
+was being copy-pasted into every per-project message-family client
+(empyre's old `BedBankClient` and `_BedPlayerClient`, casino's
+planned `BedBankClient`). Promoting it to
+`bed.client.messages.BedMessageClient` cuts each method down to one
+line and makes the error-translation policy live in one place.
+
+### Contract: `not_found=` and `default=`
+
+`BedMessageClient._request(message, *, not_found=(), default=_NO_DEFAULT)`
+takes two optional kwargs that work together:
+
+- `not_found` is a tuple of error codes that should NOT raise
+  `BedUnavailable` — typically `("not_found",)` for soft-404 lookups.
+- `default` is what to return when the server's error code matches
+  `not_found`. If unset, `None` is returned. A `_NO_DEFAULT` sentinel
+  distinguishes "no default" from "default is None".
+
+Transport-level failures (no connection, timeout, JSON parse error)
+always raise `BedUnavailable` regardless of `not_found`.
+
+### Per-project message-family clients
+
+bed owns the wire protocol; each project owns the message-family
+client that speaks it. `bed.client.bank.BedBankClient` is the
+empyre-shaped bank client (operates on a per-account `moniker`).
+Casino's table-bank `BedBankClient` is a separate class in
+`casino/src/casino/services/bank_client.py` — same name, different
+shape (operates on `table_moniker` and wraps the
+table→owner-moniker translation in its methods). Both subclass
+`BedMessageClient`.
+
+### Adopted
+
+- [x] `bed/src/bed/client/messages.py` — `BedMessageClient` base
+- [x] `bed/src/bed/client/bank.py` — `BedBankClient` (empyre shape)
+- [x] `empyre.bed_client` no longer defines `BedBankClient`; call
+      sites in `empyre.services.player` import directly from
+      `bed.client.bank`
+
+### Follow-up
+
+- [ ] `_BedPlayerClient` in
+      `empyre/src/empyre/services/player.py:56-109` still has the
+      per-method envelope pattern copy-pasted. Convert it to
+      subclass `BedMessageClient`. Its `info()` method is the
+      natural first user of
+      `not_found=("not_found", "player_not_found")`.
+- [ ] Casino's `BedBankClient`
+      (`casino/src/casino/services/bank_client.py`, planned in
+      `casino/TODO.md` "Adopt `bed.client` for WebSocket transport")
+      subclasses `BedMessageClient`. See casino TODO for the five
+      wire messages it wraps.
 
 ---
 
