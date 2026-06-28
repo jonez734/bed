@@ -134,6 +134,15 @@ class TestBEDParseArgs(unittest.IsolatedAsyncioTestCase):
             args = self._parse_args()
             self.assertEqual(args.router, "mymodule.MyRouter")
 
+    def test_moniker_auth_router_resolves(self):
+        """--router zoid6.api.handler.MonikerAuthRouter resolves via load_router_class."""
+        from bed.main import load_router_class
+
+        router_class = load_router_class("zoid6.api.handler.MonikerAuthRouter")
+        self.assertTrue(callable(router_class))
+        from zoid6.api.monikerrouter import MonikerAuthRouter
+        self.assertIs(router_class, MonikerAuthRouter)
+
 
 class TestSessionManager(unittest.IsolatedAsyncioTestCase):
     """Test SessionManager class."""
