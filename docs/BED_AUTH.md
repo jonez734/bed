@@ -203,3 +203,199 @@ The token is also stored on the per-session state at
   per login, refreshed on demand, valid for `token_ttl`."
 - Persistent session metadata (last-seen, last-IP, last-action). The
   pending-request table survives reconnects; nothing else does.
+
+## v2 roadmap: multi-instance load balancing
+
+v1 was designed around a single `bed` process. Three walls in the
+current code path make a stock round-robin load balancer force every
+player to re-authenticate on rebalance, and a fourth wall (session
+state) limits what "no re-auth" can mean even if the first three are
+fixed. This section is a design sketch for the v2 work, derived from a
+read of the v1 source as of the date of this doc.
+
+### What the v1 code actually binds to a single process
+
+1. **HMAC secret is per-instance.** `bed/api/secret.py:121-156`
+   generates 32 CSPRNG bytes on first run and writes them to
+   `~/.config/bed/bed.secret`. The only entry point used by
+   `bed/main.py:206` is `load_or_create_secret`. There is no code
+   path that loads a *shared* secret from a different source.
+2. **Instance check is a strict equality.** `bed/api/auth.py:258-264`
+   (in `_handle_reconnect`) and `bed/api/auth.py:315-321` (in
+   `_handle_auth_refresh`) both reject with `bed_instance_mismatch`
+   and call `self.token_store.delete(token)` whenever
+   `store_record.bed_instance_id != self.instance_id`. There is no
+   allowlist, and the delete is hostile in cluster mode (a node
+   that is on the allowlist should not be evicting another node's
+   record).
+3. **Token store is per-process by default.** `bed/api/token_store.py:56-106`
+   is an in-process `Dict` guarded by a `threading.Lock`. The
+   DB-backed variant (`bed/api/token_store.py:112-231`) exists and
+   is correct, but it is opt-in via `--token-persistence=db`, not
+   the default.
+4. **`SessionRegistry` is per-process and `websocket_id` is
+   process-local.** `bed/api/session.py:33-99` holds
+   `SessionState` in two in-process dicts. `websocket_id` is
+   `str(id(websocket))` (`bed/api/auth.py:220, 240, 302`), and
+   `id()` only has meaning inside the process that allocated the
+   object. On the wrong node, the registry is empty for the
+   incoming socket, and the `pending_request` envelope that
+   `reconnect_result` is supposed to replay is lost.
+
+### Failure modes of a v1 cluster
+
+| Scenario                                                | v1 outcome                                                                  |
+|---------------------------------------------------------|-----------------------------------------------------------------------------|
+| LB rebalances a live socket to a sibling node           | `bed_instance_mismatch` → `recoverable:false` → client re-`auth` prompt.    |
+| `bed` restarts (and any sibling takes traffic)          | `InMemoryTokenStore` is empty → `token_revoked` → client re-`auth` prompt.  |
+| `auth_refresh` reaches a non-issuing node               | `auth.py:330-336` finds no `SessionState` for this `websocket_id` → returns `not_authenticated`. Client has to fall back to `reconnect`, which then hits the instance check. |
+| `reconnect` reaches a non-issuing node                  | `_handle_reconnect` re-binds the `session_id` to a fresh local `SessionState`, but `take_pending` (`auth.py:289`, `session.py:116-123`) finds `None` because the registry is local. The `replayed` / `replayed_request_id` envelope is silently dropped. |
+
+### Path A: minimum viable, "no interactive password prompt on rebalance"
+
+The smallest patch that meets the "players don't re-auth on LB
+rebalance" bar. Ships without a shared `SessionRegistry`, at the
+cost of giving up cross-node replay-on-reconnect.
+
+**A1. Shared signing key.** Extend `secret.py` so the HMAC bytes
+can be sourced from somewhere other than a per-node file:
+
+- New CLI: `--bed-secret-source {file,env}` (or an extended syntax
+  on `--bed-secret`, e.g. `env:NAME`).
+- `env` mode reads the key from an environment variable, refuses to
+  start if the variable is unset, shorter than `SECRET_HEX_LEN`, or
+  not valid hex.
+- The 0600 permission check (`secret.py:64-71`,
+  `InsecureSecretError`) still applies: the *file backing the
+  injected secret* (if any) must be mode 0600, or the value must
+  come from a source the operator attests to (env / KMS).
+- The on-disk v2 JSON format (`secret.py:18-21, 76-103`) is already
+  trivially portable; the read path is unchanged.
+- `bed_instance_id` in the secret file is the *issuing* ID baked
+  into new tokens, not a per-node secret. The current `--bed-instance-id`
+  flag remains a per-node override for the issuing ID; the
+  accept set is a separate, new concept.
+
+**A2. Softened instance check.** `AuthService` accepts a set of
+allowed IDs at construction time and the two reject sites gate on
+it:
+
+- New `auth.allowed_instance_ids` config (list in `bed.json`,
+  `--bed-instance-ids` CLI flag) merged through `_apply_auth_config`
+  (`bed/main.py:90-115`) with the same precedence as the other
+  `auth.*` keys.
+- `auth.py:258-264` and `auth.py:315-321`: change
+  `store_record.bed_instance_id != self.instance_id` to
+  `store_record.bed_instance_id not in {self.instance_id, *self.allowed_instance_ids}`.
+- Move `self.token_store.delete(token)` behind "not in the
+  expanded set" (a true foreign token should still be evicted; a
+  sibling's token should not).
+- Optional stricter mode: a removed-from-allowlist ID triggers
+  delete; lax mode (default) just stops accepting. Pick one and
+  document the policy.
+
+**A3. Shared token store.** `token_persistence=db` becomes
+required in cluster mode rather than opt-in:
+
+- In `BED._start_auth` (`bed/main.py:199-241`), when
+  `--bed-secret-source=env` (or whatever opt-in is chosen) is on,
+  refuse to start with `token_persistence=memory`. The error
+  message points at `bed/data/sql/bed_token.sql` (referenced from
+  `bed/api/token_store.py:140-144`).
+- `DBTokenStore` (`bed/api/token_store.py:112-231`) is already
+  correct for the cross-node get/put/delete contract; no changes
+  to its SQL.
+- The "atomic rotation" guarantee in this doc (above) currently
+  rests on two sequential calls (`auth.py:285-287, 344-346`); wrap
+  `put` + `delete` in a single transaction in `DBTokenStore` so
+  the cluster-wide invariant holds. Without this, a slow client
+  can briefly see "no token" on a sibling node.
+
+**A4. Cross-node `reconnect` is a clean rebind.** Detect the
+"wrong node" case explicitly and skip `take_pending`:
+
+- In `_handle_reconnect` (`bed/api/auth.py:236-296`), if
+  `self.sessions.get_by_session(claims["session_id"])` is `None`
+  *and* `self.allowed_instance_ids` is non-empty (i.e. we're in
+  cluster mode), skip the `take_pending` call and always return
+  `replayed: null`, `replayed_request_id: null`. The `session_id`
+  is preserved (it's the stable handle from the issuing node);
+  only the local `SessionState` is recreated.
+- For `auth_refresh` (`bed/api/auth.py:298-347`), document that
+  it is best-effort and clients should handle `not_authenticated`
+  by issuing a fresh `reconnect` (not a fresh `auth` with a
+  password). The wire-level error code already has
+  `recoverable: true` (`BED_AUTH.md:73, 80-82`), so the contract
+  is consistent; the client just needs to know to try
+  `reconnect` before `auth`.
+
+### Path B: full shared `SessionRegistry` (v2+)
+
+Required to preserve the replay-on-reconnect feature across nodes.
+Significantly more code than Path A; should be a follow-up, not a
+prerequisite for "no re-auth on rebalance."
+
+- Replace `bed/api/session.py:33-99` with a DB-backed registry
+  mirroring `DBTokenStore` (per-`session_id` row carrying
+  `pending_request`, `request_id_counter`, `auth_service_token`).
+- Stop using `id(websocket)` for binding. Assign a per-connection
+  UUID at WebSocket upgrade and use that as `websocket_id` in
+  both `auth.py` (`auth.py:220, 240, 302`) and the registry. The
+  current `str(id(websocket))` only has meaning inside the
+  process that allocated the object and will collide across
+  processes.
+- `next_request_id` (`session.py:101-107`) becomes a
+  `SELECT … FOR UPDATE`-style increment in the shared store.
+  This is a hot path; benchmark before shipping.
+
+### New flag / config surface
+
+To stay consistent with the existing precedence rule (CLI >
+`bed.json` > argparse default, applied via `_apply_auth_config` at
+`bed/main.py:90-115`), the v2 additions should land in all three
+seams:
+
+- `--bed-secret` extended syntax (or `--bed-secret-source
+  {file,env}`) for shared-key sourcing.
+- `auth.bed_instance_ids` (list) / `--bed-instance-ids ID1,ID2,…`
+  for the accept set. `auth.bed_instance_id` remains the issuing
+  ID baked into new tokens.
+- `auth.allow_cross_instance_reconnect` (bool) for Path A's
+  "skip take_pending on sibling" behavior. Default `true` when
+  `bed_instance_ids` is set; default `false` otherwise.
+- `auth.token_persistence` is unchanged as a value, but the
+  cluster-mode doc must call out that `db` is required (not the
+  default) and that `bed/data/sql/bed_token.sql` is applied
+  lazily on first use.
+
+### Things to fix in passing (not blocking)
+
+- `bed/api/auth.py:378` `_now_iso()` recomputes "now" instead of
+  using `record.expires_at`. The token is signed with
+  `ts + ttl_seconds` (`auth.py:153-155`), but the wire envelope
+  says "now." Cosmetic in single-process; with cluster time
+  skew, weird. Fix: emit `record.expires_at` as ISO.
+- `bed/api/auth.py:285-287, 344-346` perform `put` and `delete`
+  as two separate implicit transactions. With a shared DB
+  store, wrap them in one explicit transaction (see Path A3).
+- `bed/api/auth.py:308-321` runs the instance check after
+  `token_store.get(token)`, so cross-node validation is now a
+  real round trip. Latency is fine for `auth` / `reconnect`
+  (rare) but every TTL expiry across the fleet is one
+  round trip; consider a small in-process LRU cache keyed by
+  `(token, bed_instance_id) → TokenRecord` for the
+  cluster case.
+
+### Recommended order of work
+
+1. **Stop and check whether sticky sessions are an option.** This
+   doc's v1 guidance (`Out of scope for v1`, above) is still the
+   right answer for most deployments. It is a load-balancer
+   config change, not a `bed` change.
+2. **If sticky sessions are not viable, ship Path A (A1-A4) as
+   v2.0.** It is enough for "no interactive password prompt on
+   rebalance" and explicitly gives up cross-node replay.
+3. **Land Path B as v2.1 or later.** Only needed if replay
+   survival across nodes is a hard requirement; the cost is a
+   shared `SessionRegistry` and a per-connection UUID replacing
+   `id(websocket)`.
