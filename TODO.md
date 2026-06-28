@@ -1223,6 +1223,35 @@ Passing `--config` overrides the default and points bed at an external
 JSON file. The file's keys are deep-merged on top of the packaged
 defaults, and the result is consulted during startup.
 
+**Status:** Implemented and tested. Argparse wiring in
+`bed/src/bed/lib.py:147-156`; merge + default-resolve in
+`bed/src/bed/main.py:332-355`; tests in
+`bed/src/bed/tests/test_bed.py:265-292` (`TestConfigFlag`).
+
+### Tasks
+
+- [X] **Argparse wiring.** `--config PATH` in
+      `bed/src/bed/lib.py:147-156` with help text pointing at
+      `bed.json` package data.
+- [X] **Default value.** Default points at
+      `bed.config.get_package_data_path("bed.json")`; see
+      `bed/src/bed/lib.py:16-20` (`_default_config_path`).
+- [X] **Deep-merge with packaged defaults.** `bed.config.load_config`
+      in `bed/src/bed/config.py:21-48` deep-merges the user file on
+      top of `load_bed_defaults()` and on top of `BED_*` env vars.
+- [X] **bind.* / database.* / auth.* precedence.** Config keys fill
+      in only when the corresponding CLI flag was not explicitly set
+      (detected by comparing parsed args to argparse defaults). See
+      `bed/src/bed/main.py:57-115` for the three appliers.
+- [X] **Missing-file error.** A bad `--config` path exits 1 with
+      `Config file not found: <path>` (no silent fallback). See
+      `bed/src/bed/main.py:336-345`.
+- [X] **Tests.** `bed/src/bed/tests/test_bed.py:265-...` covers
+      `test_config_flag_parses`,
+      `test_config_flag_default_is_packaged_bed_json`, and the
+      autorestart/bind/database override behavior.
+- [X] **Documented in `bed/TODO.md`.** This section.
+
 ### Syntax
 ```
 bed --config /opt/zoid6/src/zoid6/data/bed.json --router zoid6.api.handler.MessageRouter
@@ -1389,4 +1418,215 @@ in `bed.main.main_async` immediately after `await self.server.start()`.
 The trade-off: a soft dependency on the `systemd` PyPI package and a
 check at startup that the `NOTIFY_SOCKET` env var is present before
 calling `sd_notify` (so dev runs without systemd keep working).
+
+---
+
+## `_apply_auth_config` overwrites CLI `--bed-secret` with literal `~`
+
+### Problem
+
+`bed/src/bed/main.py:90-115` `_apply_auth_config` is supposed to
+respect the CLI override for `--bed-secret`:
+
+```python
+if (
+    "bed_secret_path" in auth
+    and args.bed_secret == defaults["bed_secret"]
+):
+    args.bed_secret = auth["bed_secret_path"]
+```
+
+The intent: only apply the JSON's `auth.bed_secret_path` when
+the user did **not** pass `--bed-secret` on the command line. The
+detection is "the CLI value still equals argparse's default."
+
+The detection **fails** when the user's CLI value happens to
+expand to the same path as the default. Specifically, the
+default value is computed at argparse-build time via
+`os.path.expanduser("~/.config/bed/bed.secret")`
+(`bed/src/bed/lib.py:9-13`), so `defaults["bed_secret"]` is
+`/home/<user>/.config/bed/bed.secret` (already expanded). If
+the user passes `--bed-secret /home/<user>/.config/bed/bed.secret`
+explicitly (the same expanded path), the `==` check passes,
+the override is applied, and `args.bed_secret` becomes the
+**literal-`~` string** from the JSON's
+`auth.bed_secret_path`, not what the user asked for.
+
+Symptom, from the 2026-06-28 bed+casino bring-up:
+
+```
+$ bed --bed-secret /home/opencode/.config/bed/bed.secret ...
+PermissionError: '/home/opencode/data/work/~/.config/bed/.bed-secret-3sy3k2_c'
+```
+
+The error path `/home/opencode/data/work/~/.config/bed/...`
+shows the working directory (`/home/opencode/data/work/`)
+prepended to a literal `~`-string. `tempfile.mkstemp` then
+treats `~/.config/bed/...` as a relative path and creates a
+stray `~/.config/bed/` directory in the cwd (which can also
+fail with `PermissionError` if the cwd is owned by another
+user, as it is in this monorepo).
+
+### Why this matters
+
+- **Silently discards a CLI override.** A user who reads
+  `bed --help` and passes `--bed-secret /some/path` reasonably
+  expects bed to honor it. Today the value can be replaced by
+  the JSON's value with no warning.
+- **Cross-pollutes the cwd.** A failed startup leaves a
+  `~/.config/bed/` directory behind in whatever directory
+  the user ran bed from. Cleanup requires deleting it
+  manually; a second run from a different cwd creates a
+  second one.
+- **The "right" fix is also the right fix for
+  `_apply_bind_config` and `_apply_database_config`**, which
+  use the same `args.x == defaults["x"]` pattern. The same
+  edge case applies for `--host`, `--port`, `--databasename`,
+  etc. if a user passes the explicit expanded form of the
+  default.
+
+### Fix options
+
+#### Option A — identity check, not equality
+
+Use `is` instead of `==` for the comparison. `argparse`
+default values are typically interned strings, but the CLI
+parser produces a fresh string for any explicit value.
+The `is` check distinguishes "argparse filled in the
+default" from "the user passed this exact string."
+
+- **Pros:** One-character fix. Matches what argparse
+  actually does internally for `default=`.
+- **Cons:** Subtle. Depends on CPython string interning,
+  which is implementation-defined. A future CPython
+  change to interning could re-break it.
+
+#### Option B — sentinel default
+
+Replace `_default_secret_path()`'s return value with a
+sentinel object (e.g. `DEFAULT = object()`) and have
+`buildargs` set `default=DEFAULT`. The comparison becomes
+`args.bed_secret is DEFAULT`, which is exact and
+implementation-independent.
+
+- **Pros:** Correct by construction. The sentinel cannot
+  be confused with any user input.
+- **Cons:** Requires `argparse` to accept a non-string
+  default. The CLI help output would render the sentinel
+  as `%(default)s`, which would print something ugly like
+  `<object object at 0x7f...>`. Workaround: a custom
+  `%(default)s` formatter, or a string sentinel like
+  `"__BED_DEFAULT__"` that argparse can format.
+
+#### Option C — separate "did the user pass this flag" flag
+
+Track each config-apply-relevant CLI flag with a paired
+`argparse.BooleanOptionalAction` or a custom
+`Action` that records "user passed / user did not pass"
+in a separate attribute. `_apply_*_config` checks the
+attribute, not the value.
+
+- **Pros:** Cleanest semantically. Works for every flag
+  identically. No sentinel / interning tricks.
+- **Cons:** Largest diff. Every CLI flag in `bed/lib.py`
+  that has a corresponding JSON key needs the
+  "explicit-set" treatment. ~7 flags today (`--host`,
+  `--port`, `--databasename`, `--databasehost`,
+  `--databaseport`, `--databaseuser`,
+  `--databasepassword`, `--bed-secret`, `--token-ttl`,
+  `--token-persistence`, `--credential-provider`).
+
+#### Option D — `os.path.expanduser` the JSON value before comparison
+
+In `_apply_auth_config`, normalize the JSON value the same
+way `_default_secret_path()` normalizes the default, so the
+two sides of the comparison are in the same form:
+
+```python
+json_path = os.path.expanduser(auth["bed_secret_path"])
+if "bed_secret_path" in auth and args.bed_secret == defaults["bed_secret"]:
+    args.bed_secret = json_path
+```
+
+The user's explicit `/home/<user>/.config/bed/bed.secret`
+and the default `/home/<user>/.config/bed/bed.secret` are
+both fully expanded, the comparison correctly says "user
+did not pass this," the override is skipped. The JSON's
+literal `~` is never written into `args.bed_secret`.
+
+- **Pros:** Smallest diff. Two lines. Same fix pattern
+  applies to `_apply_bind_config` and
+  `_apply_database_config` (expand the JSON's `bind.host`,
+  `database.host`, etc. before assigning). Doesn't touch
+  `bed/lib.py` at all.
+- **Cons:** Band-aid. The deeper problem is that the
+  "explicit-set" detection is value-based instead of
+  source-based. A user who explicitly passes
+  `--bed-secret /home/<user>/.config/bed/bed.secret`
+  (the same path as the default) still gets the wrong
+  behavior, just less wrong (their value isn't
+  overwritten, but the JSON's value is also not applied,
+  which is what they wanted anyway).
+
+### Recommendation: D for v1, C as a follow-up
+
+D is the smallest correct fix and unblocks the bed+casino
+bring-up. C is the right long-term direction because it
+solves the same class of bug for every flag at once.
+Option A and B are not worth the implementation cost given
+D's diff size.
+
+### Tasks
+
+- [ ] **Apply Option D to
+  `bed/src/bed/main.py:90-115` `_apply_auth_config`**:
+  wrap the `auth["bed_secret_path"]` value in
+  `os.path.expanduser(...)` before assigning to
+  `args.bed_secret`. Confirm `os` is already imported
+  (it is; `bed/src/bed/main.py:9`).
+- [ ] **Apply the same fix to
+  `bed/src/bed/main.py:57-67` `_apply_bind_config`**
+  (expand `bind.host`) and
+  `bed/src/bed/main.py:70-87` `_apply_database_config`**
+  (expand `database.host`).
+- [ ] **Add a regression test** in
+  `bed/src/bed/tests/test_bed.py::TestConfigFlag`:
+  - `test_config_does_not_overwrite_explicit_bed_secret`:
+    pass `--bed-secret /tmp/explicit-secret`, set
+    `cfg = {"auth": {"bed_secret_path": "/tmp/from-json"}}`,
+    call `_apply_auth_config`, assert
+    `args.bed_secret == "/tmp/explicit-secret"`.
+  - `test_config_expands_tilde_in_bed_secret_path`: set
+    `cfg = {"auth": {"bed_secret_path": "~/.config/bed/bed.secret"}}`
+    and assert the assigned value is
+    `os.path.expanduser("~/.config/bed/bed.secret")`, not
+    the literal `~`-string.
+  - `test_config_default_bed_secret_is_preserved`: no
+    `--bed-secret`, set the JSON value, assert the
+    JSON value (expanded) wins.
+- [ ] **Document the fix in `bed/README.md`** under
+  "Configuration" — the `bed_secret_path` JSON value is
+  tilde-expanded by bed at load time, matching the shell's
+  `~` behavior.
+
+### Cross-references
+
+- `bed/src/bed/main.py:90-115` — the buggy function.
+- `bed/src/bed/lib.py:9-13` — `_default_secret_path` that
+  produces the value the `==` check is compared against.
+- `bed/src/bed/main.py:57-67` `_apply_bind_config` and
+  `bed/src/bed/main.py:70-87` `_apply_database_config` —
+  the same pattern, the same bug class. The fix lands
+  identically in all three.
+- `bed/src/bed/tests/test_bed.py::TestConfigFlag` — the
+  existing test class to extend with the new regression
+  tests.
+- `zoid6/src/zoid6/data/bed.json` — the JSON that
+  carries the literal `~` value today, and the
+  user-facing config that exposes the bug.
+- `casino/bin/casino-client` — the bring-up workflow on
+  2026-06-28 that hit this bug (see commit history in
+  chat for the workaround: pass a path that differs
+  from the default expansion, e.g.
+  `/home/opencode/.config/bed/dev.secret`).
 
