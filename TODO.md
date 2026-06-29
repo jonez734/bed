@@ -1324,6 +1324,188 @@ installed alongside it.
 
 ---
 
+## `--pidfile` CLI arg exists but is never written
+
+### Problem
+
+`bed/src/bed/lib.py:48-51` defines `--pidfile PATH` as a
+CLI argument, and the casino TODO entry (now deleted per
+Step 4a) used to say "PID file management - `--pidfile`
+arg exists but is never used." Confirmed by reading
+`bed/src/bed/main.py:main_async` and `BED.stop` — **nothing
+writes to the pidfile at any point in the bed lifecycle**.
+
+A test (or operator) that starts
+`bed --pidfile /tmp/bed.pid --foreground` cannot
+determine the daemon's pid by reading the file, because
+the file is never created. The user's 2026-06-28
+bring-up workflow used `ps -ef | grep "[b]ed "` which
+is fragile when multiple bed instances are running
+(we hit this in the current session — 4 processes
+racing on 127.0.0.1:8765 via `SO_REUSEPORT`).
+
+### Fix
+
+#### Write pidfile at the top of `main_async`, remove in a `try/finally`
+
+The pidfile lifetime matches the daemon's lifetime,
+not the per-restart instance lifetime. autorestart
+keeps the same pid; the pidfile is never removed and
+re-created during a restart. The right place to write
+the pidfile is at the top of `bed/src/bed/main.py:main_async`,
+before the `while True:` autorestart loop. The right
+place to remove it is in a `try/finally` around the
+loop, so it runs on every exit path (normal, max-
+restarts, fatal error).
+
+```python
+pidfile_path = getattr(args, "pidfile", None)
+pidfile_fd = None
+if pidfile_path:
+    try:
+        pidfile_fd = os.open(
+            pidfile_path,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            0o644,
+        )
+        os.write(pidfile_fd, f"{os.getpid()}\n".encode())
+    except OSError as e:
+        io.echo(
+            f"Failed to write pidfile {pidfile_path}: {e}",
+            level="warning",
+        )
+        pidfile_path = None  # disable cleanup so we don't try to remove it
+
+try:
+    while True:
+        bed = BED(args, router_class)
+        try:
+            await bed.start()
+            restart_count = 0
+        except Exception as e:
+            io.echo_traceback(f"BED error: {e}")
+            if autorestart:
+                restart_count += 1
+                if restart_count > max_restarts:
+                    io.echo(
+                        f"Max restarts ({max_restarts}) reached, giving up",
+                        level="error",
+                    )
+                    await bed.stop()
+                    break
+                io.echo(
+                    f"Auto-restarting in {restart_delay}s "
+                    f"(attempt {restart_count}/{max_restarts})",
+                    level="warning",
+                )
+                await bed.stop()
+                await asyncio.sleep(restart_delay)
+                continue
+            else:
+                await bed.stop()
+                raise
+        if not autorestart:
+            break
+finally:
+    if pidfile_fd is not None:
+        try:
+            os.close(pidfile_fd)
+        except OSError:
+            pass
+    if pidfile_path:
+        try:
+            os.unlink(pidfile_path)
+        except OSError as e:
+            io.echo(
+                f"Failed to remove pidfile {pidfile_path}: {e}",
+                level="warning",
+            )
+```
+
+The graceful-shutdown path is independent of the
+pidfile work: `bed/src/bed/main.py:370-373`'s
+SIGTERM/SIGINT handler calls
+`asyncio.create_task(bed.stop())` which awaits
+`self.server.stop()`. The pidfile removal happens in
+the outer `finally`, so it runs after the graceful
+stop completes. If the operator sends SIGKILL (or
+`TimeoutStopSec=30s` expires under systemd), the
+`finally` does **not** run — see the SIGKILL/SIGTERM
+gap section above (line 1636) for the stale-pidfile
+detection work that handles the inevitable SIGKILL
+case.
+
+### Tasks
+
+- [ ] **Add the write/remove pattern to
+  `bed/src/bed/main.py:main_async`** as shown above.
+  `os` is already imported.
+- [ ] **Add a test in
+  `bed/src/bed/tests/test_bed.py::TestPidfile`** (new
+  class):
+  - `test_pidfile_written_on_start` — extract a small
+    helper `_write_pidfile(path)` and `_remove_pidfile(path)`
+    from the inline code, and unit-test those
+    directly. Avoids a subprocess-based test that
+    would need a real database.
+  - `test_pidfile_optional` — `args.pidfile = None`,
+    call the helpers, assert no file is created.
+  - `test_pidfile_warn_on_write_failure` —
+    `args.pidfile = "/nonexistent/dir/bed.pid"`,
+    call the helper, assert a warning is logged and
+    the daemon doesn't crash.
+  - `test_pidfile_cleanup_idempotent` — call the
+    remove helper when the file doesn't exist, assert
+    no error.
+- [ ] **Add `bed/tests/scripts/stop_bed.sh`** (new
+  file, executable): a 15-line shell helper that
+  reads a pidfile, sends `SIGTERM`, waits up to 5
+  seconds, then `SIGKILL` on the process group as a
+  fallback. The 5s grace matches a reasonable test
+  duration; the systemd `TimeoutStopSec=30s` is too
+  long for a test.
+- [ ] **Document the pidfile lifecycle in
+  `bed/README.md`** under "Configuration": the
+  pidfile lifetime matches the daemon's lifetime, not
+  the per-restart instance lifetime; the systemd unit
+  does not use `--pidfile` (systemd tracks the main
+  pid natively); `--pidfile` is for foreground / dev /
+  test invocations. Test-cleanup recipe: `kill
+  $(cat /tmp/bed.pid)` or use
+  `bed/tests/scripts/stop_bed.sh /tmp/bed.pid`.
+- [ ] **Promote stale-pidfile detection** (Option A
+  in the SIGKILL/SIGTERM section above, line 1636)
+  into this commit. Two changes: (1) the `kill -0`
+  check at the top of `main_async`; (2) `O_EXCL` on
+  the pidfile open so a racing second start errors
+  out instead of overwriting.
+
+### Cross-references
+
+- `bed/src/bed/lib.py:48-51` — the existing
+  `--pidfile` arg.
+- `bed/src/bed/main.py:370-389` — the SIGTERM/SIGINT
+  signal handlers. Graceful shutdown runs
+  independently of the pidfile work; the pidfile
+  removal is in the `finally` so it runs after the
+  graceful stop completes.
+- `bed/src/bed/daemon/bed.service:8-9, 23-24` —
+  `Type=simple` + `KillSignal=SIGTERM` +
+  `TimeoutStopSec=30s`. The systemd unit already
+  handles pid tracking natively, so it does **not**
+  use `--pidfile`.
+- `casino/TODO.md` (entry deleted per Step 4a) — the
+  casino TODO no longer tracks the `--pidfile` work;
+  bed is the single source of truth.
+- `bbsengine6/notify/daemon/daemon.py:118-119, 162` —
+  the reference SIGTERM/SIGINT handling pattern from
+  the bbsengine6 daemon.
+- The SIGTERM/SIGKILL gap section above (line 1636)
+  covers the stale-pidfile detection that handles an
+  inevitable SIGKILL.
+
+---
+
 ## Systemd deployment
 
 A `bed.service` unit ships with the package at
