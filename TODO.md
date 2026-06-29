@@ -1633,82 +1633,112 @@ D's diff size.
 
 ---
 
-## SIGKILL — graceful exit is impossible; design for inevitable state loss
+## SIGTERM graceful shutdown + SIGKILL fallback gap
 
-### Problem
+### Why SIGTERM is the right primary signal for shutdown
 
-`SIGKILL` (signal 9) **cannot be caught, blocked, or handled by
-any process** — the kernel terminates the process immediately, with
-no opportunity for Python code, asyncio handlers, or `atexit`
-callbacks to run. This is by Unix design; no language runtime can
-change it. The user's request "gracefully exit on SIGKILL" cannot
-be satisfied directly.
+`SIGKILL` (signal 9) **cannot be caught, blocked, or handled
+by any process** — the kernel terminates the process
+immediately, no Python or asyncio code runs, no `atexit`
+callbacks fire. Graceful exit on `SIGKILL` is impossible
+by Unix design.
 
-What `SIGKILL` *can* expose, however, is a real gap in `bed`'s
-current design: the daemon assumes a clean shutdown is the
-norm and has **no recovery path for the inevitable state loss
-that a `SIGKILL` (or a panic, OOM kill, kernel oops, or
-hardware reset) causes**. The bring-up on 2026-06-28 hit this
+`SIGTERM` (signal 15) **is** catchable, and `bed` already
+handles it correctly at `bed/src/bed/main.py:370-389`:
+
+```python
+def signal_handler() -> None:
+    io.echo("Received shutdown signal", level="info")
+    if bed:
+        asyncio.create_task(bed.stop())
+
+for sig in (signal.SIGTERM, signal.SIGINT):
+    try:
+        loop.add_signal_handler(sig, signal_handler)
+    except NotImplementedError:
+        pass
+```
+
+`signal_handler` calls `asyncio.create_task(bed.stop())`,
+which awaits `self.server.stop()` (closes WebSockets,
+releases the port) and runs the `try/finally` pidfile
+cleanup from Step 4c. The systemd unit at
+`bed/src/bed/daemon/bed.service:23-24` uses
+`KillSignal=SIGTERM` with `TimeoutStopSec=30s`: systemd
+sends SIGTERM, waits 30 seconds, then escalates to SIGKILL
+if the process is still running. The 30s grace is the
+window in which bed's signal handler runs.
+
+**`kill <pid>` (no signal specified) sends SIGTERM by
+default**, so any test or operator that runs `kill <pid>`
+gets the graceful path. The user's earlier question "if
+SIGKILL is not proper, and SIGHUP already does something
+special (reload config), which signal is best?" is
+answered: **SIGTERM, the default, is best**. No new signal
+needed.
+
+### What `SIGKILL` (and OOM, panic, hardware reset) *can* expose
+
+The signal handler at line 370 only runs if the kernel
+delivers a catchable signal. `SIGKILL`, kernel oops,
+OOM-kill, and hardware reset skip it. The daemon's state
+is then left in whatever condition the kernel cuts it
+off in. The bring-up on 2026-06-28 hit the SIGKILL path
 twice:
 
 1. The 3 foreign `bed` processes (pids 3797060, 3802229,
    3803184) were started without `--no-autorestart`, so
    `SIGTERM` triggered the autorestart loop and they
-   immediately respawned. `kill -9` was needed to stop them.
-   The `kill -9` left the port in `TIME_WAIT` / socket-leak
-   state for the full kernel timeout (~30-60s) and the
-   pidfile (when added in Step 4c) would have been orphaned.
-2. The `SO_REUSEPORT` flag at
-   `casino/TODO.md:932` lets multiple bed processes share
-   port 8765 — useful for socket reuse, but it also means
-   a `SIGKILL`'d process leaves its listening socket in
-   the kernel's port table until the linger timeout, even
-   though the Python process is gone.
+   immediately respawned. `kill -9` was needed to stop
+   them. The `kill -9` left the port in `TIME_WAIT` /
+   socket-leak state for the full kernel timeout
+   (~30-60s) and the pidfile (when added in Step 4c)
+   would have been orphaned.
+2. The `SO_REUSEPORT` flag at `casino/TODO.md:932` lets
+   multiple bed processes share port 8765 — useful for
+   socket reuse, but it also means a `SIGKILL`'d process
+   leaves its listening socket in the kernel's port
+   table until the linger timeout, even though the
+   Python process is gone.
 
-### Why "graceful on SIGKILL" is a contradiction, and what we can do instead
+The right framing is **"design for the cleanup that
+happens *despite* a SIGKILL, so the next start can
+recover."** Four cleanup concerns SIGKILL skips:
 
-A graceful exit requires running cleanup code (close DB
-connections, write a final log line, remove the pidfile,
-notify the autorestart supervisor that the exit was
-intentional). `SIGKILL` skips all of that. The right
-framing is **"design for the cleanup that happens
-*despite* a SIGKILL, so the next start can recover."**
-
-The four cleanup concerns `SIGKILL` skips:
-
-1. **Pidfile removal.** After `SIGKILL`, the pidfile is
-   orphaned. The next start must either detect the stale
-   pid (via `kill -0`) or unconditionally overwrite. The
-   `--pidfile` work in Step 4c handles the write; the
-   **stale-pidfile detection** is explicitly deferred from
-   Step 4c and belongs here.
+1. **Pidfile removal.** After SIGKILL, the pidfile is
+   orphaned. The next start must detect the stale pid
+   (via `kill -0`) and either remove it or refuse to
+   start. The `--pidfile` work in Step 4c handles the
+   write; **stale-pidfile detection** is explicitly
+   deferred from Step 4c and belongs here.
 2. **WebSocket connection cleanup.** Active clients see
-   a TCP reset on `SIGKILL`. They re-establish
+   a TCP reset on SIGKILL. They re-establish
    automatically on the next `bed` start, but the
    in-flight `request_id` futures the server is holding
    (the bearer-token / `echo` / `menu` future table) are
-   abandoned. The next client re-using a `request_id` that
-   the SIGKILL'd process was holding will see a "stale
+   abandoned. A client re-using a `request_id` that the
+   SIGKILL'd process was holding will see a "stale
    request" error; the client must handle that.
 3. **Database connection close.** The psycopg pool
    detects dead connections on next use and recycles
    them. The DB itself is unaffected (transactions were
    either committed or never started). The
-   `engine.__bed_token` table (when `--token-persistence=db`
-   is in use) may have rows whose `bed_instance_id` no
-   longer matches a running daemon; the next start with a
-   new `bed_instance_id` rejects those tokens
-   correctly — this is the intended behavior, but it
-   means a SIGKILL'd daemon cannot be restarted with the
-   same instance id without manual token-table cleanup.
+   `engine.__bed_token` table (when
+   `--token-persistence=db` is in use) may have rows
+   whose `bed_instance_id` no longer matches a running
+   daemon; the next start with a new `bed_instance_id`
+   rejects those tokens correctly — this is intended
+   behavior, but it means a SIGKILL'd daemon cannot be
+   restarted with the same instance id without manual
+   token-table cleanup.
 4. **In-memory auth tokens** (`--token-persistence=memory`).
    The v1 default is in-memory storage; every issued
-   token is lost on `SIGKILL`. Every client must
+   token is lost on SIGKILL. Every client must
    re-`auth`. This is the documented v1 behavior; the
    "use `db` to survive restarts" path exists for
    exactly this reason.
 
-### Mitigations to add (none of these are "graceful exit on SIGKILL" — they reduce the blast radius)
+### Mitigations to add (none of these are "graceful on SIGKILL" — they reduce the blast radius)
 
 #### A. Stale-pidfile detection at startup (deferred from Step 4c)
 
@@ -1750,49 +1780,50 @@ if pidfile_path and os.path.exists(pidfile_path):
 #### B. Linger-timeout tuning for the WebSocket server
 
 `SO_REUSEPORT` is already set, but the listening
-socket's `SO_LINGER` is not. After `SIGKILL`, the
-kernel holds the listening socket in `FIN_WAIT_2`
-or `TIME_WAIT` for up to 60s. Setting
+socket's `SO_LINGER` is not. After SIGKILL, the kernel
+holds the listening socket in `FIN_WAIT_2` or
+`TIME_WAIT` for up to 60s. Setting
 `SO_LINGER(l_onoff=1, l_linger=0)` on the listening
-socket tells the kernel to RST the connection on
-close, which shortens the cleanup. (The `SO_REUSEPORT`
-flag means the next `bed` start can bind immediately
-even before the old socket's TIME_WAIT expires.)
+socket tells the kernel to RST the connection on close,
+which shortens the cleanup. (The `SO_REUSEPORT` flag
+means the next `bed` start can bind immediately even
+before the old socket's TIME_WAIT expires.)
 
-- **Pros:** Faster recovery after SIGKILL. New bed
-  can accept connections within ~1s instead of 30-60s.
-- **Cons:** Existing clients in mid-handshake get a
-  RST instead of a clean close. For BED's use case
-  (clients reconnect on disconnect anyway) this is
-  acceptable.
+- **Pros:** Faster recovery after SIGKILL. New bed can
+  accept connections within ~1s instead of 30-60s.
+- **Cons:** Existing clients in mid-handshake get a RST
+  instead of a clean close. For BED's use case (clients
+  reconnect on disconnect anyway) this is acceptable.
 
 #### C. Process-group cleanup for `bed --foreground`
 
 When `bed` is launched in the background with
-`nohup bed ... &` (as on 2026-06-28), a `kill -9 <pid>`
-leaves the parent shell process alone but kills the
-bed process. The shell's `wait` returns the SIGKILL'd
-child's exit code. If `bed` was launched via a wrapper
-that does `setsid` (creating a new session), then
-`kill -- -<pid>` kills the entire process group
-cleanly. The `bed/tests/scripts/stop_bed.sh` helper
-in Step 4e should use process-group kill when
-`--foreground` is set.
+`nohup bed ... &` (as on 2026-06-28), a `kill -TERM <pid>`
+leaves the parent shell process alone but stops the bed
+process; the shell's `wait` returns the SIGTERM'd child's
+exit code. The `bed/tests/scripts/stop_bed.sh` helper
+in Step 4e should send SIGTERM to the bed pid and wait
+for graceful shutdown, falling back to SIGKILL on the
+process group (`kill -- -<pid>`) after the grace period
+expires. This matches systemd's `KillMode=mixed` default
+(kill the main pid, then walk the cgroup for any leaked
+children).
 
-- **Pros:** Matches systemd's `KillMode=mixed` default
-  (kill the main pid, then walk the cgroup for any
-  leaked children).
+- **Pros:** Mirrors systemd's behavior. The
+  `stop_bed.sh` script works for both `--foreground`
+  and daemonized bed invocations.
 - **Cons:** Process-group kill can leak into the test
   runner if the test runner is in the same process
-  group. Best to use `setsid` to isolate.
+  group. Best to use `setsid` to isolate the bed
+  process from the test runner.
 
 #### D. Token-persistence=db survives SIGKILL
 
 `--token-persistence=db` already exists in the CLI
 (bed/src/bed/lib.py:87-99) and is the recommended
 production setting. After SIGKILL, the in-memory
-`TokenStore` is gone but the `engine.__bed_token`
-table survives, so a `bed` restart with the same
+`TokenStore` is gone but the `engine.__bed_token` table
+survives, so a `bed` restart with the same
 `--bed-secret` (and same `bed_instance_id`) recovers
 all outstanding tokens. This is the "fix" for the
 in-memory-token loss; it's already implemented and
@@ -1801,18 +1832,38 @@ just needs to be the recommended default in
 
 - **Pros:** Zero new code. Just a docs change.
 - **Cons:** Every issued token's `bed_instance_id` is
-  baked in; if you rotate the secret, all tokens
-  become invalid. That is intended and matches the
-  threat model.
+  baked in; if you rotate the secret, all tokens become
+  invalid. That is intended and matches the threat
+  model.
 
-### Recommendation: A + C, defer B and D's docs
+### The `stop_bed.sh` test-cleanup helper: SIGTERM with SIGKILL fallback
+
+`bed/tests/scripts/stop_bed.sh` (added in Step 4e)
+should follow the systemd pattern:
+
+1. Read the pid from the pidfile.
+2. Send `SIGTERM` (signal 15, the default `kill <pid>`).
+3. Poll for up to 5 seconds for the process to exit
+   (matches a reasonable test grace; systemd's 30s is
+   too long for a test).
+4. If still alive, send `SIGTERM` to the **process
+   group** (`kill -- -<pid>`).
+5. If still alive after another 5 seconds, send
+   `SIGKILL` to the process group.
+
+The 5s grace is enough for bed's signal handler to
+call `asyncio.create_task(bed.stop())`, which awaits
+`self.server.stop()`. Anything longer than 5s is
+almost certainly a hung handler — escalate.
+
+### Recommendation: A + C + the test helper, defer B and D's docs
 
 - **A** (stale-pidfile detection) is the highest-value
   fix. It belongs as part of the Step 4c pidfile work
   but was explicitly deferred. Promote it from
   "deferred" to "in scope for the pidfile commit."
 - **C** (process-group kill in `stop_bed.sh`) is a
-  3-line change to the existing helper script.
+  5-line change to the existing helper script.
 - **B** (linger tuning) is the right long-term move
   but is its own change touching the WebSocket server
   init; defer to a separate TODO entry under
@@ -1827,18 +1878,16 @@ just needs to be the recommended default in
 - [ ] **Promote stale-pidfile detection into the Step 4c
   pidfile commit** (Option A above). Two changes: (1)
   the `kill -0` check at the top of `main_async`; (2)
-  `O_EXCL` on the pidfile open so a racing second
-  start errors out instead of overwriting.
-- [ ] **Update `bed/tests/scripts/stop_bed.sh`**
-  (Option C) to send SIGTERM to the negative-pid
-  process group when `--foreground` is detected
-  (read the pidfile's owning session id via
-  `/proc/<pid>/stat` field 5, or just kill the pid
-  group that the pidfile process is in).
+  `O_EXCL` on the pidfile open so a racing second start
+  errors out instead of overwriting.
+- [ ] **Update `bed/tests/scripts/stop_bed.sh`** to
+  follow the SIGTERM-then-SIGKILL pattern described
+  above. Use the process group for the SIGKILL
+  fallback (Option C).
 - [ ] **Document `--token-persistence=db` as the
   recommended production default** in
-  `bed/README.md` under "Authentication" (5-minute
-  docs change; not a code change).
+  `bed/README.md` under "Authentication" (5-minute docs
+  change; not a code change).
 - [ ] **Defer linger tuning** (Option B) to a future
   `## WebSocket socket options` section in this file
   with a `[ ]` checkbox.
@@ -1846,27 +1895,31 @@ just needs to be the recommended default in
 ### Cross-references
 
 - `bed/src/bed/main.py:370-389` — the existing
-  SIGTERM/SIGINT/SIGHUP signal handlers, which
-  graceful-shutdown does work for.
+  SIGTERM/SIGINT/SIGHUP signal handlers. SIGTERM is the
+  primary graceful-shutdown signal; SIGHUP is config
+  reload (do not reuse for shutdown); SIGINT is
+  Ctrl-C.
 - `bed/src/bed/daemon/bed.service:23-24` —
   `KillSignal=SIGTERM` + `TimeoutStopSec=30s`. systemd
-  sends SIGTERM, waits 30s, then sends SIGKILL. The
-  30s grace is the window in which bed's signal
-  handler at line 370 runs; after that, SIGKILL
-  inevitably kills the process and this TODO entry's
-  concerns apply.
+  sends SIGTERM, waits 30s, then sends SIGKILL. The 30s
+  grace is the window in which bed's signal handler at
+  line 370 runs; after that, SIGKILL inevitably kills
+  the process and this TODO entry's concerns apply.
 - `casino/TODO.md:932` — the `[X] SO_REUSEADDR/SO_REUSEPORT`
-  flag that lets multiple bed processes share the
-  port; this same flag is what makes Option B
-  (linger tuning) worth doing.
+  flag that lets multiple bed processes share the port;
+  this same flag is what makes Option B (linger tuning)
+  worth doing.
 - `bed/tests/scripts/stop_bed.sh` (Step 4e) — the
-  test-cleanup helper that Option C extends.
+  test-cleanup helper that Option C refines.
 - `bbsengine6/notify/daemon/daemon.py:118-119, 162` —
   the reference SIGTERM/SIGINT handling pattern. The
-  notify daemon is the only bbsengine6 daemon that
-  also handles SIGKILL-aware cleanup; it does so by
-  catching SIGTERM and not by trying to catch
-  SIGKILL.
+  notify daemon is a bbsengine6 daemon that also
+  handles graceful shutdown; it does so by catching
+  SIGTERM and not by trying to catch SIGKILL.
+- `kill(1)` — the standard signal-sending tool. Without
+  a `-N` flag, `kill <pid>` sends SIGTERM (15).
+  `kill -9 <pid>` is `SIGKILL`; `kill -HUP <pid>` is
+  `SIGHUP` (config reload for bed).
 
 ---
 
