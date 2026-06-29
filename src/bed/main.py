@@ -63,6 +63,35 @@ def _expand_user(value):
     return value
 
 
+def _write_pidfile(path: str) -> int:
+    """Write the current pid to the given path. Returns the file
+    descriptor (or -1 on failure). The caller is responsible for
+    closing the descriptor and removing the file on shutdown."""
+    try:
+        fd = os.open(
+            path,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            0o644,
+        )
+        os.write(fd, f"{os.getpid()}\n".encode())
+        return fd
+    except OSError as e:
+        io.echo(f"Failed to write pidfile {path}: {e}", level="warning")
+        return -1
+
+
+def _remove_pidfile(path: str) -> None:
+    """Remove the pidfile. Idempotent: missing file is not an error."""
+    if not path:
+        return
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        io.echo(f"Failed to remove pidfile {path}: {e}", level="warning")
+
+
 def _apply_bind_config(args: argparse.Namespace, cfg: dict) -> None:
     """Apply bind.host/bind.port from a loaded config when the CLI did not
     explicitly set them (i.e. args still equal argparse defaults)."""
@@ -395,40 +424,56 @@ async def main_async() -> None:
     try:
         loop.add_signal_handler(signal.SIGHUP, sighup_handler)
     except (NotImplementedError, OSError):
-        pass
+            pass
 
-    while True:
-        bed = BED(args, router_class)
+    pidfile_path = getattr(args, "pidfile", None)
+    pidfile_fd = None
+    if pidfile_path:
+        pidfile_fd = _write_pidfile(pidfile_path)
+        if pidfile_fd < 0:
+            pidfile_path = None
 
-        try:
-            await bed.start()
-            restart_count = 0
-        except Exception as e:
-            io.echo_traceback(f"BED error: {e}")
+    try:
+        while True:
+            bed = BED(args, router_class)
 
-            if autorestart:
-                restart_count += 1
-                if restart_count > max_restarts:
+            try:
+                await bed.start()
+                restart_count = 0
+            except Exception as e:
+                io.echo_traceback(f"BED error: {e}")
+
+                if autorestart:
+                    restart_count += 1
+                    if restart_count > max_restarts:
+                        io.echo(
+                            f"Max restarts ({max_restarts}) reached, giving up",
+                            level="error",
+                        )
+                        await bed.stop()
+                        break
+
                     io.echo(
-                        f"Max restarts ({max_restarts}) reached, giving up",
-                        level="error",
+                        f"Auto-restarting in {restart_delay}s (attempt {restart_count}/{max_restarts})",
+                        level="warning",
                     )
                     await bed.stop()
-                    break
+                    await asyncio.sleep(restart_delay)
+                    continue
+                else:
+                    await bed.stop()
+                    raise
 
-                io.echo(
-                    f"Auto-restarting in {restart_delay}s (attempt {restart_count}/{max_restarts})",
-                    level="warning",
-                )
-                await bed.stop()
-                await asyncio.sleep(restart_delay)
-                continue
-            else:
-                await bed.stop()
-                raise
-
-        if not autorestart:
-            break
+            if not autorestart:
+                break
+    finally:
+        if pidfile_fd is not None and pidfile_fd >= 0:
+            try:
+                os.close(pidfile_fd)
+            except OSError:
+                pass
+        if pidfile_path:
+            _remove_pidfile(pidfile_path)
 
 
 def main() -> None:

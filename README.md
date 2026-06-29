@@ -72,6 +72,32 @@ Run `bed --help` for the authoritative list.
 }
 ```
 
+### PID file
+
+`bed --pidfile /var/run/bed.pid` writes the daemon's pid to
+`/var/run/bed.pid` on startup and removes it on shutdown. The
+pidfile lifetime matches the daemon's lifetime, not the per-
+restart instance lifetime: autorestart keeps the same pid, so
+the pidfile is never removed and re-created during a restart.
+
+The systemd unit at `bed/src/bed/daemon/bed.service` does
+**not** use `--pidfile` — systemd tracks the main pid
+natively. `--pidfile` is for foreground / dev / test
+invocations.
+
+Test-cleanup recipe: `kill $(cat /tmp/bed.pid)`, or use the
+helper at `bed/tests/scripts/stop_bed.sh <pidfile>` which
+sends SIGTERM, waits up to 5 seconds, then escalates to
+SIGKILL on the process group as a fallback. The 5s grace is
+shorter than the systemd unit's 30s `TimeoutStopSec` because
+tests should fail fast; the operator can override the
+systemd unit if a longer grace is desired.
+
+When `--pidfile` is set, a startup error (e.g. the path's
+parent directory does not exist) logs a warning and
+continues without the pidfile. The daemon does not refuse
+to start over a missing pidfile.
+
 ## Layout
 
 ```

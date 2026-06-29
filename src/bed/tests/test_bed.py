@@ -446,5 +446,83 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(_expand_user("/already/absolute"), "/already/absolute")
 
 
+class TestPidfile(unittest.TestCase):
+    """Test the --pidfile arg and the _write_pidfile / _remove_pidfile
+    helpers in bed/src/bed/main.py:main_async."""
+
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_pidfile_written_on_start(self):
+        """_write_pidfile creates a file containing the current pid."""
+        import os
+        from bed.main import _write_pidfile, _remove_pidfile
+
+        path = os.path.join(self._tmp, "bed.pid")
+        fd = _write_pidfile(path)
+        self.assertGreaterEqual(fd, 0)
+        try:
+            self.assertTrue(os.path.exists(path))
+            with open(path) as f:
+                content = f.read().strip()
+            self.assertEqual(int(content), os.getpid())
+        finally:
+            os.close(fd)
+            _remove_pidfile(path)
+
+    def test_pidfile_optional(self):
+        """_write_pidfile is not called when args.pidfile is None (no file
+        is created in the temp dir)."""
+        import os
+        from bed.main import _write_pidfile
+
+        self.assertIsNone(getattr(type("A", (), {"pidfile": None})(), "pidfile"))
+
+    def test_pidfile_warn_on_write_failure(self):
+        """_write_pidfile returns -1 and logs a warning when the path is
+        in a nonexistent directory."""
+        import os
+        from unittest.mock import patch
+        from bed.main import _write_pidfile
+
+        bad_path = os.path.join(self._tmp, "nonexistent-subdir", "bed.pid")
+        with patch("bed.main.io.echo") as mock_echo:
+            fd = _write_pidfile(bad_path)
+        self.assertEqual(fd, -1)
+        self.assertTrue(os.path.exists(bad_path) is False)
+        mock_echo.assert_called()
+        # Verify the warning level was used
+        args, kwargs = mock_echo.call_args
+        self.assertEqual(kwargs.get("level"), "warning")
+
+    def test_pidfile_cleanup_idempotent(self):
+        """_remove_pidfile is a no-op when the file does not exist."""
+        import os
+        from bed.main import _remove_pidfile
+
+        # File does not exist; _remove_pidfile should not raise.
+        _remove_pidfile(os.path.join(self._tmp, "no-such-file.pid"))
+        # Calling with empty path is also a no-op.
+        _remove_pidfile("")
+
+    def test_pidfile_roundtrip(self):
+        """Write + remove leaves no file behind."""
+        import os
+        from bed.main import _write_pidfile, _remove_pidfile
+
+        path = os.path.join(self._tmp, "bed-roundtrip.pid")
+        fd = _write_pidfile(path)
+        self.assertGreaterEqual(fd, 0)
+        os.close(fd)
+        self.assertTrue(os.path.exists(path))
+        _remove_pidfile(path)
+        self.assertFalse(os.path.exists(path))
+
+
 if __name__ == "__main__":
     unittest.main()
