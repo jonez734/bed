@@ -64,19 +64,100 @@ def _expand_user(value):
 
 
 def _write_pidfile(path: str) -> int:
-    """Write the current pid to the given path. Returns the file
-    descriptor (or -1 on failure). The caller is responsible for
-    closing the descriptor and removing the file on shutdown."""
+    """Atomically claim the pidfile. Returns the open fd on success.
+
+    Return values:
+        >=0  file descriptor; caller is responsible for closing and
+             removing the file on shutdown.
+        -1   write/IO failure (warning logged); caller should disable
+             cleanup and continue.
+        -2   live-pid collision; caller should sys.exit(1).
+
+    Stale-dead pids (the recorded process is gone) are overwritten
+    with a warning. POSIX-only: relies on os.kill(pid, 0) for liveness.
+    """
+    import time
+
+    existing_pid = None
     try:
-        fd = os.open(
-            path,
-            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-            0o644,
-        )
+        with open(path, "r") as f:
+            existing_pid = int(f.read().strip())
+    except (FileNotFoundError, ValueError):
+        pass
+
+    if existing_pid is not None and existing_pid != os.getpid():
+        try:
+            os.kill(existing_pid, 0)
+        except ProcessLookupError:
+            io.echo(
+                f"Stale pidfile {path} (pid {existing_pid} not running), "
+                f"overwriting",
+                level="warning",
+            )
+        except PermissionError:
+            io.echo(
+                f"Refusing to start: pidfile {path} contains live pid "
+                f"{existing_pid}",
+                level="error",
+            )
+            return -2
+        else:
+            io.echo(
+                f"Refusing to start: pidfile {path} contains live pid "
+                f"{existing_pid}",
+                level="error",
+            )
+            return -2
+
+    # Fresh start: O_EXCL so a concurrent invocation cannot also claim
+    # the file. Stale overwrite: O_TRUNC, since the file is already
+    # known to be ours to claim.
+    if existing_pid is None:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    else:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+
+    last_error: Optional[OSError] = None
+    for attempt in (0, 1):
+        try:
+            fd = os.open(path, flags, 0o644)
+        except FileExistsError as e:
+            # Fresh-start case only — stale-overwrite uses O_TRUNC
+            # which never raises FileExistsError.
+            if existing_pid is not None:
+                raise
+            last_error = e
+            if attempt == 1:
+                io.echo(
+                    f"Failed to claim pidfile {path}: raced with another "
+                    f"start",
+                    level="warning",
+                )
+                return -1
+            time.sleep(0.05)
+        except OSError as e:
+            io.echo(f"Failed to write pidfile {path}: {e}", level="warning")
+            return -1
+        else:
+            break
+    else:  # pragma: no cover - loop completed without break
+        if last_error is not None:
+            io.echo(
+                f"Failed to claim pidfile {path}: {last_error}",
+                level="warning",
+            )
+        return -1
+
+    try:
         os.write(fd, f"{os.getpid()}\n".encode())
         return fd
     except OSError as e:
         io.echo(f"Failed to write pidfile {path}: {e}", level="warning")
+        try:
+            os.close(fd)
+            os.unlink(path)
+        except OSError:
+            pass
         return -1
 
 
@@ -430,6 +511,8 @@ async def main_async() -> None:
     pidfile_fd = None
     if pidfile_path:
         pidfile_fd = _write_pidfile(pidfile_path)
+        if pidfile_fd == -2:
+            sys.exit(1)
         if pidfile_fd < 0:
             pidfile_path = None
 

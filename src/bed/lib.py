@@ -25,8 +25,8 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
     databasebuildargs(parentparser)
     parentparser.add_argument(
         "--host",
-        default="localhost",
-        help="Host to bind to (default: localhost)",
+        default="127.0.0.1",
+        help="Host to bind to (default: 127.0.0.1)",
     )
     parentparser.add_argument(
         "--port",

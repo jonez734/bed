@@ -5,6 +5,7 @@
 import argparse
 import asyncio
 import json
+import os
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
@@ -105,10 +106,10 @@ class TestBEDParseArgs(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(args.port, 8765)
 
     def test_default_host(self):
-        """Test default host is 0.0.0.0."""
+        """Test default host is 127.0.0.1."""
         with patch("sys.argv", ["bed"]):
             args = self._parse_args()
-            self.assertEqual(args.host, "0.0.0.0")
+            self.assertEqual(args.host, "127.0.0.1")
 
     def test_custom_port(self):
         """Test custom port can be specified."""
@@ -522,6 +523,154 @@ class TestPidfile(unittest.TestCase):
         self.assertTrue(os.path.exists(path))
         _remove_pidfile(path)
         self.assertFalse(os.path.exists(path))
+
+
+class TestPidfileIntegration(unittest.IsolatedAsyncioTestCase):
+    """End-to-end pidfile lifecycle via main_async."""
+
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.mkdtemp()
+        self.pidfile_path = os.path.join(self._tmp, "bed.pid")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    async def _run_main_async_until_pidfile_then_cancel(self, pre_pidfile=None):
+        """Drive main_async in a task, wait for the pidfile to contain
+        our pid (which distinguishes the file bed wrote from a
+        pre-existing file the test wrote), then cancel the task.
+
+        If pre_pidfile is set, write that pid to the pidfile path
+        before launching so the test exercises the stale-or-collision
+        path. Returns the task. The caller awaits the task and
+        asserts on the exception.
+        """
+        import importlib
+        from unittest.mock import MagicMock, patch
+
+        bed_main = importlib.import_module("bed.main")
+
+        if pre_pidfile is not None:
+            with open(self.pidfile_path, "w") as f:
+                f.write(f"{pre_pidfile}\n")
+
+        # Use --no-autorestart and a temp config file (the packaged
+        # default) so the config-file presence check passes. We
+        # stub load_config so the file is not actually parsed.
+        cfg_path = os.path.join(self._tmp, "bed.json")
+        with open(cfg_path, "w") as f:
+            f.write("{}")
+
+        argv = [
+            "bed",
+            "--pidfile", self.pidfile_path,
+            "--no-autorestart",
+            "--config", cfg_path,
+        ]
+        with (
+            patch("sys.argv", argv),
+            patch.object(bed_main.config, "load_config", return_value={}),
+            patch.object(bed_main, "load_router_class", return_value=MagicMock()),
+            patch.object(bed_main, "BED") as MockBED,
+        ):
+            async def fake_start():
+                await asyncio.sleep(60)
+
+            async def fake_stop():
+                return None
+
+            MockBED.return_value.start = fake_start
+            MockBED.return_value.stop = fake_stop
+
+            task = asyncio.create_task(bed_main.main_async())
+            # Poll for the pidfile to contain *our* pid, not the
+            # stale one. With no pre_pidfile, just poll for existence.
+            my_pid = os.getpid()
+            for _ in range(100):
+                if os.path.exists(self.pidfile_path):
+                    try:
+                        with open(self.pidfile_path) as f:
+                            content = f.read().strip()
+                        if content == str(my_pid):
+                            break
+                    except OSError:
+                        pass
+                await asyncio.sleep(0.02)
+            task.cancel()
+            return task
+
+    async def test_main_async_writes_and_removes_pidfile(self):
+        """main_async writes the pidfile on startup and removes it on exit."""
+        task = await self._run_main_async_until_pidfile_then_cancel()
+        # Sanity: pidfile was created.
+        self.assertTrue(os.path.exists(self.pidfile_path))
+        with open(self.pidfile_path) as f:
+            self.assertEqual(int(f.read().strip()), os.getpid())
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        # After unwind, the finally block must have removed the file.
+        self.assertFalse(os.path.exists(self.pidfile_path))
+
+    async def test_main_async_refuses_live_pid_collision(self):
+        """A pre-existing pidfile with a 'live' pid causes main_async to
+        sys.exit(1) without overwriting the file."""
+        import importlib
+        from unittest.mock import MagicMock, patch
+
+        bed_main = importlib.import_module("bed.main")
+
+        fake_live_pid = os.getpid() + 1
+        with open(self.pidfile_path, "w") as f:
+            f.write(f"{fake_live_pid}\n")
+
+        def fake_kill(pid, sig):
+            if pid == fake_live_pid:
+                return  # pretend it succeeded
+            return os.kill(pid, sig)
+
+        import tempfile
+        cfg_path = os.path.join(self._tmp, "bed.json")
+        with open(cfg_path, "w") as f:
+            f.write("{}")
+
+        argv = [
+            "bed",
+            "--pidfile", self.pidfile_path,
+            "--no-autorestart",
+            "--config", cfg_path,
+        ]
+        with (
+            patch("sys.argv", argv),
+            patch.object(bed_main.config, "load_config", return_value={}),
+            patch.object(bed_main, "load_router_class", return_value=MagicMock()),
+            patch.object(bed_main.os, "kill", side_effect=fake_kill),
+        ):
+            with self.assertRaises(SystemExit) as cm:
+                await bed_main.main_async()
+            self.assertEqual(cm.exception.code, 1)
+
+        # The pidfile must still hold the original (rejected) pid --
+        # bed did not overwrite it.
+        with open(self.pidfile_path) as f:
+            self.assertEqual(int(f.read().strip()), fake_live_pid)
+
+    async def test_main_async_overwrites_stale_dead_pidfile(self):
+        """A pre-existing pidfile with a dead pid is overwritten with a
+        warning; the new pid is recorded, then removed on exit."""
+        # 2**31 - 1 is almost certainly not a live pid on any test box.
+        stale_pid = 2**31 - 1
+        task = await self._run_main_async_until_pidfile_then_cancel(
+            pre_pidfile=stale_pid
+        )
+        # The pidfile must now hold our pid, not the stale one.
+        self.assertTrue(os.path.exists(self.pidfile_path))
+        with open(self.pidfile_path) as f:
+            self.assertEqual(int(f.read().strip()), os.getpid())
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertFalse(os.path.exists(self.pidfile_path))
 
 
 if __name__ == "__main__":

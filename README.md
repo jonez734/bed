@@ -37,7 +37,7 @@ knobs, and threat model.
 ## CLI flags
 
 ```
---host HOST              default: 0.0.0.0
+--host HOST              default: 127.0.0.1
 --port PORT              default: 8765
 --router DOTTED.NAME     default: bbsengine6.net.defaultrouter.DefaultRouter
 --config PATH            default: packaged bed/data/bed.json
@@ -97,6 +97,19 @@ When `--pidfile` is set, a startup error (e.g. the path's
 parent directory does not exist) logs a warning and
 continues without the pidfile. The daemon does not refuse
 to start over a missing pidfile.
+
+If the pidfile already exists on startup:
+
+- **Stale pid** (the recorded process is gone) — bed logs a
+  warning and overwrites. A SIGKILL'd predecessor does not
+  block the next start.
+- **Live pid** (the recorded process is still running) — bed
+  logs an error and exits with status 1. This prevents two
+  bed processes from silently sharing a pidfile.
+
+The pidfile is opened with `O_EXCL` and retried once on a
+TOCTOU race with another start, so two concurrent
+invocations cannot both believe they own the file.
 
 ## Layout
 

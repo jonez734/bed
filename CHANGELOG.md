@@ -12,6 +12,30 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: --host default is 127.0.0.1
+
+The `--host` argparse default is now `127.0.0.1` (was `localhost`,
+which can resolve to multiple addresses and is therefore ambiguous
+for a server bind). The README and tests are updated to match.
+Production deployments that need all-interfaces binding should set
+`bind.host` in `bed.json` (the `--config` file) or pass
+`--host 0.0.0.0` on the command line. The systemd unit is unchanged;
+operators relying on its default bind should verify their `bed.json`
+or environment file.
+
+### bed: --pidfile handles stale and colliding pids
+
+- `_write_pidfile` now distinguishes a write failure (warn,
+  continue without the pidfile) from a live-pid collision
+  (exit 1). Stale pids (process gone) are overwritten with a
+  warning, so a SIGKILL'd predecessor does not block the
+  next start.
+- The pidfile is opened with `O_EXCL` and retried once on a
+  TOCTOU race.
+- New `TestPidfileIntegration` class covers the end-to-end
+  `main_async` lifecycle (writes on start, removes on exit,
+  refuses on live-pid collision, overwrites on stale pid).
+
 ### bed: add .gitignore for __pycache__, *.pyc, *.egg-info, build, dist, caches (da59f81) - 2026-06-27
 
 Adds a minimal `.gitignore` matching the patterns the Makefile's `clean`
