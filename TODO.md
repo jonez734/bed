@@ -2000,7 +2000,8 @@ When green-lit, the fixes land in this order:
    `zoid6/src/zoid6/data/bed.json` + assertion list update
    in `zoid6/src/zoid6/tests/test_config.py`).
 4. **`casino`**: delete the superseded `--pidfile` entry
-   at `casino/TODO.md:920` (no code change in casino).
+   in the `## BED (BBS Engine Daemon) Improvements`
+   section (no code change in casino).
 5. **`bed`**: add `## \`--pidfile\` PID file management`
    section to `bed/TODO.md` (this file, between the
    existing sections).
