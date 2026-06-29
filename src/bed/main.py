@@ -54,6 +54,15 @@ def _get_bed_defaults() -> dict:
     return _BED_DEFAULTS
 
 
+def _expand_user(value):
+    """Expand a leading ~ in a path/host string. Pass through non-strings
+    unchanged (e.g. None, ints) so a misconfigured JSON entry does not crash
+    the config-apply path."""
+    if isinstance(value, str):
+        return os.path.expanduser(value)
+    return value
+
+
 def _apply_bind_config(args: argparse.Namespace, cfg: dict) -> None:
     """Apply bind.host/bind.port from a loaded config when the CLI did not
     explicitly set them (i.e. args still equal argparse defaults)."""
@@ -62,7 +71,7 @@ def _apply_bind_config(args: argparse.Namespace, cfg: dict) -> None:
         return
     defaults = _get_bed_defaults()
     if "host" in bind and args.host == defaults["host"]:
-        args.host = bind["host"]
+        args.host = _expand_user(bind["host"])
     if "port" in bind and args.port == defaults["port"]:
         args.port = int(bind["port"])
 
@@ -78,7 +87,7 @@ def _apply_database_config(args: argparse.Namespace, cfg: dict) -> None:
     if "name" in db and args.databasename == defaults["databasename"]:
         args.databasename = db["name"]
     if "host" in db and args.databasehost == defaults["databasehost"]:
-        args.databasehost = db["host"]
+        args.databasehost = _expand_user(db["host"])
     if "port" in db and args.databaseport == defaults["databaseport"]:
         args.databaseport = int(db["port"])
     if "user" in db and args.databaseuser == defaults["databaseuser"]:
@@ -98,7 +107,7 @@ def _apply_auth_config(args: argparse.Namespace, cfg: dict) -> None:
         "bed_secret_path" in auth
         and args.bed_secret == defaults["bed_secret"]
     ):
-        args.bed_secret = auth["bed_secret_path"]
+        args.bed_secret = _expand_user(auth["bed_secret_path"])
     if "token_ttl" in auth and args.token_ttl == defaults["token_ttl"]:
         args.token_ttl = int(auth["token_ttl"])
     if (

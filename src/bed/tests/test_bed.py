@@ -388,6 +388,63 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
         # packaged defaults for non-overridden keys remain
         self.assertEqual(cfg["bed"]["max_restarts"], 10)
 
+    def test_config_expands_tilde_in_bed_secret_path(self):
+        """A literal '~' in auth.bed_secret_path is expanded to the user's
+        home directory, matching the shell's ~-expansion. The bug was that
+        the literal string was assigned verbatim, leaving a stray '~/.config/...'
+        directory behind when bed tried to write to it as a relative path."""
+        import os
+        from bed.main import _apply_auth_config
+
+        args = self._parse([])
+        cfg = {"auth": {"bed_secret_path": "~/.config/bed/bed.secret"}}
+        _apply_auth_config(args, cfg)
+        self.assertEqual(args.bed_secret, os.path.expanduser("~/.config/bed/bed.secret"))
+        self.assertFalse(args.bed_secret.startswith("~"))
+
+    def test_config_expands_tilde_in_bind_host(self):
+        """bind.host with a leading ~ is expanded (rare but legal)."""
+        import os
+        from bed.main import _apply_bind_config
+
+        args = self._parse([])
+        cfg = {"bind": {"host": "~/loopback"}}
+        _apply_bind_config(args, cfg)
+        self.assertEqual(args.host, os.path.expanduser("~/loopback"))
+        self.assertFalse(args.host.startswith("~"))
+
+    def test_config_expands_tilde_in_database_host(self):
+        """database.host with a leading ~ is expanded (rare but legal)."""
+        import os
+        from bed.main import _apply_database_config
+
+        args = self._parse([])
+        cfg = {"database": {"host": "~/db.sock"}}
+        _apply_database_config(args, cfg)
+        self.assertEqual(args.databasehost, os.path.expanduser("~/db.sock"))
+        self.assertFalse(args.databasehost.startswith("~"))
+
+    def test_config_does_not_overwrite_explicit_bed_secret(self):
+        """An explicit --bed-secret on the CLI wins over auth.bed_secret_path
+        in the config. The '~' expansion must not run when the user passed
+        their own value."""
+        from bed.main import _apply_auth_config
+
+        args = self._parse(["--bed-secret", "/tmp/explicit-secret"])
+        cfg = {"auth": {"bed_secret_path": "/tmp/from-json"}}
+        _apply_auth_config(args, cfg)
+        self.assertEqual(args.bed_secret, "/tmp/explicit-secret")
+
+    def test_config_expand_user_passes_through_non_strings(self):
+        """_expand_user is defensive: a None or int in a misconfigured JSON
+        entry does not crash the config-apply path."""
+        from bed.main import _expand_user
+
+        self.assertIsNone(_expand_user(None))
+        self.assertEqual(_expand_user(42), 42)
+        self.assertEqual(_expand_user(""), "")
+        self.assertEqual(_expand_user("/already/absolute"), "/already/absolute")
+
 
 if __name__ == "__main__":
     unittest.main()
