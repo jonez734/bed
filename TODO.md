@@ -194,7 +194,9 @@ S→C {"type":"echo_cancel",
 A session has up to three named render streams, each with its own `seq`:
 - `main` — the primary game UI (menus, listboxes, prompts).
 - `bottombar` — the BBS-style status bar (registered fragments in
-  `bbsengine6.io.screen`). Pushed by `setbottombar` / `register_*` calls.
+  `bbsengine6.io.screen`, now backed by `bbsengine6.bottombar`).
+  Pushed by `setbottombar` / `register_*` calls. Per-connection
+  plumbing is tracked in `../bbsengine6/TODO-BOTTOMBAR.md` Phase 4a.
 - `statusline` — optional, for in-game top-of-screen status (turn count,
   bank balance, unread mail). Pushed by empyre's `lib.init` bottom-bar-style
   fragments if/when migrated.
