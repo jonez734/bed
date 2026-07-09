@@ -4,7 +4,7 @@ VERSION = $(shell date +%Y%m%d%H%M)
 
 PYTHON ?= python3
 
-.PHONY: all help clean build version rename-sdist sign release install-systemd uninstall-systemd
+.PHONY: all help clean build version rename-sdist sign release install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles
 
 all: help
 
@@ -17,6 +17,10 @@ help:
 	@echo "  rename-sdist       Rename built sdist to include -src suffix"
 	@echo "  sign               GPG-detach-sign every artifact in $(OUTDIR)"
 	@echo "  release            clean + version + build + rename-sdist + sign"
+	@echo "  install-sysusers   Create bed user and group via systemd-sysusers"
+	@echo "  uninstall-sysusers Remove sysusers.d/bed.conf"
+	@echo "  install-tmpfiles   Create /var/log/bed via systemd-tmpfiles"
+	@echo "  uninstall-tmpfiles Remove tmpfiles.d/bed.conf"
 	@echo "  install-systemd    Copy bed.service to /etc/systemd/system/ and daemon-reload"
 	@echo "  uninstall-systemd  Stop, disable, and remove the bed.service unit"
 	@echo "  clean              Remove build artifacts"
@@ -58,6 +62,30 @@ release: clean version build rename-sdist sign
 
 UNIT_SRC = src/$(PROJECT)/daemon/$(PROJECT).service
 UNIT_DST = /etc/systemd/system/$(PROJECT).service
+
+SYSUSERS_SRC = src/$(PROJECT)/daemon/$(PROJECT).sysusers
+SYSUSERS_DST = /usr/lib/sysusers.d/$(PROJECT).conf
+
+TMPFILES_SRC = src/$(PROJECT)/daemon/$(PROJECT).tmpfiles
+TMPFILES_DST = /usr/lib/tmpfiles.d/$(PROJECT).conf
+
+install-sysusers:
+	install -m 0644 $(SYSUSERS_SRC) $(SYSUSERS_DST)
+	systemd-sysusers
+	@echo "Created bed user and group via $(SYSUSERS_DST)"
+
+uninstall-sysusers:
+	-rm -f $(SYSUSERS_DST)
+	@echo "Removed $(SYSUSERS_DST)"
+
+install-tmpfiles:
+	install -m 0644 $(TMPFILES_SRC) $(TMPFILES_DST)
+	systemd-tmpfiles --create
+	@echo "Created /var/log/bed via $(TMPFILES_DST)"
+
+uninstall-tmpfiles:
+	-rm -f $(TMPFILES_DST)
+	@echo "Removed $(TMPFILES_DST)"
 
 install-systemd:
 	install -m 0644 $(UNIT_SRC) $(UNIT_DST)

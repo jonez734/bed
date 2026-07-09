@@ -4,8 +4,18 @@ VERSION = $(shell date +%Y%m%d%H%M)
 
 PYTHON = python3
 
+UNIT_SRC = bed/daemon/bed.service
+UNIT_DST = /etc/systemd/system/bed.service
+
+SYSUSERS_SRC = bed/daemon/bed.sysusers
+SYSUSERS_DST = /usr/lib/sysusers.d/bed.conf
+
+TMPFILES_SRC = bed/daemon/bed.tmpfiles
+TMPFILES_DST = /usr/lib/tmpfiles.d/bed.conf
+
 .PHONY: build version
 .PHONY: clean build rename-sdist sign release all
+.PHONY: install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-systemd uninstall-systemd
 
 build: version
 	cd .. && $(PYTHON) -m build --outdir $(OUTDIR)
@@ -36,7 +46,35 @@ clean:
 
 # TODO: OUTDIR differs from existing bed/Makefile (../dist/ vs /srv/repo/bed/); consolidate entry points
 # TODO: standardize version label names across packages (drop __ prefix/suffix on __datestamp__/__version__)
-# TODO: create bed/src/bed/Makefile so '$(MAKE) -C bed clean' works; model on casino/src/casino/Makefile (subdir cleans) and bed/Makefile root (systemd targets)
+install-sysusers:
+	install -m 0644 $(SYSUSERS_SRC) $(SYSUSERS_DST)
+	systemd-sysusers
+	@echo "Created bed user and group via $(SYSUSERS_DST)"
+
+uninstall-sysusers:
+	-rm -f $(SYSUSERS_DST)
+	@echo "Removed $(SYSUSERS_DST)"
+
+install-tmpfiles:
+	install -m 0644 $(TMPFILES_SRC) $(TMPFILES_DST)
+	systemd-tmpfiles --create
+	@echo "Created /var/log/bed and /var/lib/bed via $(TMPFILES_DST)"
+
+uninstall-tmpfiles:
+	-rm -f $(TMPFILES_DST)
+	@echo "Removed $(TMPFILES_DST)"
+
+install-systemd:
+	install -m 0644 $(UNIT_SRC) $(UNIT_DST)
+	systemctl daemon-reload
+	@echo "Installed $(UNIT_DST). Run: systemctl enable --now bed"
+
+uninstall-systemd:
+	-systemctl stop bed
+	-systemctl disable bed
+	-rm -f $(UNIT_DST)
+	-systemctl daemon-reload
+	@echo "Removed $(UNIT_DST)"
 
 version:
 	@echo '__version__ = "0.0.1.dev$(VERSION)"' > $(PROJECT)/_version.py

@@ -8,7 +8,7 @@ Wants=postgresql.service
 Type=simple
 User=bed
 Group=bed
-WorkingDirectory=/opt/bed
+WorkingDirectory=/var/lib/bed
 
 EnvironmentFile=-/etc/bed/bed.env
 
@@ -31,7 +31,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/log/bed
+ReadWritePaths=/var/log/bed /var/lib/bed
 
 [Install]
 WantedBy=multi-user.target

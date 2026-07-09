@@ -1,0 +1,3 @@
+# Type Name ID GECOS       Home     Shell
+u     bed  -  "BED Daemon" /var/lib/bed -
+g     bed  -  -

@@ -50,7 +50,7 @@ where = ["src"]
 version = { attr = "bed._version.__version__" }
 
 [tool.setuptools.package-data]
-bed = ["data/bed.json", "data/sql/*.sql", "daemon/*.service"]
+bed = ["data/bed.json", "data/sql/*.sql", "daemon/*.service", "daemon/*.sysusers", "daemon/*.tmpfiles"]
 
 [tool.pytest.ini_options]
 markers = [
