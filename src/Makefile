@@ -55,7 +55,7 @@ uninstall-sysusers:
 	-rm -f $(SYSUSERS_DST)
 	@echo "Removed $(SYSUSERS_DST)"
 
-install-tmpfiles:
+install-tmpfiles: install-sysusers
 	install -m 0644 $(TMPFILES_SRC) $(TMPFILES_DST)
 	systemd-tmpfiles --create
 	@echo "Created /var/log/bed and /var/lib/bed via $(TMPFILES_DST)"
