@@ -12,7 +12,7 @@ WorkingDirectory=/var/lib/bed
 
 EnvironmentFile=-/etc/bed/bed.env
 
-ExecStart=/usr/bin/bed --no-autorestart
+ExecStart=/var/lib/bed/venv/bin/bed --no-autorestart
 
 ExecReload=/bin/kill -HUP $MAINPID
 
