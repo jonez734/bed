@@ -2,7 +2,7 @@ PROJECT = bed
 OUTDIR = /srv/repo/$(PROJECT)/
 VERSION = $(shell date +%Y%m%d%H%M)
 
-PYTHON ?= python3
+PYTHON ?= python3.12
 
 .PHONY: all help clean build version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles
 
@@ -38,8 +38,8 @@ clean:
 
 version:
 	@echo '__version__ = "0.0.1.dev$(VERSION)"' > src/$(PROJECT)/_version.py
-	@echo 'githash = "'`git log -1 --format='%H' 2>/dev/null | cut -c 1-16`'"' >> src/$(PROJECT)/_version.py
-	@echo 'datestamp = "$(VERSION)"' >> src/$(PROJECT)/_version.py
+	@echo '__datestamp__ = "$(VERSION)"' >> src/$(PROJECT)/_version.py
+	@echo '__githash__ = "'`git log -1 --format='%H' 2>/dev/null | cut -c 1-16`'"' >> src/$(PROJECT)/_version.py
 	@cat src/$(PROJECT)/_version.py
 
 build: version
@@ -92,12 +92,24 @@ uninstall-tmpfiles:
 
 VENV_DIR = /var/lib/bed/venv
 
+WHEEL_DIR = /tmp/$(PROJECT)-$$
+BBSENGINE_DIR = $(CURDIR)/../bbsengine6/py
+GETDATE_DIR = $(CURDIR)/../getdate_next
+
 install-venv:
 	@command -v sudo >/dev/null 2>&1 || { echo "Error: sudo required"; exit 1; }
-	@sudo -u bed test -d "$(VENV_DIR)" || sudo -u bed python3 -m venv "$(VENV_DIR)"
-	sudo -u bed $(VENV_DIR)/bin/pip install --upgrade pip build setuptools wheel
-	sudo -u bed $(VENV_DIR)/bin/python -m build --no-isolation --wheel --outdir $(CURDIR)/dist $(CURDIR)
-	sudo -u bed $(VENV_DIR)/bin/pip install $(CURDIR)/dist/$(PROJECT)-*.whl
+	@sudo -u bed test -d "$(VENV_DIR)" || sudo -u bed $(PYTHON) -m venv "$(VENV_DIR)"
+	sudo -u bed $(VENV_DIR)/bin/pip install --upgrade pip
+	$(PYTHON) -m ensurepip --upgrade >/dev/null 2>&1 || true
+	$(PYTHON) -m pip install --quiet --user build setuptools wheel
+	mkdir -p $(WHEEL_DIR)
+	$(MAKE) -C $(BBSENGINE_DIR) version
+	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(GETDATE_DIR)
+	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(BBSENGINE_DIR)
+	$(MAKE) version
+	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
+	sudo -u bed $(VENV_DIR)/bin/pip install $(WHEEL_DIR)/*.whl
+	rm -rf $(WHEEL_DIR)
 	@echo "Installed bed into $(VENV_DIR)"
 
 uninstall-venv:
