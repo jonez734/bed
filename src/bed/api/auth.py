@@ -217,7 +217,7 @@ class AuthService(BaseService):
             )
 
         session_id = str(uuid.uuid4())
-        websocket_id = str(id(websocket))
+        websocket_id = str(uuid.uuid4())
         state = self.sessions.bind(
             session_id, websocket_id, info.moniker, info.is_sysop, balance=info.balance
         )
@@ -237,7 +237,7 @@ class AuthService(BaseService):
         self, websocket: Any, message: Dict[str, Any]
     ) -> Dict[str, Any]:
         token = message.get("token") or ""
-        new_websocket_id = str(id(websocket))
+        new_websocket_id = str(uuid.uuid4())
 
         try:
             claims = _decode_token(token, self.secret)
@@ -299,7 +299,7 @@ class AuthService(BaseService):
         self, websocket: Any, message: Dict[str, Any]
     ) -> Dict[str, Any]:
         token = message.get("token") or ""
-        websocket_id = str(id(websocket))
+        websocket_id = str(uuid.uuid4())
         try:
             _claims = _decode_token(token, self.secret)
         except TokenError as e:

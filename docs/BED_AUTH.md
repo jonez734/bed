@@ -97,7 +97,7 @@ The on-the-wire token is a single string:
   - `session_id`        (UUID4 string, server-assigned, sticky across reconnects)
   - `is_sysop`          (bool)
   - `bed_instance_id`   (UUID4 string, server-assigned, baked in)
-  - `websocket_id`      (string, `str(id(websocket))` of the issuing socket)
+  - `websocket_id`      (UUID4 string, server-assigned, per-connection)
 - **hmac** is `HMAC-SHA256(secret, payload_b64)`, hex-encoded.
 
 The HMAC secret is 32 bytes of CSPRNG entropy generated on first run
