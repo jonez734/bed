@@ -103,6 +103,7 @@ install-venv:
 	$(PYTHON) -m ensurepip --upgrade >/dev/null 2>&1 || true
 	$(PYTHON) -m pip install --quiet --user build setuptools wheel
 	mkdir -p $(WHEEL_DIR)
+	rm -f $(WHEEL_DIR)/*.whl
 	$(MAKE) -C $(BBSENGINE_DIR) version
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(GETDATE_DIR)
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(BBSENGINE_DIR)

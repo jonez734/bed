@@ -28,12 +28,26 @@ Install the systemd unit and start the service:
 cd /path/to/bed/src && sudo make install-systemd && sudo systemctl restart bed
 ```
 
-Or use the full install target from the project root to set up everything
-(sysusers, tmpfiles, venv, systemd) in one command:
+#### Prerequisites
+
+`make install-venv` (called by `make install`) requires `build`,
+`setuptools`, and `wheel` in the invoking user's pip environment:
+
+```bash
+pip install --user build setuptools wheel
+```
+
+It also expects local sibling repos (`../bbsengine6/py`, `../getdate_next`)
+and builds wheels for all three into `/tmp` so the `bed` user can install
+them (the `bed` user may not have access to the source tree).
+
+#### One-command install
 
 ```bash
 cd /path/to/bed && sudo make install && sudo systemctl enable --now bed
 ```
+
+This chains: `install-sysusers` → `install-tmpfiles` → `install-venv` → `install-systemd`.
 
 The unit at `src/bed/daemon/bed.service` runs as `User=bed` and uses
 `ExecStart=/var/lib/bed/venv/bin/bed --no-autorestart`.  Any Python package
@@ -153,9 +167,14 @@ bed/
 ├── src/bed/
 │   ├── api/                AuthService, TokenStore, SessionRegistry,
 │   │                       CredentialProvider, error envelopes, secret loader
+│   ├── daemon/
+│   │   ├── bed.service     systemd unit file
+│   │   ├── bed.sysusers    systemd-sysusers config (creates bed user/group)
+│   │   └── bed.tmpfiles    systemd-tmpfiles config (/var/log/bed, /var/lib/bed)
 │   ├── data/
 │   │   ├── bed.json        packaged default config
 │   │   └── sql/bed_token.sql   optional DB token-store schema
+│   ├── _version.py         auto-stamped by `make version`
 │   ├── main.py             BED daemon entry point
 │   ├── lib.py              argparse
 │   ├── config.py           bed.json loader
