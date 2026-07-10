@@ -28,6 +28,13 @@ Install the systemd unit and start the service:
 cd /path/to/bed/src && sudo make install-systemd && sudo systemctl restart bed
 ```
 
+Or use the full install target from the project root to set up everything
+(sysusers, tmpfiles, venv, systemd) in one command:
+
+```bash
+cd /path/to/bed && sudo make install && sudo systemctl enable --now bed
+```
+
 The unit at `src/bed/daemon/bed.service` runs as `User=bed` and uses
 `ExecStart=/var/lib/bed/venv/bin/bed --no-autorestart`.  Any Python package
 installed into that venv (router games, database drivers, …) is available
@@ -47,13 +54,19 @@ wscat -c ws://127.0.0.1:8765
 | FQCN                                                | behavior                                               |
 |-----------------------------------------------------|--------------------------------------------------------|
 | `bbsengine6.net.defaultrouter.DefaultRouter`        | no-credential stub; wscat / development                |
+| `bed.defaultrouter.DefaultRouter`                   | bank + auth services                                   |
 | `zoid6.api.handler.MonikerAuthRouter`               | verifies the moniker exists; any password accepted     |
 | `zoid6.api.MessageRouter`                           | full zoid6 unified router                              |
 | any custom router                                   | your game; `bed` wires AuthService alongside          |
 
 `bed` automatically registers `AuthService` (bearer tokens,
-reconnect, refresh, revoke) before any non-`DefaultRouter` runs. See
-[`docs/BED_AUTH.md`](docs/BED_AUTH.md) for the wire protocol, TTL
+reconnect, refresh, revoke) before any non-`DefaultRouter` runs. When
+using `bed.defaultrouter.DefaultRouter`, `BankServiceHandler` is also
+registered alongside auth, exposing all bank message types
+(`bank_balance`, `bank_add`, `bank_remove`, `bank_transfer_request`,
+`bank_transfer_approve`, `bank_transfer_reject`, `bank_pending`,
+`bank_history`, `bank_list_all`). See
+[`docs/BED_AUTH.md`](docs/BED_AUTH.md) for the auth wire protocol, TTL
 knobs, and threat model.
 
 ## CLI flags

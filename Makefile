@@ -4,7 +4,7 @@ VERSION = $(shell date +%Y%m%d%H%M)
 
 PYTHON ?= python3
 
-.PHONY: all help clean build version rename-sdist sign release install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles
+.PHONY: all help clean build version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles
 
 all: help
 
@@ -12,6 +12,7 @@ help:
 	@echo "bed - BBS Engine Daemon"
 	@echo ""
 	@echo "Targets:"
+	@echo "  install            Full install: sysusers + tmpfiles + venv + systemd"
 	@echo "  version            Stamp src/bed/_version.py with date + git hash"
 	@echo "  build              Build sdist+wheel into $(OUTDIR)"
 	@echo "  rename-sdist       Rename built sdist to include -src suffix"
@@ -21,6 +22,8 @@ help:
 	@echo "  uninstall-sysusers Remove sysusers.d/bed.conf"
 	@echo "  install-tmpfiles   Create /var/log/bed via systemd-tmpfiles"
 	@echo "  uninstall-tmpfiles Remove tmpfiles.d/bed.conf"
+	@echo "  install-venv       Create venv and install bed wheel at /var/lib/bed/venv"
+	@echo "  uninstall-venv     Remove /var/lib/bed/venv"
 	@echo "  install-systemd    Copy bed.service to /etc/systemd/system/ and daemon-reload"
 	@echo "  uninstall-systemd  Stop, disable, and remove the bed.service unit"
 	@echo "  clean              Remove build artifacts"
@@ -87,6 +90,23 @@ uninstall-tmpfiles:
 	-rm -f $(TMPFILES_DST)
 	@echo "Removed $(TMPFILES_DST)"
 
+VENV_DIR = /var/lib/bed/venv
+
+install-venv:
+	@command -v sudo >/dev/null 2>&1 || { echo "Error: sudo required"; exit 1; }
+	@sudo -u bed test -d "$(VENV_DIR)" || sudo -u bed python3 -m venv "$(VENV_DIR)"
+	sudo -u bed $(VENV_DIR)/bin/pip install --upgrade pip build setuptools wheel
+	sudo -u bed $(VENV_DIR)/bin/python -m build --no-isolation --wheel --outdir $(CURDIR)/dist $(CURDIR)
+	sudo -u bed $(VENV_DIR)/bin/pip install $(CURDIR)/dist/$(PROJECT)-*.whl
+	@echo "Installed bed into $(VENV_DIR)"
+
+uninstall-venv:
+	-rm -rf $(VENV_DIR)
+	@echo "Removed $(VENV_DIR)"
+
+install: install-sysusers install-tmpfiles install-venv install-systemd
+	@echo "bed fully installed. Run: systemctl enable --now $(PROJECT)"
+
 install-systemd:
 	install -m 0644 $(UNIT_SRC) $(UNIT_DST)
 	systemctl daemon-reload
@@ -98,3 +118,6 @@ uninstall-systemd:
 	-rm -f $(UNIT_DST)
 	-systemctl daemon-reload
 	@echo "Removed $(UNIT_DST)"
+
+uninstall: uninstall-systemd uninstall-venv uninstall-tmpfiles uninstall-sysusers
+	@echo "bed fully uninstalled"
