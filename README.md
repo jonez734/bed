@@ -11,6 +11,28 @@ pip install -e .
 bed --router zoid6.api.handler.MonikerAuthRouter
 ```
 
+### systemd service (dedicated venv)
+
+The system Python may be too new for `bed`'s requirement (`>=3.9,<3.13`).
+Create a dedicated venv under the service's own directory:
+
+```bash
+sudo -u bed python3.12 -m venv /var/lib/bed/venv
+sudo -u bed /var/lib/bed/venv/bin/pip install -e /path/to/bed
+sudo -u bed /var/lib/bed/venv/bin/pip install -e /path/to/empyre   # router game
+```
+
+Install the systemd unit and start the service:
+
+```bash
+cd /path/to/bed/src && sudo make install-systemd && sudo systemctl restart bed
+```
+
+The unit at `src/bed/daemon/bed.service` runs as `User=bed` and uses
+`ExecStart=/var/lib/bed/venv/bin/bed --no-autorestart`.  Any Python package
+installed into that venv (router games, database drivers, …) is available
+at runtime.
+
 In another terminal:
 
 ```bash
