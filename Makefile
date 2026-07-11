@@ -4,7 +4,7 @@ VERSION = $(shell date +%Y%m%d%H%M)
 
 PYTHON ?= python3.12
 
-.PHONY: all help clean build version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc
+.PHONY: all help clean build version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon
 
 all: help
 
@@ -24,6 +24,7 @@ help:
 	@echo "  uninstall-tmpfiles Remove tmpfiles.d/bed.conf"
 	@echo "  install-venv       Create venv and install bed wheel at /var/lib/bed/venv"
 	@echo "  uninstall-venv     Remove /var/lib/bed/venv"
+	@echo "  restorecon         Relabel venv binaries for SELinux (Fedora/RHEL)"
 	@echo "  install-systemd    Copy bed.service to /usr/lib/systemd/system/ and daemon-reload"
 	@echo "  uninstall-systemd  Stop, disable, and remove the bed.service unit"
 	@echo "  install-etc        Install /etc/bed/ config from factory defaults"
@@ -116,12 +117,20 @@ install-venv:
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
 	sudo -u bed $(VENV_DIR)/bin/pip install $(WHEEL_DIR)/*.whl
 	rm -rf $(WHEEL_DIR)
+	@command -v semanage >/dev/null 2>&1 && \
+		sudo semanage fcontext -a -t bin_t "$(VENV_DIR)/bin(/.*)?" 2>/dev/null || true
 	@command -v restorecon >/dev/null 2>&1 && sudo restorecon -R $(VENV_DIR)/bin/ || true
 	@echo "Installed bed into $(VENV_DIR)"
 
 uninstall-venv:
 	-rm -rf $(VENV_DIR)
 	@echo "Removed $(VENV_DIR)"
+
+restorecon:
+	@command -v semanage >/dev/null 2>&1 && \
+		sudo semanage fcontext -a -t bin_t "$(VENV_DIR)/bin(/.*)?" 2>/dev/null || true
+	sudo restorecon -R $(VENV_DIR)/bin/
+	@echo "Relabeled $(VENV_DIR)/bin/ for SELinux"
 
 install-etc:
 	install -d $(ETC_DIR)

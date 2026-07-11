@@ -27,11 +27,5 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=bed
 
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=/var/log/bed /var/lib/bed
-
 [Install]
 WantedBy=multi-user.target

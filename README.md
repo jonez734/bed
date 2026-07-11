@@ -47,12 +47,16 @@ On systems with SELinux enforcing (Fedora, RHEL, CentOS), the venv binaries
 under `/var/lib/bed/venv/bin/` get labeled `var_lib_t` by default.
 systemd cannot execute scripts with this context — it causes a 203/EXEC error.
 
-`make install-venv` runs `restorecon` automatically when available. If you
-install manually, run:
+`make install-venv` adds a `semanage` rule and runs `restorecon` automatically
+when available. If you install manually, run:
 
 ```bash
+sudo semanage fcontext -a -t bin_t "/var/lib/bed/venv/bin(/.*)?"
 sudo restorecon -R /var/lib/bed/venv/bin/
 ```
+
+Without `semanage`, `restorecon` will restore the default `var_lib_t` label
+and the 203 error will persist.
 
 #### One-command install
 
