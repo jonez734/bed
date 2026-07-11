@@ -425,6 +425,42 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args.databasehost, os.path.expanduser("~/db.sock"))
         self.assertFalse(args.databasehost.startswith("~"))
 
+    def test_flat_databaseuser_key_applied(self):
+        """Flat 'databaseuser' key (from BED_DATABASEUSER env var) is applied."""
+        from bed.main import _apply_database_config
+
+        args = self._parse([])
+        cfg = {"databaseuser": "zoid6"}
+        _apply_database_config(args, cfg)
+        self.assertEqual(args.databaseuser, "zoid6")
+
+    def test_flat_databasepassword_key_applied(self):
+        """Flat 'databasepassword' key (from BED_DATABASEPASSWORD env var) is applied."""
+        from bed.main import _apply_database_config
+
+        args = self._parse([])
+        cfg = {"databasepassword": "s3cret"}
+        _apply_database_config(args, cfg)
+        self.assertEqual(args.databasepassword, "s3cret")
+
+    def test_nested_database_user_wins_over_flat(self):
+        """When both nested database.user and flat databaseuser exist, nested wins."""
+        from bed.main import _apply_database_config
+
+        args = self._parse([])
+        cfg = {"database": {"user": "nested_user"}, "databaseuser": "flat_user"}
+        _apply_database_config(args, cfg)
+        self.assertEqual(args.databaseuser, "nested_user")
+
+    def test_cli_databaseuser_wins_over_flat(self):
+        """Explicit --databaseuser on CLI wins over flat config key."""
+        from bed.main import _apply_database_config
+
+        args = self._parse(["--databaseuser", "cli_user"])
+        cfg = {"databaseuser": "flat_user"}
+        _apply_database_config(args, cfg)
+        self.assertEqual(args.databaseuser, "cli_user")
+
     def test_config_does_not_overwrite_explicit_bed_secret(self):
         """An explicit --bed-secret on the CLI wins over auth.bed_secret_path
         in the config. The '~' expansion must not run when the user passed

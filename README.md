@@ -11,6 +11,22 @@ pip install -e .
 bed --router zoid6.api.handler.MonikerAuthRouter
 ```
 
+### Database setup
+
+Before running bed, bootstrap the database (schema, roles, functions)
+and create the `bed` PostgreSQL role:
+
+```bash
+bed-startup
+# or: python -m bed.startup
+```
+
+This runs `bbsengine6.startup` first (creating the `engine` schema,
+core roles `member`/`web`/`sysop`/`term`, and all SECURITY DEFINER
+functions), then creates the `bed` role with LOGIN and grants it
+USAGE on the `engine` schema.  The role is idempotent — re-running
+after the role already exists is a no-op.
+
 ### systemd service (dedicated venv)
 
 The system Python may be too new for `bed`'s requirement (`>=3.9,<3.13`).
@@ -193,6 +209,7 @@ bed/
 │   │   └── sql/bed_token.sql   optional DB token-store schema
 │   ├── _version.py         auto-stamped by `make version`
 │   ├── main.py             BED daemon entry point
+│   ├── startup.py          database bootstrap (bbsengine6 startup + bed role)
 │   ├── lib.py              argparse
 │   ├── config.py           bed.json loader
 │   └── tests/              pytest
@@ -208,6 +225,13 @@ bed/
 cd bed
 PYTHONPATH=src:../bbsengine6/py/src pytest
 ```
+
+Tests cover:
+
+- **test_bed.py** — BED server lifecycle, config parsing, pidfile
+- **test_auth_service.py** — bearer token encode/decode, AuthService
+- **test_startup.py** — startup module (role creation, main flow,
+  server stays running)
 
 ## License
 

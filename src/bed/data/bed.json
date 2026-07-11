@@ -5,6 +5,9 @@
     "max_restarts": 10
   },
   "debug": false,
+  "database": {
+    "user": "bed"
+  },
   "auth": {
     "bed_secret_path": "~/.config/bed/bed.secret",
     "token_ttl": 900,

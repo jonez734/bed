@@ -189,21 +189,32 @@ def _apply_bind_config(args: argparse.Namespace, cfg: dict) -> None:
 def _apply_database_config(args: argparse.Namespace, cfg: dict) -> None:
     """Apply database.* from a loaded config when the CLI did not explicitly
     set those flags. The zoid6 bed.json only carries name/host/port; user
-    and password stay on the CLI or env."""
-    db = cfg.get("database")
-    if not isinstance(db, dict):
-        return
+    and password stay on the CLI or env.
+
+    Accepts both nested (``{"database": {"user": ...}}``) and flat
+    (``{"databaseuser": ...}``) keys.  The flat form is produced when
+    environment variables like ``BED_DATABASEUSER`` are loaded by
+    ``_load_from_env`` – the underscore-free name doesn't get nested
+    under a ``"database"`` section, so we must handle it here as a
+    fallback.
+    """
     defaults = _get_bed_defaults()
-    if "name" in db and args.databasename == defaults["databasename"]:
-        args.databasename = db["name"]
-    if "host" in db and args.databasehost == defaults["databasehost"]:
-        args.databasehost = _expand_user(db["host"])
-    if "port" in db and args.databaseport == defaults["databaseport"]:
-        args.databaseport = int(db["port"])
-    if "user" in db and args.databaseuser == defaults["databaseuser"]:
-        args.databaseuser = db["user"]
-    if "password" in db and args.databasepassword == defaults["databasepassword"]:
-        args.databasepassword = db["password"]
+    db = cfg.get("database")
+    if isinstance(db, dict):
+        if "name" in db and args.databasename == defaults["databasename"]:
+            args.databasename = db["name"]
+        if "host" in db and args.databasehost == defaults["databasehost"]:
+            args.databasehost = _expand_user(db["host"])
+        if "port" in db and args.databaseport == defaults["databaseport"]:
+            args.databaseport = int(db["port"])
+        if "user" in db and args.databaseuser == defaults["databaseuser"]:
+            args.databaseuser = db["user"]
+        if "password" in db and args.databasepassword == defaults["databasepassword"]:
+            args.databasepassword = db["password"]
+    if "databaseuser" in cfg and args.databaseuser == defaults["databaseuser"]:
+        args.databaseuser = cfg["databaseuser"]
+    if "databasepassword" in cfg and args.databasepassword == defaults["databasepassword"]:
+        args.databasepassword = cfg["databasepassword"]
 
 
 def _apply_auth_config(args: argparse.Namespace, cfg: dict) -> None:

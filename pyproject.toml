@@ -38,6 +38,7 @@ dev = [
 
 [project.scripts]
 bed = "bed.main:main"
+bed-startup = "bed.startup:main"
 ping = "bed.tools.ping:main"
 
 [project.urls]

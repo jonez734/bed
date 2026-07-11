@@ -4,7 +4,7 @@ VERSION = $(shell date +%Y%m%d%H%M)
 
 PYTHON ?= python3.12
 
-.PHONY: all help clean build version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon
+.PHONY: all help clean build version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon setup-db
 
 all: help
 
@@ -29,6 +29,7 @@ help:
 	@echo "  uninstall-systemd  Stop, disable, and remove the bed.service unit"
 	@echo "  install-etc        Install /etc/bed/ config from factory defaults"
 	@echo "  uninstall-etc      Remove installed config files"
+	@echo "  setup-db           Bootstrap database: bbsengine6 startup + bed role"
 	@echo "  clean              Remove build artifacts"
 
 clean:
@@ -137,12 +138,8 @@ install-etc:
 	install -m 0644 $(FACTORY_DIR)/bed.json $(ETC_DIR)/bed.json
 	@echo "Installed $(ETC_DIR)/bed.json from factory defaults"
 	@test -f $(ETC_DIR)/bed.env || \
-		(echo "# bed environment overrides" > $(ETC_DIR)/bed.env && \
-		 echo "# BED_DATABASEUSER=zoid6" >> $(ETC_DIR)/bed.env && \
-		 echo "# BED_DATABASEPASSWORD=..." >> $(ETC_DIR)/bed.env && \
-		 echo "Created $(ETC_DIR)/bed.env")
-	@chmod 0640 $(ETC_DIR)/bed.env
-	@echo "Installed $(ETC_DIR)/bed.env"
+		install -m 0640 $(FACTORY_DIR)/bed.env $(ETC_DIR)/bed.env
+	@echo "Installed $(ETC_DIR)/bed.env from factory defaults"
 
 uninstall-etc:
 	-rm -rf $(ETC_DIR)
@@ -150,6 +147,10 @@ uninstall-etc:
 
 install: install-sysusers install-tmpfiles install-venv install-systemd install-etc
 	@echo "bed fully installed. Run: systemctl enable --now $(PROJECT)"
+
+setup-db:
+	$(VENV_DIR)/bin/bed-startup
+	@echo "Database bootstrapped. Run: systemctl enable --now $(PROJECT)"
 
 install-systemd:
 	install -m 0644 $(UNIT_SRC) $(UNIT_DST)

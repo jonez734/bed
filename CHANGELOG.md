@@ -12,6 +12,14 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: startup module for database bootstrap
+
+New `bed.startup` module runs `bbsengine6.startup` (database schema,
+core roles, functions) and then creates the `bed` PostgreSQL role with
+LOGIN and USAGE on the `engine` schema.  Invoked via
+`python -m bed.startup` or `bed-startup`.  The `bed` role is no longer
+created by `bbsengine6` core — it is owned by the bed package.
+
 ### bed: --host default is 127.0.0.1
 
 The `--host` argparse default is now `127.0.0.1` (was `localhost`,
