@@ -1,0 +1,26 @@
+{
+  "bed": {
+    "autorestart": true,
+    "restart_delay": 5,
+    "max_restarts": 10
+  },
+  "debug": false,
+  "auth": {
+    "bed_secret_path": "~/.config/bed/bed.secret",
+    "token_ttl": 900,
+    "token_persistence": "memory",
+    "credential_provider": "password",
+    "bed_instance_id": null
+  },
+  "echo": {
+    "ack_timeout": 30
+  },
+  "help": {
+    "rate_limit": 10
+  },
+  "key_f2": {
+    "rate_limit": 5,
+    "max_items": 50,
+    "channel_allow_list": []
+  }
+}

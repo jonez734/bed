@@ -4,7 +4,7 @@ VERSION = $(shell date +%Y%m%d%H%M)
 
 PYTHON ?= python3.12
 
-.PHONY: all help clean build version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles
+.PHONY: all help clean build version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc
 
 all: help
 
@@ -12,7 +12,7 @@ help:
 	@echo "bed - BBS Engine Daemon"
 	@echo ""
 	@echo "Targets:"
-	@echo "  install            Full install: sysusers + tmpfiles + venv + systemd"
+	@echo "  install            Full install: sysusers + tmpfiles + venv + systemd + etc"
 	@echo "  version            Stamp src/bed/_version.py with date + git hash"
 	@echo "  build              Build sdist+wheel into $(OUTDIR)"
 	@echo "  rename-sdist       Rename built sdist to include -src suffix"
@@ -24,8 +24,10 @@ help:
 	@echo "  uninstall-tmpfiles Remove tmpfiles.d/bed.conf"
 	@echo "  install-venv       Create venv and install bed wheel at /var/lib/bed/venv"
 	@echo "  uninstall-venv     Remove /var/lib/bed/venv"
-	@echo "  install-systemd    Copy bed.service to /etc/systemd/system/ and daemon-reload"
+	@echo "  install-systemd    Copy bed.service to /usr/lib/systemd/system/ and daemon-reload"
 	@echo "  uninstall-systemd  Stop, disable, and remove the bed.service unit"
+	@echo "  install-etc        Install /etc/bed/ config from factory defaults"
+	@echo "  uninstall-etc      Remove installed config files"
 	@echo "  clean              Remove build artifacts"
 
 clean:
@@ -64,7 +66,10 @@ sign:
 release: clean version build rename-sdist sign
 
 UNIT_SRC = src/$(PROJECT)/daemon/$(PROJECT).service
-UNIT_DST = /etc/systemd/system/$(PROJECT).service
+UNIT_DST = /usr/lib/systemd/system/$(PROJECT).service
+
+FACTORY_DIR = usr/share/factory/etc/$(PROJECT)
+ETC_DIR = /etc/$(PROJECT)
 
 SYSUSERS_SRC = src/$(PROJECT)/daemon/$(PROJECT).sysusers
 SYSUSERS_DST = /usr/lib/sysusers.d/$(PROJECT).conf
@@ -84,7 +89,7 @@ uninstall-sysusers:
 install-tmpfiles: install-sysusers
 	install -m 0644 $(TMPFILES_SRC) $(TMPFILES_DST)
 	systemd-tmpfiles --create
-	@echo "Created /var/log/bed via $(TMPFILES_DST)"
+	@echo "Created /etc/bed, /var/log/bed, /var/lib/bed via $(TMPFILES_DST)"
 
 uninstall-tmpfiles:
 	-rm -f $(TMPFILES_DST)
@@ -111,13 +116,30 @@ install-venv:
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
 	sudo -u bed $(VENV_DIR)/bin/pip install $(WHEEL_DIR)/*.whl
 	rm -rf $(WHEEL_DIR)
+	@command -v restorecon >/dev/null 2>&1 && sudo restorecon -R $(VENV_DIR)/bin/ || true
 	@echo "Installed bed into $(VENV_DIR)"
 
 uninstall-venv:
 	-rm -rf $(VENV_DIR)
 	@echo "Removed $(VENV_DIR)"
 
-install: install-sysusers install-tmpfiles install-venv install-systemd
+install-etc:
+	install -d $(ETC_DIR)
+	install -m 0644 $(FACTORY_DIR)/bed.json $(ETC_DIR)/bed.json
+	@echo "Installed $(ETC_DIR)/bed.json from factory defaults"
+	@test -f $(ETC_DIR)/bed.env || \
+		(echo "# bed environment overrides" > $(ETC_DIR)/bed.env && \
+		 echo "# BED_DATABASEUSER=zoid6" >> $(ETC_DIR)/bed.env && \
+		 echo "# BED_DATABASEPASSWORD=..." >> $(ETC_DIR)/bed.env && \
+		 echo "Created $(ETC_DIR)/bed.env")
+	@chmod 0640 $(ETC_DIR)/bed.env
+	@echo "Installed $(ETC_DIR)/bed.env"
+
+uninstall-etc:
+	-rm -rf $(ETC_DIR)
+	@echo "Removed $(ETC_DIR)"
+
+install: install-sysusers install-tmpfiles install-venv install-systemd install-etc
 	@echo "bed fully installed. Run: systemctl enable --now $(PROJECT)"
 
 install-systemd:
@@ -132,5 +154,5 @@ uninstall-systemd:
 	-systemctl daemon-reload
 	@echo "Removed $(UNIT_DST)"
 
-uninstall: uninstall-systemd uninstall-venv uninstall-tmpfiles uninstall-sysusers
+uninstall: uninstall-systemd uninstall-venv uninstall-tmpfiles uninstall-sysusers uninstall-etc
 	@echo "bed fully uninstalled"

@@ -1,3 +1,4 @@
-# Type Path           Mode Owner Group Age Argument
-d     /var/log/bed    0755 bed   bed   -   -
-d     /var/lib/bed    0755 bed   bed   -   -
+# Type Path           Mode Owner  Group Age Argument
+d     /etc/bed        0755 root   root  -   -
+d     /var/log/bed    0755 bed    bed   -   -
+d     /var/lib/bed    0755 bed    bed   -   -

@@ -14,9 +14,12 @@ def _default_secret_path() -> str:
 
 
 def _default_config_path() -> str:
-    """Default value for --config: the bed.json shipped in the bed package's
-    data/ subdirectory. Returned as a string so argparse can use it as a
-    default without re-resolving at every parse."""
+    """Default value for --config: /etc/bed/bed.json (FHS-compliant),
+    falling back to the bed.json shipped in the bed package's data/
+    subdirectory."""
+    system_path = str(_bed_config._get_system_config_path())
+    if os.path.exists(system_path):
+        return system_path
     return str(_bed_config.get_package_data_path("bed.json"))
 
 

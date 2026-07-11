@@ -9,8 +9,18 @@ def get_package_data_path(filename: str) -> Path:
     return Path(__file__).parent / "data" / filename
 
 
+def _get_system_config_path() -> Path:
+    """Path to the FHS-compliant system config: /etc/bed/bed.json"""
+    return Path("/etc/bed/bed.json")
+
+
 def load_bed_defaults() -> Dict[str, Any]:
-    """Load default configuration from bed.json package data."""
+    """Load default configuration from /etc/bed/bed.json with package
+    data fallback."""
+    system_path = _get_system_config_path()
+    if system_path.exists():
+        with open(system_path) as f:
+            return json.load(f)
     bed_json_path = get_package_data_path("bed.json")
     if bed_json_path.exists():
         with open(bed_json_path) as f:

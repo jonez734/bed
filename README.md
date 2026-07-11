@@ -41,6 +41,19 @@ It also expects local sibling repos (`../bbsengine6/py`, `../getdate_next`)
 and builds wheels for all three into `/tmp` so the `bed` user can install
 them (the `bed` user may not have access to the source tree).
 
+#### SELinux
+
+On systems with SELinux enforcing (Fedora, RHEL, CentOS), the venv binaries
+under `/var/lib/bed/venv/bin/` get labeled `var_lib_t` by default.
+systemd cannot execute scripts with this context — it causes a 203/EXEC error.
+
+`make install-venv` runs `restorecon` automatically when available. If you
+install manually, run:
+
+```bash
+sudo restorecon -R /var/lib/bed/venv/bin/
+```
+
 #### One-command install
 
 ```bash
