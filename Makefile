@@ -4,7 +4,7 @@ VERSION = $(shell date +%Y%m%d%H%M)
 
 PYTHON ?= python3.12
 
-.PHONY: all help clean build version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon setup-db
+.PHONY: all help clean build version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon setup-db deploy
 
 all: help
 
@@ -166,3 +166,5 @@ uninstall-systemd:
 
 uninstall: uninstall-systemd uninstall-venv uninstall-tmpfiles uninstall-sysusers uninstall-etc
 	@echo "bed fully uninstalled"
+
+deploy: install
