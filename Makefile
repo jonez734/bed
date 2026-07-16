@@ -3,6 +3,7 @@ OUTDIR = /srv/repo/$(PROJECT)/
 VERSION = $(shell date +%Y%m%d%H%M)
 
 PYTHON ?= python3.12
+RSYNC = rsync --chmod=F0644 --mkpath --archive --verbose
 
 .PHONY: all help clean build version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon setup-db deploy
 
@@ -80,21 +81,21 @@ TMPFILES_SRC = src/$(PROJECT)/daemon/$(PROJECT).tmpfiles
 TMPFILES_DST = /usr/lib/tmpfiles.d/$(PROJECT).conf
 
 install-sysusers:
-	install -m 0644 $(SYSUSERS_SRC) $(SYSUSERS_DST)
-	systemd-sysusers
+	sudo $(RSYNC) $(SYSUSERS_SRC) $(SYSUSERS_DST)
+	sudo systemd-sysusers
 	@echo "Created bed user and group via $(SYSUSERS_DST)"
 
 uninstall-sysusers:
-	-rm -f $(SYSUSERS_DST)
+	-sudo rm -f $(SYSUSERS_DST)
 	@echo "Removed $(SYSUSERS_DST)"
 
 install-tmpfiles: install-sysusers
-	install -m 0644 $(TMPFILES_SRC) $(TMPFILES_DST)
-	systemd-tmpfiles --create
+	sudo $(RSYNC) $(TMPFILES_SRC) $(TMPFILES_DST)
+	sudo systemd-tmpfiles --create
 	@echo "Created /etc/bed, /var/log/bed, /var/lib/bed via $(TMPFILES_DST)"
 
 uninstall-tmpfiles:
-	-rm -f $(TMPFILES_DST)
+	-sudo rm -f $(TMPFILES_DST)
 	@echo "Removed $(TMPFILES_DST)"
 
 VENV_DIR = /var/lib/bed/venv
@@ -134,15 +135,12 @@ restorecon:
 	@echo "Relabeled $(VENV_DIR)/bin/ for SELinux"
 
 install-etc:
-	install -d $(ETC_DIR)
-	install -m 0644 $(FACTORY_DIR)/bed.json $(ETC_DIR)/bed.json
-	@echo "Installed $(ETC_DIR)/bed.json from factory defaults"
-	@test -f $(ETC_DIR)/bed.env || \
-		install -m 0640 $(FACTORY_DIR)/bed.env $(ETC_DIR)/bed.env
-	@echo "Installed $(ETC_DIR)/bed.env from factory defaults"
+	sudo rsync --chmod=F0755 --mkpath --archive --verbose $(FACTORY_DIR)/ $(ETC_DIR)/
+	sudo rsync --chmod=F0640 --mkpath --archive --verbose $(FACTORY_DIR)/bed.env $(ETC_DIR)/bed.env
+	@echo "Installed $(ETC_DIR) from factory defaults"
 
 uninstall-etc:
-	-rm -rf $(ETC_DIR)
+	-sudo rm -rf $(ETC_DIR)
 	@echo "Removed $(ETC_DIR)"
 
 install: install-sysusers install-tmpfiles install-venv install-systemd install-etc
@@ -153,15 +151,15 @@ setup-db:
 	@echo "Database bootstrapped. Run: systemctl enable --now $(PROJECT)"
 
 install-systemd:
-	install -m 0644 $(UNIT_SRC) $(UNIT_DST)
-	systemctl daemon-reload
+	sudo $(RSYNC) $(UNIT_SRC) $(UNIT_DST)
+	sudo systemctl daemon-reload
 	@echo "Installed $(UNIT_DST). Run: systemctl enable --now $(PROJECT)"
 
 uninstall-systemd:
-	-systemctl stop $(PROJECT)
-	-systemctl disable $(PROJECT)
-	-rm -f $(UNIT_DST)
-	-systemctl daemon-reload
+	-sudo systemctl stop $(PROJECT)
+	-sudo systemctl disable $(PROJECT)
+	-sudo rm -f $(UNIT_DST)
+	-sudo systemctl daemon-reload
 	@echo "Removed $(UNIT_DST)"
 
 uninstall: uninstall-systemd uninstall-venv uninstall-tmpfiles uninstall-sysusers uninstall-etc
