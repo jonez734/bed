@@ -109,7 +109,7 @@ install-venv:
 	@sudo -u bed test -d "$(VENV_DIR)" || sudo -u bed $(PYTHON) -m venv "$(VENV_DIR)"
 	sudo -u bed $(VENV_DIR)/bin/pip install --upgrade pip
 	$(PYTHON) -m ensurepip --upgrade >/dev/null 2>&1 || true
-	$(PYTHON) -m pip install --quiet --user build setuptools wheel
+	$(PYTHON) -m pip install build setuptools wheel
 	mkdir -p $(WHEEL_DIR)
 	rm -f $(WHEEL_DIR)/*.whl
 	$(MAKE) -C $(BBSENGINE_DIR) version
