@@ -430,9 +430,7 @@ def get_autorestart_config(
         cfg = config.load_config()
     bed_config = cfg.get("bed", {}) if isinstance(cfg, dict) else {}
 
-    if args.no_autorestart:
-        autorestart = False
-    elif args.autorestart is not None:
+    if args.autorestart is not None:
         autorestart = args.autorestart
     else:
         autorestart = bed_config.get("autorestart", False)

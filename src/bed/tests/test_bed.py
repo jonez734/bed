@@ -301,15 +301,6 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restart_delay, 7)
         self.assertEqual(max_restarts, 2)
 
-    def test_cli_no_autorestart_wins_over_config(self):
-        """--no-autorestart wins over a config file that says autorestart=true."""
-        from bed.main import get_autorestart_config
-
-        args = self._parse(["--no-autorestart"])
-        cfg = {"bed": {"autorestart": True, "restart_delay": 5, "max_restarts": 10}}
-        autorestart, _, _ = get_autorestart_config(args, cfg)
-        self.assertFalse(autorestart)
-
     def test_config_file_bind_overrides_defaults(self):
         """bind.host/bind.port in the config fill in args when CLI omitted them."""
         from bed.main import _apply_bind_config
@@ -592,9 +583,9 @@ class TestPidfileIntegration(unittest.IsolatedAsyncioTestCase):
             with open(self.pidfile_path, "w") as f:
                 f.write(f"{pre_pidfile}\n")
 
-        # Use --no-autorestart and a temp config file (the packaged
-        # default) so the config-file presence check passes. We
-        # stub load_config so the file is not actually parsed.
+        # Use a temp config file (the packaged default) so the
+        # config-file presence check passes. We stub load_config
+        # so the file is not actually parsed.
         cfg_path = os.path.join(self._tmp, "bed.json")
         with open(cfg_path, "w") as f:
             f.write("{}")
@@ -602,7 +593,6 @@ class TestPidfileIntegration(unittest.IsolatedAsyncioTestCase):
         argv = [
             "bed",
             "--pidfile", self.pidfile_path,
-            "--no-autorestart",
             "--config", cfg_path,
         ]
         with (
@@ -674,7 +664,6 @@ class TestPidfileIntegration(unittest.IsolatedAsyncioTestCase):
         argv = [
             "bed",
             "--pidfile", self.pidfile_path,
-            "--no-autorestart",
             "--config", cfg_path,
         ]
         with (

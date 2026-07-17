@@ -83,7 +83,7 @@ cd /path/to/bed && sudo make install && sudo systemctl enable --now bed
 This chains: `install-sysusers` → `install-tmpfiles` → `install-venv` → `install-systemd`.
 
 The unit at `src/bed/daemon/bed.service` runs as `User=bed` and uses
-`ExecStart=/var/lib/bed/venv/bin/bed --no-autorestart`.  Any Python package
+`ExecStart=/var/lib/bed/venv/bin/bed --config /etc/bed/bed.json`.  Any Python package
 installed into that venv (router games, database drivers, …) is available
 at runtime.
 
