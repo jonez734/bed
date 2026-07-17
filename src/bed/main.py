@@ -435,7 +435,7 @@ def get_autorestart_config(
     elif args.autorestart is not None:
         autorestart = args.autorestart
     else:
-        autorestart = bed_config.get("autorestart", True)
+        autorestart = bed_config.get("autorestart", False)
 
     restart_delay = (
         args.restart_delay

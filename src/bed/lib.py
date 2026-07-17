@@ -127,13 +127,13 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         "--autorestart",
         action="store_true",
         default=None,
-        help="Enable auto-restart on crash (default: from bed.json, or False)",
+        help="Enable auto-restart on crash (default: off)",
     )
     parentparser.add_argument(
         "--no-autorestart",
         action="store_true",
-        default=False,
-        help="Disable auto-restart on crash (default: off)",
+        default=None,
+        help="Disable auto-restart on crash (default: from bed.json, or off)",
     )
     parentparser.add_argument(
         "--restart-delay",
