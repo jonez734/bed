@@ -12,7 +12,7 @@ import sys
 from typing import Any, Optional, Type
 
 from bbsengine6 import io
-from bbsengine6.database import getpool
+from bbsengine6.database import getpool, set_current_role
 from bbsengine6.net import WebSocketServer
 
 from . import config, lib
@@ -302,6 +302,16 @@ class BED:
 
         if self._auth_enabled():
             await self._start_auth(db_args)
+
+        if self._session_registry is not None:
+            session_registry = self._session_registry
+
+            async def _pre_dispatch(websocket: Any) -> None:
+                state = session_registry.get_by_websocket(id(websocket))
+                if state is not None:
+                    set_current_role(state.moniker)
+
+            self.server._pre_dispatch = _pre_dispatch
 
         if self.MessageRouterClass is not None:
             self.router = self.MessageRouterClass(db_args)
