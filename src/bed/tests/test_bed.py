@@ -599,6 +599,7 @@ class TestPidfileIntegration(unittest.IsolatedAsyncioTestCase):
             patch("sys.argv", argv),
             patch.object(bed_main.config, "load_config", return_value={}),
             patch.object(bed_main, "load_router_class", return_value=MagicMock()),
+            patch.object(bed_main, "ensure_startup", return_value=True),
             patch.object(bed_main, "BED") as MockBED,
         ):
             async def fake_start():
@@ -670,6 +671,7 @@ class TestPidfileIntegration(unittest.IsolatedAsyncioTestCase):
             patch("sys.argv", argv),
             patch.object(bed_main.config, "load_config", return_value={}),
             patch.object(bed_main, "load_router_class", return_value=MagicMock()),
+            patch.object(bed_main, "ensure_startup", return_value=True),
             patch.object(bed_main.os, "kill", side_effect=fake_kill),
         ):
             with self.assertRaises(SystemExit) as cm:

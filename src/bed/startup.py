@@ -55,12 +55,13 @@ def _ensure_bed_role(args, conn):
     return True
 
 
-def main(args=None):
-    """Run bbsengine6 startup, then ensure the bed role exists."""
-    if args is None:
-        parser = startuplib.buildargs()
-        args = parser.parse_args()
+def ensure_startup(args):
+    """Run bbsengine6 startup, then ensure the bed role exists.
 
+    Idempotent: safe to call repeatedly.  Returns True on success, False
+    on failure.  Non-interactive: does not parse arguments or call
+    sys.exit.
+    """
     result = startuplib.runmodule(args, "main")
     if result is not True:
         io.echo("bbsengine6 startup failed, skipping bed role setup", level="error")
@@ -76,6 +77,14 @@ def main(args=None):
             conn.rollback()
             io.echo("bed startup failed", level="error")
         return ok
+
+
+def main(args=None):
+    """CLI entry point for ``bed-startup`` or ``python -m bed.startup``."""
+    if args is None:
+        parser = startuplib.buildargs()
+        args = parser.parse_args()
+    return ensure_startup(args)
 
 
 if __name__ == "__main__":

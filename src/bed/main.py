@@ -24,6 +24,7 @@ from .api import (
     get_provider,
     load_or_create_secret,
 )
+from .startup import ensure_startup
 
 
 _BED_DEFAULTS: Optional[dict] = None
@@ -499,6 +500,14 @@ async def main_async() -> None:
         router_class = load_router_class(args.router)
     except Exception as e:
         io.echo(f"Failed to load router class '{args.router}': {e}", level="error")
+        sys.exit(1)
+
+    if not ensure_startup(args):
+        io.echo(
+            "Startup failed: database bootstrap incomplete. "
+            "Ensure PostgreSQL is running and credentials are correct.",
+            level="error",
+        )
         sys.exit(1)
 
     restart_count = 0
