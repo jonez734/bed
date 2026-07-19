@@ -511,11 +511,14 @@ async def main_async() -> None:
         sys.exit(1)
 
     restart_count = 0
+    shutdown_requested = False
     loop = asyncio.get_event_loop()
     bed = None
 
     def signal_handler() -> None:
+        nonlocal shutdown_requested
         io.echo("Received shutdown signal", level="info")
+        shutdown_requested = True
         if bed:
             asyncio.create_task(bed.stop())
 
@@ -552,6 +555,8 @@ async def main_async() -> None:
                 await bed.start()
                 restart_count = 0
             except Exception as e:
+                if shutdown_requested:
+                    break
                 io.echo_traceback(f"BED error: {e}")
 
                 if autorestart:
@@ -575,7 +580,7 @@ async def main_async() -> None:
                     await bed.stop()
                     raise
 
-            if not autorestart:
+            if shutdown_requested or not autorestart:
                 break
     finally:
         if pidfile_fd is not None and pidfile_fd >= 0:
