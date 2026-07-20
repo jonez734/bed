@@ -70,7 +70,7 @@ S→C {"type":"error","code":"bed_instance_mismatch","message":"…","recoverabl
   - `--token-persistence {none,memory,db}` (default `memory`).
   - `--bed-instance-id STRING` (default: random UUID generated on first run, persisted in the secret file).
 - [ ] Extend `bed.main.BED.start` to wire `AuthService` into the `WebSocketServer` before any game router is loaded, so `auth` is the first thing every new connection sees.
-- [ ] Add a generic pending-request table in `bed.api.session` keyed by `session_id` with monotonic `request_id` counter; replay on reconnect.
+- [ ] Add a generic pending-request table in `bed.api.session` keyed by `session_id` with monotonic `request_id` counter; replay on reconnect. Note: `bed.api.session.SessionRegistry` should extend `bbsengine6.session.core.SessionManager` (the in-memory base is now extracted).
 - [ ] Keep the existing `bed.api.default.DefaultRouter._handle_auth` as a no-credential stub for development and `wscat` smoke tests.
 - [ ] Document `zoid6.api.handler.MonikerAuthRouter` (in `zoid6/api/monikerrouter.py`) in `bed/README.md` and `--router` help as the next-step example: validates the moniker exists in the database via `bbsengine6.member.moniker_exists`; password still not checked.
 - [ ] Document `AuthService` in `bed/README.md` and add `bed/docs/BED_AUTH.md` covering wire format, TTL knobs, secret rotation, and threat model.
