@@ -3,24 +3,12 @@ import os
 
 from bbsengine6.database import buildargs as databasebuildargs
 
-from . import config as _bed_config
-
 
 def _default_secret_path() -> str:
     """Default value for --bed-secret: ~/.config/bed/bed.secret, with ~
     expanded by the shell at argparse-parse time (we keep the literal
     default here and let os.path.expanduser handle it on use)."""
     return os.path.expanduser("~/.config/bed/bed.secret")
-
-
-def _default_config_path() -> str:
-    """Default value for --config: /etc/bed/bed.json (FHS-compliant),
-    falling back to the bed.json shipped in the bed package's data/
-    subdirectory."""
-    system_path = str(_bed_config._get_system_config_path())
-    if os.path.exists(system_path):
-        return system_path
-    return str(_bed_config.get_package_data_path("bed.json"))
 
 
 def buildargs(parentparser: argparse.ArgumentParser) -> None:
@@ -144,10 +132,7 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
     parentparser.add_argument(
         "--config",
         dest="config_file",
-        default=_default_config_path(),
-        help="Path to a JSON config file. Defaults to the bed.json shipped in "
-        "bed's package data directory. Overrides packaged defaults for "
-        "bed.*, bind.*, and database.*. CLI flags for --host, --port, and "
-        "database args retain highest priority when explicitly set. No "
-        "path expansion is performed.",
+        required=True,
+        help="Path to a JSON config file (required). No fallback search "
+        "is performed — the path must be provided explicitly.",
     )

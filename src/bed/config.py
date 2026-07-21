@@ -1,7 +1,9 @@
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
+
+from bbsengine6 import io
 
 
 def get_package_data_path(filename: str) -> Path:
@@ -9,45 +11,24 @@ def get_package_data_path(filename: str) -> Path:
     return Path(__file__).parent / "data" / filename
 
 
-def _get_system_config_path() -> Path:
-    """Path to the FHS-compliant system config: /etc/bed/bed.json"""
-    return Path("/etc/bed/bed.json")
-
-
-def load_bed_defaults() -> Dict[str, Any]:
-    """Load default configuration from /etc/bed/bed.json with package
-    data fallback."""
-    system_path = _get_system_config_path()
-    if system_path.exists():
-        with open(system_path) as f:
-            return json.load(f)
-    bed_json_path = get_package_data_path("bed.json")
-    if bed_json_path.exists():
-        with open(bed_json_path) as f:
-            return json.load(f)
-    return {}
-
-
 def load_config(
-    config_file: Optional[str] = None,
+    config_file: str,
     env_prefix: str = "BED_",
     **overrides: Any,
 ) -> Dict[str, Any]:
     """
-    Load bed configuration with priority order:
-    1. Command line / overrides (highest)
-    2. Config file (if provided)
-    3. bed.json defaults (lowest)
+    Load bed configuration from an explicit config file path (required).
 
-    Environment variables override defaults.
+    Priority order:
+    1. Command line / overrides (highest)
+    2. Environment variables
+    3. Config file (lowest)
+
     Variable format: BED_<SECTION>_<KEY>=value or BED_KEY=value
     """
-    config = load_bed_defaults()
-
-    if config_file and os.path.exists(config_file):
-        with open(config_file) as f:
-            file_config = json.load(f)
-            config = _merge_config(config, file_config)
+    io.echo(f"bed.json config path: {config_file}", level="info")
+    with open(config_file) as f:
+        config = json.load(f)
 
     env_config = _load_from_env(env_prefix)
     config = _merge_config(config, env_config)
@@ -107,6 +88,3 @@ def _load_from_env(prefix: str) -> Dict[str, Any]:
     return config
 
 
-def reload_config() -> Dict[str, Any]:
-    """Reload configuration from bed.json, ignoring any overrides."""
-    return load_bed_defaults()

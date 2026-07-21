@@ -97,41 +97,48 @@ class TestBEDParseArgs(unittest.IsolatedAsyncioTestCase):
 
         parser = argparse.ArgumentParser(description="BED - BBS Engine Daemon")
         buildargs(parser)
-        return parser.parse_args()
+        cfg = getattr(self, "_extra_args", [])
+        return parser.parse_args(cfg)
 
     def test_default_port(self):
         """Test default port is 8765."""
-        with patch("sys.argv", ["bed"]):
+        self._extra_args = ["--config", "/dev/null"]
+        with patch("sys.argv", ["bed"] + self._extra_args):
             args = self._parse_args()
             self.assertEqual(args.port, 8765)
 
     def test_default_host(self):
         """Test default host is 127.0.0.1."""
-        with patch("sys.argv", ["bed"]):
+        self._extra_args = ["--config", "/dev/null"]
+        with patch("sys.argv", ["bed"] + self._extra_args):
             args = self._parse_args()
             self.assertEqual(args.host, "127.0.0.1")
 
     def test_custom_port(self):
         """Test custom port can be specified."""
-        with patch("sys.argv", ["bed", "--port", "9999"]):
+        self._extra_args = ["--config", "/dev/null", "--port", "9999"]
+        with patch("sys.argv", ["bed"] + self._extra_args):
             args = self._parse_args()
             self.assertEqual(args.port, 9999)
 
     def test_custom_host(self):
         """Test custom host can be specified."""
-        with patch("sys.argv", ["bed", "--host", "localhost"]):
+        self._extra_args = ["--config", "/dev/null", "--host", "localhost"]
+        with patch("sys.argv", ["bed"] + self._extra_args):
             args = self._parse_args()
             self.assertEqual(args.host, "localhost")
 
     def test_default_router(self):
         """Test default router is DefaultRouter."""
-        with patch("sys.argv", ["bed"]):
+        self._extra_args = ["--config", "/dev/null"]
+        with patch("sys.argv", ["bed"] + self._extra_args):
             args = self._parse_args()
             self.assertEqual(args.router, "bbsengine6.net.defaultrouter.DefaultRouter")
 
     def test_custom_router(self):
         """Test custom router can be specified."""
-        with patch("sys.argv", ["bed", "--router", "mymodule.MyRouter"]):
+        self._extra_args = ["--config", "/dev/null", "--router", "mymodule.MyRouter"]
+        with patch("sys.argv", ["bed"] + self._extra_args):
             args = self._parse_args()
             self.assertEqual(args.router, "mymodule.MyRouter")
 
@@ -239,28 +246,20 @@ class TestBaseService(unittest.IsolatedAsyncioTestCase):
 class TestConfig(unittest.IsolatedAsyncioTestCase):
     """Test config module."""
 
-    def test_load_bed_defaults(self):
-        """Test loading default config."""
-        from bed import config
-
-        cfg = config.load_bed_defaults()
-        self.assertIn("bed", cfg)
-        self.assertIn("debug", cfg)
-
     def test_load_config(self):
-        """Test loading config."""
+        """Test loading config from explicit file."""
+        import os
+        import json
+        import tempfile
         from bed import config
 
-        cfg = config.load_config()
+        tmp = tempfile.mkdtemp()
+        cfg_path = os.path.join(tmp, "bed.json")
+        with open(cfg_path, "w") as f:
+            json.dump({"bed": {"autorestart": True}, "debug": False}, f)
+        cfg = config.load_config(cfg_path)
         self.assertIn("bed", cfg)
         self.assertIn("debug", cfg)
-
-    def test_reload_config(self):
-        """Test reloading config."""
-        from bed import config
-
-        cfg = config.reload_config()
-        self.assertIn("bed", cfg)
 
 
 class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
@@ -272,40 +271,30 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
 
         parser = argparse.ArgumentParser(description="BED - BBS Engine Daemon")
         buildargs(parser)
-        with patch("sys.argv", ["bed"] + argv):
+        with patch("sys.argv", ["bed", "--config", "/dev/null"] + argv):
             return parser.parse_args()
 
     def test_config_flag_parses(self):
         """--config PATH populates args.config_file."""
-        args = self._parse(["--config", "/tmp/bed.json"])
+        import argparse
+        from bed.main import buildargs
+
+        parser = argparse.ArgumentParser(description="BED - BBS Engine Daemon")
+        buildargs(parser)
+        with patch("sys.argv", ["bed", "--config", "/tmp/bed.json"]):
+            args = parser.parse_args()
         self.assertEqual(args.config_file, "/tmp/bed.json")
 
-    def test_config_flag_default_is_packaged_bed_json(self):
-        """Omitting --config leaves args.config_file pointing at the packaged bed/data/bed.json.
+    def test_config_flag_required(self):
+        """Omitting --config causes an error (required=True)."""
+        import argparse
+        from bed.main import buildargs
 
-        On systems where /etc/bed/bed.json exists, _default_config_path()
-        returns the system path instead.  We mock os.path.exists so the
-        system path appears absent, forcing the fallback to the packaged
-        default — which is what this test is actually trying to verify.
-        """
-        import os as _os
-        from pathlib import Path
-        from unittest.mock import patch
-        from bed import config as bed_config
-
-        pkg_path = str(bed_config.get_package_data_path("bed.json"))
-        system_path = str(bed_config._get_system_config_path())
-        _real_exists = _os.path.exists
-
-        def _exists_guard(path):
-            if str(path) == system_path:
-                return False
-            return _real_exists(path)
-
-        with patch("os.path.exists", side_effect=_exists_guard):
-            args = self._parse([])
-        self.assertEqual(args.config_file, pkg_path)
-        self.assertTrue(Path(args.config_file).exists())
+        parser = argparse.ArgumentParser(description="BED - BBS Engine Daemon")
+        buildargs(parser)
+        with self.assertRaises(SystemExit):
+            with patch("sys.argv", ["bed"]):
+                parser.parse_args()
 
     def test_config_file_overrides_autorestart(self):
         """External config's bed.autorestart=false is reflected via get_autorestart_config."""
@@ -380,7 +369,7 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(cm.exception.code, 1)
 
     def test_load_config_reads_external_file(self):
-        """config.load_config reads an external file and merges it with defaults."""
+        """config.load_config reads an explicit config file."""
         import os
         import tempfile
 
@@ -394,8 +383,6 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
         self.assertIn("bed", cfg)
         self.assertFalse(cfg["bed"]["autorestart"])
         self.assertEqual(cfg["bed"]["restart_delay"], 9)
-        # packaged defaults for non-overridden keys remain
-        self.assertEqual(cfg["bed"]["max_restarts"], 10)
 
     def test_config_expands_tilde_in_bed_secret_path(self):
         """A literal '~' in auth.bed_secret_path is expanded to the user's

@@ -471,26 +471,19 @@ async def main_async() -> None:
     buildargs(parser)
     args = parser.parse_args()
 
-    loaded_config: Optional[dict] = None
-    if args.config_file:
-        if not os.path.isfile(args.config_file):
-            io.echo(f"Config file not found: {args.config_file}", level="error")
-            sys.exit(1)
-        try:
-            loaded_config = config.load_config(args.config_file)
-        except (ValueError, OSError) as e:
-            io.echo(
-                f"Failed to load config file {args.config_file}: {e}", level="error"
-            )
-            sys.exit(1)
-        packaged_default = str(config.get_package_data_path("bed.json"))
-        if os.path.abspath(args.config_file) == os.path.abspath(packaged_default):
-            io.echo(f"Using packaged config: {args.config_file}", level="info")
-        else:
-            io.echo(f"Using config file: {args.config_file}", level="info")
-        _apply_bind_config(args, loaded_config)
-        _apply_database_config(args, loaded_config)
-        _apply_auth_config(args, loaded_config)
+    if not os.path.isfile(args.config_file):
+        io.echo(f"Config file not found: {args.config_file}", level="error")
+        sys.exit(1)
+    try:
+        loaded_config = config.load_config(args.config_file)
+    except (ValueError, OSError) as e:
+        io.echo(
+            f"Failed to load config file {args.config_file}: {e}", level="error"
+        )
+        sys.exit(1)
+    _apply_bind_config(args, loaded_config)
+    _apply_database_config(args, loaded_config)
+    _apply_auth_config(args, loaded_config)
 
     autorestart, restart_delay, max_restarts = get_autorestart_config(
         args, loaded_config
@@ -524,8 +517,11 @@ async def main_async() -> None:
 
     def sighup_handler() -> None:
         io.echo("Received SIGHUP, reloading config", level="info")
-        new_config = config.reload_config()
-        io.echo(f"Config reloaded: {new_config}", level="info")
+        try:
+            new_config = config.load_config(args.config_file)
+            io.echo(f"Config reloaded: {new_config}", level="info")
+        except (ValueError, OSError) as e:
+            io.echo(f"Config reload failed: {e}", level="error")
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         try:
