@@ -46,19 +46,18 @@ from bed.api.errors import (
 class _FakeWebSocket:
     """Stand-in for a websockets.WebSocketClientProtocol.
 
-    Each instance gets a unique id() so two reconnects land on different
-    `websocket_id` values, just like two real socket connections would.
+    Provides an ``id`` attribute (a UUID) matching the interface of
+    real websockets connections so auth handlers can use
+    ``str(websocket.id)`` consistently.
     """
 
-    _next_id = 0
-
     def __init__(self) -> None:
-        _FakeWebSocket._next_id += 1
+        import uuid as _uuid
+        self.id = _uuid.uuid4()
         self.sent: List[Dict[str, Any]] = []
-        self._id = _FakeWebSocket._next_id
 
     def __hash__(self) -> int:
-        return hash(self._id)
+        return hash(self.id)
 
     def __eq__(self, other: object) -> bool:
         return self is other
@@ -317,7 +316,7 @@ class TestAuthServiceReconnect(unittest.IsolatedAsyncioTestCase):
         new_record = store.get(resp["token"])
         self.assertIsNotNone(new_record)
 
-        state = service.sessions.get_by_websocket(str(id(ws2)))
+        state = service.sessions.get_by_websocket(str(ws2.id))
         self.assertIsNotNone(state)
         self.assertEqual(state.session_id, record.session_id)
         self.assertIsNone(state.pending_request)

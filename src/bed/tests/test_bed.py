@@ -281,13 +281,30 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args.config_file, "/tmp/bed.json")
 
     def test_config_flag_default_is_packaged_bed_json(self):
-        """Omitting --config leaves args.config_file pointing at the packaged bed/data/bed.json."""
+        """Omitting --config leaves args.config_file pointing at the packaged bed/data/bed.json.
+
+        On systems where /etc/bed/bed.json exists, _default_config_path()
+        returns the system path instead.  We mock os.path.exists so the
+        system path appears absent, forcing the fallback to the packaged
+        default — which is what this test is actually trying to verify.
+        """
+        import os as _os
         from pathlib import Path
+        from unittest.mock import patch
         from bed import config as bed_config
 
-        args = self._parse([])
-        expected = str(bed_config.get_package_data_path("bed.json"))
-        self.assertEqual(args.config_file, expected)
+        pkg_path = str(bed_config.get_package_data_path("bed.json"))
+        system_path = str(bed_config._get_system_config_path())
+        _real_exists = _os.path.exists
+
+        def _exists_guard(path):
+            if str(path) == system_path:
+                return False
+            return _real_exists(path)
+
+        with patch("os.path.exists", side_effect=_exists_guard):
+            args = self._parse([])
+        self.assertEqual(args.config_file, pkg_path)
         self.assertTrue(Path(args.config_file).exists())
 
     def test_config_file_overrides_autorestart(self):
