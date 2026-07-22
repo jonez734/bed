@@ -4,6 +4,16 @@ A small WebSocket daemon that sits in front of a `bbsengine6` game router
 (empyre, casino, mistermcfeely, murdermotel, zoid6, …), terminates
 JSON-over-WebSocket, and lets the game own the wire protocol.
 
+> **See [`SPEC.md`](SPEC.md)** for the entry-point specification: what
+> works now, what doesn't, future plans beyond v1.0, the v1/v1.1/v1.2/v1.3/v1.4/v2
+> phase gates, code that moved from `bed` to `bbsengine6`, and the
+> bbsengine6-side prerequisites for each bed service.
+>
+> This README is a quick-start. `SPEC.md` is the spec. `TODO.md` is the
+> line-numbered open work. `docs/BED_AUTH.md` is the bearer-token auth
+> wire protocol. `CHANGELOG.md` is the history. `FHS.md` is the FHS/UAPI
+> design.
+
 ## Quick start
 
 ```bash
