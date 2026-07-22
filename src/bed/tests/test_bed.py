@@ -4,10 +4,12 @@
 
 import argparse
 import asyncio
+import importlib
 import json
 import os
 import sys
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import websockets
@@ -702,6 +704,63 @@ class TestPidfileIntegration(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await task
         self.assertFalse(os.path.exists(self.pidfile_path))
+
+
+class TestBedJsonModuleImports(unittest.TestCase):
+    """Verify every enabled module in zoid6's bed.json is importable and
+    exposes a MessageRouter with a register_all method."""
+
+    _BED_JSON = Path(__file__).resolve().parent.parent.parent.parent.parent / "zoid6" / "src" / "zoid6" / "data" / "bed.json"
+
+    def _load_services(self):
+        with open(self._BED_JSON) as f:
+            cfg = json.load(f)
+        return {
+            name: svc
+            for name, svc in cfg.get("services", {}).items()
+            if isinstance(svc, dict)
+            and svc.get("enabled")
+            and svc.get("modulepath")
+        }
+
+    def test_all_enabled_modulepaths_are_importable(self):
+        """Every enabled modulepath in bed.json can be imported."""
+        from bbsengine6.module import is_importable
+
+        services = self._load_services()
+        failures = {}
+        for name, svc in services.items():
+            mp = svc["modulepath"]
+            if not is_importable(mp):
+                failures[name] = mp
+        self.assertEqual(
+            failures,
+            {},
+            f"Unimportable modulepaths: {failures}",
+        )
+
+    def test_all_enabled_modules_have_messagerouter(self):
+        """Every enabled module in bed.json has a MessageRouter class."""
+        services = self._load_services()
+        failures = {}
+        for name, svc in services.items():
+            mp = svc["modulepath"]
+            try:
+                mod = importlib.import_module(mp)
+            except ImportError as e:
+                failures[name] = f"{mp} (import error: {e})"
+                continue
+            if not hasattr(mod, "MessageRouter"):
+                failures[name] = f"{mp} (no MessageRouter class)"
+                continue
+            router_cls = mod.MessageRouter
+            if not callable(getattr(router_cls, "register_all", None)):
+                failures[name] = f"{mp}.MessageRouter (no register_all method)"
+        self.assertEqual(
+            failures,
+            {},
+            f"Modules missing MessageRouter/register_all: {failures}",
+        )
 
 
 if __name__ == "__main__":
