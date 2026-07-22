@@ -8,14 +8,21 @@ from a test).
 
 Threading: ``send`` is async and uses an :class:`asyncio.Lock` so
 multiple coroutines on the same loop serialise their writes.
+
+Subscriptions: :meth:`subscribe` starts a background ``asyncio``
+task that consumes server-pushed messages (no matching ``request_id``)
+and dispatches them to a caller-supplied callback. The recv loop runs
+in parallel with :meth:`send` and reuses the same underlying
+WebSocket connection.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from bbsengine6 import io
 
@@ -29,6 +36,10 @@ except ImportError as _exc:
         "bed.client requires the 'websockets' package. "
         "Install it via `pip install websockets`."
     ) from _exc
+
+logger = logging.getLogger(__name__)
+
+PushHandler = Callable[[Dict[str, Any]], None]
 
 
 class _RequestId:
@@ -52,6 +63,9 @@ class BedConnection:
         self._ws: Optional[Any] = None
         self._lock: Optional[asyncio.Lock] = None
         self._request_ids = _RequestId()
+        self._push_handlers: List[PushHandler] = []
+        self._recv_task: Optional[asyncio.Task] = None
+        self._recv_stop: Optional[asyncio.Event] = None
 
     @property
     def host(self) -> str:
@@ -129,8 +143,10 @@ class BedConnection:
                 if ws is None:
                     raise BedUnavailable("bed connection is None after connect")
                 await ws.send(json.dumps(message))
-                raw = await asyncio.wait_for(
-                    ws.recv(), timeout=self.call_timeout
+                raw = await self._recv_match(
+                    ws,
+                    match=lambda m: m.get("request_id") == request_id,
+                    timeout=self.call_timeout,
                 )
             except (
                 ConnectionRefusedError,
@@ -139,6 +155,7 @@ class BedConnection:
                 WebSocketException,
             ) as exc:
                 self._ws = None
+                self._stop_recv_loop()
                 raise BedUnavailable(
                     f"bed send/receive failed: {exc}"
                 ) from exc
@@ -156,6 +173,105 @@ class BedConnection:
             )
         return reply
 
+    async def _recv_match(
+        self,
+        ws: Any,
+        match: Callable[[Dict[str, Any]], bool],
+        timeout: float,
+    ) -> str:
+        """Receive messages until ``match`` returns True for a parsed message.
+
+        Non-matching messages (e.g. server-pushed notifications) are
+        delivered to any registered push handlers and then dropped.
+        """
+        deadline = asyncio.get_event_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError
+            raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+            try:
+                msg = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if match(msg):
+                return raw
+            await self._dispatch_push(msg)
+
+    async def _dispatch_push(self, msg: Dict[str, Any]) -> None:
+        """Deliver a non-matching message to all registered push handlers."""
+        handlers: List[PushHandler] = list(self._push_handlers)
+
+        def _call() -> None:
+            for h in handlers:
+                try:
+                    h(msg)
+                except Exception as e:
+                    logger.warning("bed.client push handler error: %s", e)
+
+        await asyncio.get_event_loop().run_in_executor(None, _call)
+
+    async def subscribe(self, handler: PushHandler) -> None:
+        """Register a push handler for server-pushed messages.
+
+        Starts a background recv loop if not already running. Multiple
+        handlers may be registered; each receives every push. Use
+        :meth:`unsubscribe` to remove a handler.
+        """
+        if not any(h is handler for h in self._push_handlers):
+            self._push_handlers.append(handler)
+        await self._ensure_recv_loop()
+
+    async def unsubscribe(self, handler: PushHandler) -> None:
+        """Remove a previously-registered push handler."""
+        try:
+            self._push_handlers.remove(handler)
+        except ValueError:
+            return
+        if not self._push_handlers:
+            self._stop_recv_loop()
+
+    async def _ensure_recv_loop(self) -> None:
+        """Make sure the background recv loop is running."""
+        if self._recv_task is not None and not self._recv_task.done():
+            return
+        if self._ws is None or self._is_closed():
+            self._ws = await self._connect()
+        self._recv_stop = asyncio.Event()
+        self._recv_task = asyncio.create_task(
+            self._recv_loop(), name="bed-client-recv"
+        )
+
+    def _stop_recv_loop(self) -> None:
+        if self._recv_task is None:
+            return
+        if not self._recv_task.done():
+            self._recv_task.cancel()
+        self._recv_task = None
+
+    async def _recv_loop(self) -> None:
+        """Background loop that consumes server-pushed messages."""
+        try:
+            ws = self._ws
+            if ws is None:
+                return
+            while not self._recv_stop.is_set():
+                if self._is_closed():
+                    break
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+                try:
+                    msg = json.loads(raw)
+                except (TypeError, ValueError):
+                    continue
+                await self._dispatch_push(msg)
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            logger.warning("bed.client recv loop error: %s", e)
+
     def force_close(self) -> None:
         """Close the current connection so the next send redials.
 
@@ -163,6 +279,7 @@ class BedConnection:
         the underlying websocket's ``close()`` is async, we schedule
         the close on a fresh event loop in a daemon thread.
         """
+        self._stop_recv_loop()
         ws = self._ws
         self._ws = None
         if ws is None:

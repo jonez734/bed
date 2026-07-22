@@ -13,6 +13,11 @@ from bed.client.connection import (
 )
 from bed.client.exceptions import BedUnavailable
 from bed.client.messages import BedMessageClient
+from bed.client.messageservice import (
+    BedMessageServiceClient,
+    get_message_client,
+    reset_message_client,
+)
 from bed.client.probe import probe_bed
 from bed.client.singleton import (
     _CONNECTION_SINGLETON,
@@ -25,8 +30,11 @@ __all__ = [
     "BedBankClient",
     "BedConnection",
     "BedMessageClient",
+    "BedMessageServiceClient",
     "BedUnavailable",
     "get_bed_connection",
+    "get_message_client",
     "probe_bed",
     "reset_bed_connection",
+    "reset_message_client",
 ]

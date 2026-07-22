@@ -25,5 +25,10 @@
     "rate_limit": 5,
     "max_items": 50,
     "channel_allow_list": []
+  },
+  "message_service": {
+    "enabled": true,
+    "modulepath": "bed.api.message",
+    "description": "Server-push notifications via PG LISTEN/NOTIFY on engine_message_recipient"
   }
 }

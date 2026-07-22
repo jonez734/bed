@@ -136,3 +136,11 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         help="Path to a JSON config file (required). No fallback search "
         "is performed — the path must be provided explicitly.",
     )
+    parentparser.add_argument(
+        "--no-message-service",
+        dest="no_message_service",
+        action="store_true",
+        default=False,
+        help="Disable the in-process MessageService (PG LISTEN/NOTIFY "
+        "fanout to connected WebSocket clients).",
+    )

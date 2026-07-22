@@ -20,6 +20,7 @@ from .api import (
     AuthService,
     InMemoryTokenStore,
     DBTokenStore,
+    MessageService,
     SessionRegistry,
     get_provider,
     load_or_create_secret,
@@ -260,6 +261,8 @@ class BED:
         self.router: Any = None
         self.auth_service: Optional[AuthService] = None
         self.token_store: Any = None
+        self.message_service: Optional[MessageService] = None
+        self._message_listener_task: Optional[asyncio.Task] = None
         self._session_registry: Optional[SessionRegistry] = None
         self._gc_task: Optional[asyncio.Task] = None
         self._running = False
@@ -319,6 +322,13 @@ class BED:
             self.router = self.MessageRouterClass(db_args)
             self.router.register_all(self.server)
 
+        if not getattr(self.args, "no_message_service", False):
+            self.message_service = MessageService(db_args, self._session_registry)
+            self.message_service.register_all(self.server)
+            self._message_listener_task = asyncio.create_task(
+                self.message_service.start_listener()
+            )
+
         await self.server.start()
         self._running = True
 
@@ -330,6 +340,8 @@ class BED:
             )
         if self.auth_service is not None:
             self._gc_task = asyncio.create_task(self._gc_loop())
+        if self.message_service is not None:
+            io.echo("BED MessageService: LISTEN engine_message_recipient", level="info")
         io.echo(f"Registered services: {self.server.list_services()}", level="info")
 
         try:
@@ -407,6 +419,8 @@ class BED:
             except (asyncio.CancelledError, Exception):
                 pass
             self._gc_task = None
+        if self.message_service is not None:
+            await self.message_service.stop_listener()
         if self.server:
             await self.server.stop()
         io.echo("BED stopped", level="info")

@@ -23,6 +23,7 @@ from .errors import (
     scrub_token,
 )
 from .handler import BaseService, SessionManager
+from .message import NOTIFY_CHANNEL, MessageService
 from .secret import (
     InsecureSecretError,
     SecretFormatError,
@@ -46,7 +47,9 @@ __all__ = [
     "InMemoryTokenStore",
     "InsecureSecretError",
     "MemberInfo",
+    "MessageService",
     "MonikerOnlyCredentialProvider",
+    "NOTIFY_CHANNEL",
     "PasswordCredentialProvider",
     "SecretFormatError",
     "SessionManager",
