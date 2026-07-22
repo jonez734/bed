@@ -288,6 +288,7 @@ class BED:
         db_args.databaseuser = self.args.databaseuser
         db_args.databasepassword = self.args.databasepassword
         db_args.debug = getattr(self.args, "debug", False)
+        db_args.config_file = self.args.config_file
 
         try:
             db_args.pool = getpool(db_args)
@@ -425,10 +426,8 @@ def get_autorestart_config(
     args: argparse.Namespace,
     cfg: Optional[dict] = None,
 ) -> tuple[bool, int, int]:
-    """Get autorestart config from args, an external config dict (optional),
-    or bed.json defaults. Priority: CLI flag > cfg["bed"] > packaged defaults."""
-    if cfg is None:
-        cfg = config.load_config()
+    """Get autorestart config from args and a config dict.
+    Priority: CLI flag > cfg["bed"] > hardcoded defaults."""
     bed_config = cfg.get("bed", {}) if isinstance(cfg, dict) else {}
 
     if args.autorestart is not None:
