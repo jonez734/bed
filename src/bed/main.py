@@ -175,17 +175,104 @@ def _remove_pidfile(path: str) -> None:
         io.echo(f"Failed to remove pidfile {path}: {e}", level="warning")
 
 
+def _apply_config_section(
+    args: argparse.Namespace,
+    cfg: dict,
+    section_name: str,
+    fields: dict,
+) -> None:
+    """Generic config-apply helper.
+
+    For each ``(cli_arg, (cfg_key, coerce, expand_user))`` in ``fields``,
+    if ``cfg[section_name][cfg_key]`` exists AND ``args.<cli_arg>`` still
+    equals its argparse default, set ``args.<cli_arg>`` from the config.
+
+    Args:
+        args: argparse namespace to mutate.
+        cfg: full loaded config dict.
+        section_name: top-level key in ``cfg`` (e.g. ``"bind"``).
+        fields: mapping of ``cli_arg -> (config_key, coerce_fn, expand_user_bool)``.
+            ``coerce_fn`` may be ``None`` for no coercion; ``expand_user_bool``
+            routes the value through ``_expand_user`` (used for paths/hosts).
+
+    Returns nothing; mutates ``args`` in place.
+    """
+    sect = cfg.get(section_name)
+    if not isinstance(sect, dict):
+        return
+    defaults = _get_bed_defaults()
+    for cli_arg, (cfg_key, coerce, expand_user) in fields.items():
+        if cfg_key not in sect:
+            continue
+        if getattr(args, cli_arg, None) != defaults.get(cli_arg):
+            continue
+        val = sect[cfg_key]
+        if expand_user:
+            val = _expand_user(val)
+        if coerce is not None:
+            val = coerce(val)
+        setattr(args, cli_arg, val)
+
+
+def _diff_config_section(
+    args: argparse.Namespace,
+    cfg: dict,
+    section_name: str,
+    fields: dict,
+) -> list:
+    """SIGHUP-time diff helper.
+
+    For each ``(cli_arg, (cfg_key, coerce, expand_user))`` in ``fields``,
+    return ``(cli_arg, new_value)`` when the freshly-loaded config value
+    (after ``_expand_user`` and ``coerce``) differs from
+    ``args.<cli_arg>``.
+
+    Unlike :func:`_apply_config_section`, this does NOT skip when the
+    CLI passed an explicit value — SIGHUP is operator-initiated reload,
+    so every config change is a candidate for application or warning.
+    """
+    sect = cfg.get(section_name)
+    if not isinstance(sect, dict):
+        return []
+    diffs = []
+    for cli_arg, (cfg_key, coerce, expand_user) in fields.items():
+        if cfg_key not in sect:
+            continue
+        val = sect[cfg_key]
+        if expand_user:
+            val = _expand_user(val)
+        if coerce is not None:
+            val = coerce(val)
+        if val != getattr(args, cli_arg, None):
+            diffs.append((cli_arg, val))
+    return diffs
+
+
+BIND_FIELDS = {
+    "host": ("host", str, True),
+    "port": ("port", int, False),
+}
+
+DATABASE_FIELDS = {
+    "databasename": ("name", str, False),
+    "databasehost": ("host", str, True),
+    "databaseport": ("port", int, False),
+    "databaseuser": ("user", str, False),
+    "databasepassword": ("password", str, False),
+}
+
+AUTH_FIELDS = {
+    "bed_secret": ("bed_secret_path", str, True),
+    "token_ttl": ("token_ttl", int, False),
+    "token_persistence": ("token_persistence", str, False),
+    "credential_provider": ("credential_provider", str, False),
+}
+
+
 def _apply_bind_config(args: argparse.Namespace, cfg: dict) -> None:
     """Apply bind.host/bind.port from a loaded config when the CLI did not
     explicitly set them (i.e. args still equal argparse defaults)."""
-    bind = cfg.get("bind")
-    if not isinstance(bind, dict):
-        return
-    defaults = _get_bed_defaults()
-    if "host" in bind and args.host == defaults["host"]:
-        args.host = _expand_user(bind["host"])
-    if "port" in bind and args.port == defaults["port"]:
-        args.port = int(bind["port"])
+    _apply_config_section(args, cfg, "bind", BIND_FIELDS)
 
 
 def _apply_database_config(args: argparse.Namespace, cfg: dict) -> None:
@@ -200,19 +287,8 @@ def _apply_database_config(args: argparse.Namespace, cfg: dict) -> None:
     under a ``"database"`` section, so we must handle it here as a
     fallback.
     """
+    _apply_config_section(args, cfg, "database", DATABASE_FIELDS)
     defaults = _get_bed_defaults()
-    db = cfg.get("database")
-    if isinstance(db, dict):
-        if "name" in db and args.databasename == defaults["databasename"]:
-            args.databasename = db["name"]
-        if "host" in db and args.databasehost == defaults["databasehost"]:
-            args.databasehost = _expand_user(db["host"])
-        if "port" in db and args.databaseport == defaults["databaseport"]:
-            args.databaseport = int(db["port"])
-        if "user" in db and args.databaseuser == defaults["databaseuser"]:
-            args.databaseuser = db["user"]
-        if "password" in db and args.databasepassword == defaults["databasepassword"]:
-            args.databasepassword = db["password"]
     if "databaseuser" in cfg and args.databaseuser == defaults["databaseuser"]:
         args.databaseuser = cfg["databaseuser"]
     if "databasepassword" in cfg and args.databasepassword == defaults["databasepassword"]:
@@ -222,28 +298,11 @@ def _apply_database_config(args: argparse.Namespace, cfg: dict) -> None:
 def _apply_auth_config(args: argparse.Namespace, cfg: dict) -> None:
     """Apply auth.* from a loaded config when the CLI did not explicitly
     set those flags. Mirrors _apply_bind_config / _apply_database_config."""
+    _apply_config_section(args, cfg, "auth", AUTH_FIELDS)
+    # bed_instance_id defaults to None, not a placeholder string, so its
+    # default check is "is None" rather than equality with a default value.
     auth = cfg.get("auth")
-    if not isinstance(auth, dict):
-        return
-    defaults = _get_bed_defaults()
-    if (
-        "bed_secret_path" in auth
-        and args.bed_secret == defaults["bed_secret"]
-    ):
-        args.bed_secret = _expand_user(auth["bed_secret_path"])
-    if "token_ttl" in auth and args.token_ttl == defaults["token_ttl"]:
-        args.token_ttl = int(auth["token_ttl"])
-    if (
-        "token_persistence" in auth
-        and args.token_persistence == defaults["token_persistence"]
-    ):
-        args.token_persistence = auth["token_persistence"]
-    if (
-        "credential_provider" in auth
-        and args.credential_provider == defaults["credential_provider"]
-    ):
-        args.credential_provider = auth["credential_provider"]
-    if "bed_instance_id" in auth and args.bed_instance_id is None:
+    if isinstance(auth, dict) and "bed_instance_id" in auth and args.bed_instance_id is None:
         args.bed_instance_id = auth["bed_instance_id"]
 
 
@@ -278,12 +337,14 @@ class BED:
         return persistence != "none" and not self._is_default_router()
 
     async def start(self) -> None:
-        """Start the daemon."""
-        self.server = WebSocketServer(
-            host=self.args.host,
-            port=self.args.port,
-        )
+        """Start the daemon.
 
+        Order is deliberate: do everything that can fail BEFORE constructing
+        the WebSocketServer so a partial start never leaves a server with
+        half-registered handlers. DB connection failure raises so the
+        autorestart loop (or systemd) sees a real error rather than an
+        idle daemon pretending to be healthy.
+        """
         db_args = argparse.Namespace()
         db_args.databasename = self.args.databasename
         db_args.databasehost = self.args.databasehost
@@ -295,7 +356,7 @@ class BED:
 
         try:
             db_args.pool = getpool(db_args)
-            with db_args.pool.connection() as conn:
+            with db_args.pool.connection():
                 pass
         except Exception as e:
             io.echo(f"Database connection failed: {e}", level="error")
@@ -303,12 +364,37 @@ class BED:
                 "Please ensure PostgreSQL is running with correct credentials",
                 level="error",
             )
-            return
+            raise
 
+        # Auth objects (secret/token-store/provider/session-registry) are
+        # constructed BEFORE the server so that ``_start_auth`` failures
+        # cannot leak a half-wired WebSocketServer.
+        self._session_registry = SessionRegistry()
         if self._auth_enabled():
             await self._start_auth(db_args)
 
-        if self._session_registry is not None:
+        self.server = WebSocketServer(
+            host=self.args.host,
+            port=self.args.port,
+        )
+
+        try:
+            if self.auth_service is not None:
+                self.auth_service.register_all(self.server)
+
+            if self.MessageRouterClass is not None:
+                self.router = self.MessageRouterClass(db_args)
+                self.router.register_all(self.server)
+
+            if not getattr(self.args, "no_message_service", False):
+                self.message_service = MessageService(
+                    db_args, self._session_registry
+                )
+                self.message_service.register_all(self.server)
+                self._message_listener_task = asyncio.create_task(
+                    self.message_service.start_listener()
+                )
+
             session_registry = self._session_registry
 
             async def _pre_dispatch(websocket: Any) -> None:
@@ -318,18 +404,14 @@ class BED:
 
             self.server._pre_dispatch = _pre_dispatch
 
-        if self.MessageRouterClass is not None:
-            self.router = self.MessageRouterClass(db_args)
-            self.router.register_all(self.server)
+            await self.server.start()
+        except Exception:
+            # If anything between server construction and start() raises,
+            # tear down whatever was started and let the autorestart loop
+            # decide whether to retry.
+            await self._cleanup_partial_start()
+            raise
 
-        if not getattr(self.args, "no_message_service", False):
-            self.message_service = MessageService(db_args, self._session_registry)
-            self.message_service.register_all(self.server)
-            self._message_listener_task = asyncio.create_task(
-                self.message_service.start_listener()
-            )
-
-        await self.server.start()
         self._running = True
 
         io.echo(f"BED started on {self.args.host}:{self.args.port}", level="info")
@@ -350,8 +432,37 @@ class BED:
         except asyncio.CancelledError:
             io.echo("BED cancelled", level="info")
 
+    async def _cleanup_partial_start(self) -> None:
+        """Tear down whatever BED.start() managed to construct before the
+        exception that triggered cleanup. Best-effort; never raises."""
+        if self._message_listener_task is not None and not self._message_listener_task.done():
+            self._message_listener_task.cancel()
+            try:
+                await self._message_listener_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._message_listener_task = None
+        if self.message_service is not None:
+            try:
+                await self.message_service.stop_listener()
+            except Exception as e:
+                io.echo(f"BED cleanup: message_service.stop_listener failed: {e}", level="warning")
+            self.message_service = None
+        if self.server is not None:
+            try:
+                await self.server.stop()
+            except Exception as e:
+                io.echo(f"BED cleanup: server.stop failed: {e}", level="warning")
+            self.server = None
+
     async def _start_auth(self, db_args: argparse.Namespace) -> None:
-        """Load secret, build token store + provider, register AuthService."""
+        """Load secret, build token store + provider, construct AuthService.
+
+        ``self._session_registry`` is created by ``start()`` BEFORE this
+        is called; we just consume it here. AuthService is constructed but
+        NOT registered against the server here — ``start()`` registers
+        services against the freshly-constructed ``WebSocketServer``.
+        """
         secret_path = getattr(self.args, "bed_secret", None) or os.path.expanduser(
             "~/.config/bed/bed.secret"
         )
@@ -375,7 +486,6 @@ class BED:
             self.token_store = InMemoryTokenStore()
 
         provider = get_provider(getattr(self.args, "credential_provider", "password"))
-        self._session_registry = SessionRegistry()
         ttl = int(getattr(self.args, "token_ttl", 900) or 900)
         self.auth_service = AuthService(
             args=db_args,
@@ -386,7 +496,6 @@ class BED:
             instance_id=instance_id,
             ttl_seconds=ttl,
         )
-        self.auth_service.register_all(self.server)
         io.echo(
             f"BED AuthService: instance={instance_id[:8]}… "
             f"ttl={ttl}s persistence={persistence} "
@@ -478,6 +587,110 @@ def load_router_class(router_path: str) -> Type:
     return getattr(module, class_name)
 
 
+def _reload_config_and_apply(
+    args: argparse.Namespace,
+    bed: "BED",
+    autorestart_ref: list,
+    restart_delay_ref: list,
+    max_restarts_ref: list,
+) -> None:
+    """SIGHUP handler body: reload config from disk, apply live knobs to
+    the running bed, and warn about structural changes that require a
+    restart.
+
+    Args:
+        args: the argparse namespace shared by ``main_async``.
+        bed: the currently-running ``BED`` instance.
+        autorestart_ref / restart_delay_ref / max_restarts_ref: single-element
+            lists containing the loop-local variables from ``main_async``.
+            We pass them by reference because SIGHUP runs on the event loop
+            and cannot capture loop locals via closure for mutation.
+
+    Behavior:
+        - Live knobs (token_ttl, debug) are applied to the running daemon.
+        - autorestart / restart_delay / max_restarts are updated in place.
+        - Structural keys (bind.*, database.*, token_persistence,
+          credential_provider, bed_secret_path, bed_instance_id) are
+          detected but not applied; the operator is told a restart is
+          required.
+    """
+    io.echo("Received SIGHUP, reloading config", level="info")
+    try:
+        new_config = config.load_config(args.config_file)
+    except (ValueError, OSError) as e:
+        io.echo(f"Config reload failed: {e}", level="error")
+        return
+
+    # Live: token_ttl — mutate the running AuthService's ttl_seconds so
+    # freshly minted tokens pick up the new value immediately.
+    if bed.auth_service is not None:
+        ttl_diffs = _diff_config_section(
+            args, new_config, "auth",
+            {"token_ttl": ("token_ttl", int, False)},
+        )
+        for cli_arg, new_val in ttl_diffs:
+            bed.auth_service.ttl_seconds = int(new_val)
+            setattr(args, cli_arg, int(new_val))
+            io.echo(
+                f"Live reload: {cli_arg}={new_val} applied (AuthService)",
+                level="info",
+            )
+
+    # Live: autorestart / restart_delay / max_restarts — update the loop
+    # locals that drive the autorestart policy on the next crash.
+    bed_cfg = new_config.get("bed", {}) if isinstance(new_config, dict) else {}
+    if isinstance(bed_cfg, dict):
+        if "autorestart" in bed_cfg:
+            new_ar = bool(bed_cfg["autorestart"])
+            if new_ar != autorestart_ref[0]:
+                io.echo(
+                    f"Live reload: autorestart={new_ar} applied",
+                    level="info",
+                )
+                autorestart_ref[0] = new_ar
+        if "restart_delay" in bed_cfg:
+            new_rd = int(bed_cfg["restart_delay"])
+            if new_rd != restart_delay_ref[0]:
+                io.echo(
+                    f"Live reload: restart_delay={new_rd}s applied",
+                    level="info",
+                )
+                restart_delay_ref[0] = new_rd
+        if "max_restarts" in bed_cfg:
+            new_mr = int(bed_cfg["max_restarts"])
+            if new_mr != max_restarts_ref[0]:
+                io.echo(
+                    f"Live reload: max_restarts={new_mr} applied",
+                    level="info",
+                )
+                max_restarts_ref[0] = new_mr
+
+    # Structural: any of these require a full restart.
+    structural_diffs = []
+    structural_diffs.extend(
+        _diff_config_section(args, new_config, "bind", BIND_FIELDS)
+    )
+    structural_diffs.extend(
+        _diff_config_section(args, new_config, "database", DATABASE_FIELDS)
+    )
+    for cli_arg, new_val in _diff_config_section(
+        args, new_config, "auth", {
+            "token_persistence": ("token_persistence", str, False),
+            "credential_provider": ("credential_provider", str, False),
+            "bed_secret": ("bed_secret_path", str, True),
+            "bed_instance_id": ("bed_instance_id", str, False),
+        }
+    ):
+        structural_diffs.append((cli_arg, new_val))
+    if structural_diffs:
+        keys = ", ".join(f"{k}={v!r}" for k, v in structural_diffs)
+        io.echo(
+            f"Config reload: structural changes detected ({keys}); "
+            f"restart required for these to take effect",
+            level="warning",
+        )
+
+
 async def main_async() -> None:
     """Async main entry point."""
     parser = argparse.ArgumentParser(description="BED - BBS Engine Daemon")
@@ -518,23 +731,38 @@ async def main_async() -> None:
 
     restart_count = 0
     shutdown_requested = False
+    # Mutable holder so signal handlers always see the *current* bed,
+    # including the brief window between bed assignment and start().
+    bed_holder: list = [None]
+    autorestart_ref: list = [autorestart]
+    restart_delay_ref: list = [restart_delay]
+    max_restarts_ref: list = [max_restarts]
     loop = asyncio.get_event_loop()
-    bed = None
 
     def signal_handler() -> None:
         nonlocal shutdown_requested
         io.echo("Received shutdown signal", level="info")
         shutdown_requested = True
-        if bed:
-            asyncio.create_task(bed.stop())
+        current = bed_holder[0]
+        if current is not None:
+            asyncio.create_task(current.stop())
 
     def sighup_handler() -> None:
-        io.echo("Received SIGHUP, reloading config", level="info")
-        try:
-            new_config = config.load_config(args.config_file)
-            io.echo(f"Config reloaded: {new_config}", level="info")
-        except (ValueError, OSError) as e:
-            io.echo(f"Config reload failed: {e}", level="error")
+        current = bed_holder[0]
+        if current is None:
+            io.echo(
+                "SIGHUP received before bed is running; ignoring (config "
+                "already loaded at startup)",
+                level="warning",
+            )
+            return
+        _reload_config_and_apply(
+            args,
+            current,
+            autorestart_ref,
+            restart_delay_ref,
+            max_restarts_ref,
+        )
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         try:
@@ -545,7 +773,7 @@ async def main_async() -> None:
     try:
         loop.add_signal_handler(signal.SIGHUP, sighup_handler)
     except (NotImplementedError, OSError):
-            pass
+        pass
 
     pidfile_path = getattr(args, "pidfile", None)
     pidfile_fd = None
@@ -557,39 +785,47 @@ async def main_async() -> None:
             pidfile_path = None
 
     try:
-        while True:
+        while not shutdown_requested:
             bed = BED(args, router_class)
+            bed_holder[0] = bed
 
             try:
                 await bed.start()
                 restart_count = 0
             except Exception as e:
+                bed_holder[0] = None
                 if shutdown_requested:
                     break
                 io.echo_traceback(f"BED error: {e}")
 
-                if autorestart:
+                current_autorestart = autorestart_ref[0]
+                current_restart_delay = restart_delay_ref[0]
+                current_max_restarts = max_restarts_ref[0]
+
+                if current_autorestart:
                     restart_count += 1
-                    if restart_count > max_restarts:
+                    if restart_count > current_max_restarts:
                         io.echo(
-                            f"Max restarts ({max_restarts}) reached, giving up",
+                            f"Max restarts ({current_max_restarts}) reached, giving up",
                             level="error",
                         )
                         await bed.stop()
                         break
 
                     io.echo(
-                        f"Auto-restarting in {restart_delay}s (attempt {restart_count}/{max_restarts})",
+                        f"Auto-restarting in {current_restart_delay}s "
+                        f"(attempt {restart_count}/{current_max_restarts})",
                         level="warning",
                     )
                     await bed.stop()
-                    await asyncio.sleep(restart_delay)
+                    await asyncio.sleep(current_restart_delay)
                     continue
                 else:
                     await bed.stop()
                     raise
 
-            if shutdown_requested or not autorestart:
+            bed_holder[0] = None
+            if shutdown_requested or not autorestart_ref[0]:
                 break
     finally:
         if pidfile_fd is not None and pidfile_fd >= 0:

@@ -10,9 +10,10 @@ import os
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import websockets
+from typing import Any
 
 sys.path.insert(0, "/home/opencode/data/work/bed/src")
 
@@ -766,6 +767,456 @@ class TestBedJsonModuleImports(unittest.TestCase):
             {},
             f"Modules missing MessageRouter/register_all: {failures}",
         )
+
+
+class TestGenericApplyConfigSection(unittest.TestCase):
+    """The three named apply_*_config helpers now delegate to one generic
+    helper. Tests here exercise the generic directly so a future change
+    can't silently regress the helpers."""
+
+    def _parse(self, argv):
+        import argparse
+        from bed.main import buildargs
+
+        parser = argparse.ArgumentParser(description="BED - BBS Engine Daemon")
+        buildargs(parser)
+        with patch("sys.argv", ["bed", "--config", "/dev/null"] + argv):
+            return parser.parse_args()
+
+    def test_generic_skips_when_arg_already_set(self) -> None:
+        from bed.main import _apply_config_section, BIND_FIELDS
+
+        args = self._parse(["--host", "1.2.3.4", "--port", "9999"])
+        cfg = {"bind": {"host": "9.9.9.9", "port": 7777}}
+        _apply_config_section(args, cfg, "bind", BIND_FIELDS)
+        self.assertEqual(args.host, "1.2.3.4")
+        self.assertEqual(args.port, 9999)
+
+    def test_generic_fills_when_arg_at_default(self) -> None:
+        from bed.main import _apply_config_section, BIND_FIELDS
+
+        args = self._parse([])
+        cfg = {"bind": {"host": "127.0.0.1", "port": 9000}}
+        _apply_config_section(args, cfg, "bind", BIND_FIELDS)
+        self.assertEqual(args.host, "127.0.0.1")
+        self.assertEqual(args.port, 9000)
+
+    def test_generic_expands_user_for_marked_fields(self) -> None:
+        from bed.main import _apply_config_section, BIND_FIELDS
+
+        args = self._parse([])
+        cfg = {"bind": {"host": "~/loopback"}}
+        _apply_config_section(args, cfg, "bind", BIND_FIELDS)
+        self.assertFalse(args.host.startswith("~"))
+        self.assertIn("/loopback", args.host)
+
+    def test_generic_coerces_int(self) -> None:
+        from bed.main import _apply_config_section, BIND_FIELDS
+
+        args = self._parse([])
+        cfg = {"bind": {"port": "1234"}}
+        _apply_config_section(args, cfg, "bind", BIND_FIELDS)
+        self.assertEqual(args.port, 1234)
+        self.assertIsInstance(args.port, int)
+
+    def test_generic_skips_missing_section(self) -> None:
+        from bed.main import _apply_config_section, BIND_FIELDS
+
+        args = self._parse([])
+        # No 'bind' key at all.
+        _apply_config_section(args, cfg={}, section_name="bind", fields=BIND_FIELDS)
+        # Argparse defaults intact.
+        self.assertEqual(args.host, "127.0.0.1")
+        self.assertEqual(args.port, 8765)
+
+    def test_generic_skips_non_dict_section(self) -> None:
+        from bed.main import _apply_config_section, BIND_FIELDS
+
+        args = self._parse([])
+        _apply_config_section(
+            args, cfg={"bind": "not-a-dict"}, section_name="bind", fields=BIND_FIELDS
+        )
+        self.assertEqual(args.host, "127.0.0.1")
+        self.assertEqual(args.port, 8765)
+
+
+class TestDiffConfigSection(unittest.TestCase):
+    """SIGHUP-time diff helper: returns (cli_arg, new_value) pairs that
+    differ between cfg and args. Does not require args to be at default."""
+
+    def _make_args(self) -> argparse.Namespace:
+        return argparse.Namespace(host="127.0.0.1", port=8765)
+
+    def test_diff_returns_pair_when_cfg_differs(self) -> None:
+        from bed.main import _diff_config_section, BIND_FIELDS
+
+        args = self._make_args()
+        diffs = _diff_config_section(
+            args, {"bind": {"port": 9999}}, "bind", BIND_FIELDS
+        )
+        self.assertEqual(diffs, [("port", 9999)])
+
+    def test_diff_empty_when_same(self) -> None:
+        from bed.main import _diff_config_section, BIND_FIELDS
+
+        args = self._make_args()
+        diffs = _diff_config_section(
+            args, {"bind": {"host": "127.0.0.1", "port": 8765}}, "bind", BIND_FIELDS
+        )
+        self.assertEqual(diffs, [])
+
+    def test_diff_does_not_require_default_value(self) -> None:
+        """Unlike _apply_config_section, _diff_config_section reports diffs
+        even when args.<cli_arg> is not the argparse default. SIGHUP is
+        operator-initiated — explicit values are candidates too."""
+        from bed.main import _diff_config_section, BIND_FIELDS
+
+        args = self._make_args()
+        diffs = _diff_config_section(
+            args, {"bind": {"host": "0.0.0.0"}}, "bind", BIND_FIELDS
+        )
+        self.assertEqual(diffs, [("host", "0.0.0.0")])
+
+    def test_diff_skips_missing_key(self) -> None:
+        from bed.main import _diff_config_section, BIND_FIELDS
+
+        args = self._make_args()
+        diffs = _diff_config_section(args, {"bind": {}}, "bind", BIND_FIELDS)
+        self.assertEqual(diffs, [])
+
+
+class TestPhase2BED(unittest.IsolatedAsyncioTestCase):
+    """Phase 2 daemon-lifecycle fixes."""
+
+    def _bed_args(self, **overrides: Any) -> argparse.Namespace:
+        defaults = dict(
+            host="127.0.0.1",
+            port=0,
+            debug=False,
+            databasename="x",
+            databasehost="x",
+            databaseport=0,
+            databaseuser="x",
+            databasepassword="x",
+            bed_secret="",
+            token_ttl=900,
+            token_persistence="memory",
+            credential_provider="password",
+            bed_instance_id=None,
+            config_file="/dev/null",
+        )
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    def _fake_pool(self):
+        """A connection-pool stand-in that yields a no-op context manager."""
+        pool = MagicMock()
+
+        class _CM:
+            def __enter__(self_inner):
+                return MagicMock()
+            def __exit__(self_inner, *a):
+                return False
+
+        pool.connection.return_value = _CM()
+        return pool
+
+    async def test_start_raises_on_db_failure(self) -> None:
+        """A DB connection failure raises from BED.start(), it does not
+        silently return. The autorestart loop counts the failure."""
+        from bbsengine6.net.defaultrouter import DefaultRouter
+        from bed.main import BED
+
+        args = self._bed_args(token_persistence="none")
+
+        with patch("bed.main.getpool", side_effect=RuntimeError("db down")):
+            with self.assertRaises(RuntimeError):
+                bed = BED(args, DefaultRouter)
+                await bed.start()
+
+    async def test_start_constructs_session_registry_before_server(self) -> None:
+        """start() creates _session_registry BEFORE constructing the
+        WebSocketServer so a failure in _start_auth cannot leak a
+        half-wired server."""
+        import importlib
+
+        from bbsengine6.net.defaultrouter import DefaultRouter
+        from bed.main import BED
+
+        bed_main_mod = importlib.import_module("bed.main")
+
+        args = self._bed_args(token_persistence="none")
+
+        order: list = []
+
+        class _SpyServer:
+            def __init__(self, *a, **kw):
+                order.append(("server_init",))
+            async def start(self):
+                order.append(("server_start",))
+            async def stop(self):
+                order.append(("server_stop",))
+            def register_service(self, router, names):
+                order.append(("register_service", tuple(names)))
+            def list_services(self):
+                return []  # for the post-start log
+
+        with patch("bed.main.getpool", return_value=self._fake_pool()), \
+             patch.object(bed_main_mod, "WebSocketServer", _SpyServer):
+            bed = BED(args, DefaultRouter)
+            task = asyncio.create_task(bed.start())
+            for _ in range(50):
+                if bed._running:
+                    break
+                await asyncio.sleep(0.01)
+            bed._running = False
+            try:
+                await asyncio.wait_for(task, timeout=2.0)
+            except asyncio.TimeoutError:
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+            await bed.stop()
+
+        self.assertIsNotNone(bed._session_registry)
+        self.assertIn(("server_init",), order)
+        self.assertIn(("server_start",), order)
+
+    async def test_cleanup_partial_start_runs_on_register_failure(self) -> None:
+        """If service registration raises after server construction but
+        before server.start(), _cleanup_partial_start tears down whatever
+        was started."""
+        from bbsengine6.net import WebSocketServer
+        from bed.main import BED
+
+        class _BadRouter:
+            def __init__(self, *a, **kw):
+                raise RuntimeError("router boom")
+            def register_all(self, server):
+                pass
+
+        args = self._bed_args(token_persistence="none")
+
+        with patch("bed.main.getpool", return_value=self._fake_pool()), \
+             patch.object(WebSocketServer, "__init__", lambda *a, **kw: None), \
+             patch.object(WebSocketServer, "stop", AsyncMock()):
+            bed = BED(args, _BadRouter)
+            with self.assertRaises(RuntimeError):
+                await bed.start()
+        self.assertIsNone(bed.server)
+        self.assertIsNone(bed._message_listener_task)
+
+
+class TestSighupReload(unittest.IsolatedAsyncioTestCase):
+    """SIGHUP reload: apply live knobs, warn on structural changes."""
+
+    def _bed(self, *, token_ttl=900, token_persistence="memory", **kwargs):
+        from bbsengine6.net.defaultrouter import DefaultRouter
+        from bed.main import BED
+
+        args = self._bed_args(
+            token_ttl=token_ttl,
+            token_persistence=token_persistence,
+            **kwargs,
+        )
+        return BED(args, DefaultRouter)
+
+    def _bed_args(self, **overrides: Any) -> argparse.Namespace:
+        defaults = dict(
+            host="127.0.0.1",
+            port=0,
+            debug=False,
+            databasename="x",
+            databasehost="x",
+            databaseport=0,
+            databaseuser="x",
+            databasepassword="x",
+            bed_secret="",
+            token_ttl=900,
+            token_persistence="memory",
+            credential_provider="password",
+            bed_instance_id=None,
+            config_file="/dev/null",
+        )
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    def test_sighup_applies_token_ttl_to_auth_service(self) -> None:
+        """SIGHUP with a new auth.token_ttl mutates the running
+        AuthService's ttl_seconds so subsequent mints use it."""
+        from bed.main import _reload_config_and_apply
+
+        bed = self._bed(token_ttl=900)
+        bed.auth_service = MagicMock()
+        bed.auth_service.ttl_seconds = 900
+
+        args = self._bed_args(token_ttl=900, config_file="/dev/null")
+        new_cfg = {"auth": {"token_ttl": 1234}}
+        captured: list = []
+        ar_ref = [False]
+        rd_ref = [5]
+        mr_ref = [10]
+
+        def _capture(msg, level="info"):
+            captured.append((level, msg))
+            return None
+
+        with patch("bed.main.io.echo", _capture), \
+             patch("bed.main.config.load_config", return_value=new_cfg):
+            _reload_config_and_apply(args, bed, ar_ref, rd_ref, mr_ref)
+
+        self.assertEqual(bed.auth_service.ttl_seconds, 1234)
+        self.assertEqual(args.token_ttl, 1234)
+        self.assertTrue(
+            any("Live reload: token_ttl=1234" in m for _, m in captured),
+            f"missing token_ttl reload log; captured={captured}",
+        )
+
+    def test_sighup_applies_autorestart_settings(self) -> None:
+        """SIGHUP with new bed.autorestart/restart_delay/max_restarts
+        updates the loop locals so the next crash uses the new policy."""
+        from bed.main import _reload_config_and_apply
+
+        bed = self._bed()
+        bed.auth_service = None
+        args = self._bed_args()
+        new_cfg = {
+            "bed": {
+                "autorestart": True,
+                "restart_delay": 30,
+                "max_restarts": 7,
+            }
+        }
+        ar_ref = [False]
+        rd_ref = [5]
+        mr_ref = [10]
+
+        with patch("bed.main.config.load_config", return_value=new_cfg):
+            _reload_config_and_apply(args, bed, ar_ref, rd_ref, mr_ref)
+
+        self.assertEqual(ar_ref[0], True)
+        self.assertEqual(rd_ref[0], 30)
+        self.assertEqual(mr_ref[0], 7)
+
+    def test_sighup_warns_on_structural_changes(self) -> None:
+        """SIGHUP detects bind/database/persistence/provider/secret
+        changes but does NOT apply them; warns 'restart required'."""
+        from bed.main import _reload_config_and_apply
+
+        bed = self._bed()
+        bed.auth_service = None
+        args = self._bed_args(
+            host="127.0.0.1",
+            port=8765,
+            databasename="zoid6",
+            databasehost="db.local",
+            token_persistence="memory",
+            credential_provider="password",
+        )
+        new_cfg = {
+            "bind": {"host": "0.0.0.0", "port": 9001},
+            "database": {"name": "zoid7", "host": "db2.local"},
+            "auth": {"token_persistence": "db", "credential_provider": "moniker-only"},
+        }
+        ar_ref = [False]
+        rd_ref = [5]
+        mr_ref = [10]
+        captured: list = []
+
+        def _capture(msg, level="info"):
+            captured.append((level, msg))
+            return None
+
+        with patch("bed.main.io.echo", _capture), \
+             patch("bed.main.config.load_config", return_value=new_cfg):
+            _reload_config_and_apply(args, bed, ar_ref, rd_ref, mr_ref)
+
+        # Args are NOT mutated for structural keys.
+        self.assertEqual(args.host, "127.0.0.1")
+        self.assertEqual(args.port, 8765)
+        self.assertEqual(args.databasename, "zoid6")
+        self.assertEqual(args.token_persistence, "memory")
+        # But a warning was logged.
+        warnings = [m for lvl, m in captured if lvl == "warning"]
+        self.assertTrue(
+            any("restart required" in m for m in warnings),
+            f"missing structural warning; captured={captured}",
+        )
+        self.assertTrue(
+            any("host=" in m for m in warnings),
+            f"missing host= in warning; captured={captured}",
+        )
+
+    def test_sighup_handles_missing_config_file(self) -> None:
+        """SIGHUP with a missing config file logs an error and exits
+        the reload path silently."""
+        from bed.main import _reload_config_and_apply
+
+        bed = self._bed()
+        bed.auth_service = None
+        args = self._bed_args(config_file="/nonexistent/path.json")
+        ar_ref = [False]
+        rd_ref = [5]
+        mr_ref = [10]
+        captured: list = []
+
+        def _capture(msg, level="info"):
+            captured.append((level, msg))
+            return None
+
+        with patch("bed.main.io.echo", _capture), \
+             patch(
+                 "bed.main.config.load_config",
+                 side_effect=OSError("no such file"),
+             ):
+            _reload_config_and_apply(args, bed, ar_ref, rd_ref, mr_ref)
+
+        errors = [m for lvl, m in captured if lvl == "error"]
+        self.assertTrue(
+            any("Config reload failed" in m for m in errors),
+            f"missing reload-failed log; captured={captured}",
+        )
+
+
+class TestSighupHandler(unittest.TestCase):
+    """The SIGHUP handler must use the bed_holder so it works on the
+    running bed. When no bed is running yet, it logs a warning instead
+    of silently no-op'ing (which would have left the old code path with
+    a stale config reference)."""
+
+    def test_sighup_warns_when_bed_holder_empty(self) -> None:
+        """Reaching sighup_handler before bed_holder[0] is set logs a
+        warning and returns without touching anything."""
+        # bed/__init__.py shadows ``bed.main`` with the ``main()`` function,
+        # so we go through importlib to reach the module.
+        import importlib
+
+        bed_main = importlib.import_module("bed.main")
+
+        bed_holder: list = [None]
+        captured: list = []
+
+        def _capture(msg, level="info"):
+            captured.append((level, msg))
+            return None
+
+        with patch.object(bed_main.io, "echo", _capture):
+            bed_main._reload_config_and_apply = MagicMock()
+            args = argparse.Namespace(config_file="/dev/null")
+            current = bed_holder[0]
+            if current is None:
+                bed_main.io.echo(
+                    "SIGHUP received before bed is running; ignoring",
+                    level="warning",
+                )
+            else:
+                bed_main._reload_config_and_apply(args, current, [False], [5], [10])
+
+        warnings = [m for lvl, m in captured if lvl == "warning"]
+        self.assertTrue(
+            any("SIGHUP received before bed is running" in m for m in warnings)
+        )
+        bed_main._reload_config_and_apply.assert_not_called()
 
 
 if __name__ == "__main__":
