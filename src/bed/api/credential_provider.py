@@ -56,7 +56,7 @@ class MonikerOnlyCredentialProvider:
                 f"MonikerOnlyCredentialProvider: invalid moniker {moniker!r}",
                 level="warning",
             )
-            return None
+            raise
         except Exception as e:
             io.echo(
                 f"MonikerOnlyCredentialProvider: DB error for {moniker!r}: {e}",
