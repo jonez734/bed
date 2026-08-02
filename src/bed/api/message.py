@@ -164,6 +164,11 @@ class MessageService(BaseService):
         except (TypeError, ValueError) as e:
             logger.warning("MessageService: bad payload %r: %s", payload, e)
             return
+        if not isinstance(data, dict):
+            logger.warning(
+                "MessageService: payload not a JSON object: %r", payload
+            )
+            return
 
         recipient = data.get("recipient_moniker")
         if not recipient:

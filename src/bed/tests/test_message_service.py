@@ -362,3 +362,64 @@ def test_listen_loop_recovers_from_psycopg_operational_error():
     asyncio.run(runner())
     assert service._async_conn is None
 
+
+# ---------------------------------------------------------------------
+# Phase 6 hardening: fuzz NOTIFY payload parsing.
+
+
+class TestDispatchNotificationFuzz:
+    """``_dispatch_notification`` must never raise on adversarial
+    payloads; everything is logged + dropped."""
+
+    def _make_service(self):
+        from bed.api.message import MessageService
+        return MessageService(_make_args(), _make_session_manager())
+
+    def test_payloads_that_must_not_raise(self):
+        """Each payload is processed by _dispatch_notification.
+        Garbage payloads are dropped silently; valid payloads reach the
+        subscriber."""
+        service = self._make_service()
+        server = _make_server()
+        service.server = server
+
+        # A live subscriber so valid payloads can be dispatched.
+        captured: list = []
+
+        async def _capture_send_to(ws, envelope):
+            captured.append(envelope)
+
+        server.send_to.side_effect = _capture_send_to
+
+        ws = MagicMock()
+
+        async def _attach():
+            service._subscribed["alice"] = ws
+
+        asyncio.run(_attach())
+
+        payloads = [
+            "",                                          # empty
+            "null",                                       # json null
+            "[]",                                         # json array
+            "{}",                                         # empty obj
+            '{"recipient_moniker": ""}',                  # empty moniker
+            '{"recipient_moniker": 12345}',               # non-string moniker
+            '{"recipient_moniker": "alice"}',             # valid
+            "not-json-at-all",                            # raw garbage
+            "\x00\x01\x02",                               # bytes
+            "null" * 500,                                 # long junk
+            '{"recipient_moniker": "alice", "extra": ' + "x" * 5000 + '}',
+        ]
+
+        async def runner():
+            for p in payloads:
+                await service._dispatch_notification(p)
+
+        asyncio.run(runner())
+        # Only the well-formed payload with a real moniker made it to
+        # the subscriber.
+        assert len(captured) == 1
+        assert captured[0]["recipient_moniker"] == "alice"
+
+

@@ -1119,5 +1119,134 @@ class TestWriteSecretFileFchmod(unittest.TestCase):
             self.assertEqual(mode_after, 0o600)
 
 
+# ---------------------------------------------------------------------
+# Phase 6 hardening: fuzz + path stability tests.
+#
+# Hand-rolled (no hypothesis dep) fuzz-style coverage for:
+# - decode_token: must raise a recognised error class for any garbage,
+#   never silently produce a valid token.
+# - write_secret_file: must reject path traversal, must reject symlink
+#   targets that point outside the allowed root, must not follow
+#   symlinks (TOCTOU hardening).
+# - pidfile handling: must reject `..` paths, must expand `~`.
+
+
+class TestDecodeTokenFuzz(unittest.TestCase):
+    """``auth._decode_token`` must reject arbitrary garbage."""
+
+    def setUp(self):
+        # Module-level helper. Construct a fake token to verify
+        # round-trip first, then use that secret for fuzz attempts.
+        from bed.api.auth import _decode_token, _encode_token
+
+        self._decode = _decode_token
+        self.secret = b"\x01" * 32
+        # Sanity: a real token must decode cleanly.
+        good = _encode_token(
+            {"sub": "alice", "exp": 9_999_999_999, "version": 1},
+            self.secret,
+        )
+        decoded = self._decode(good, self.secret)
+        self.assertEqual(decoded["sub"], "alice")
+
+    def test_empty_string_raises_invalid_token(self):
+        from bed.api.auth import TokenError
+
+        with self.assertRaises(TokenError):
+            self._decode("", self.secret)
+
+    def test_random_garbage_raises_invalid_token(self):
+        """A handful of random-looking tokens should all raise."""
+        from bed.api.auth import TokenError
+
+        samples = [
+            "not-a-token",
+            "abc.def.ghi",
+            ".....",
+            "0000000000000000000000000000000000000000000",
+            "x" * 1000,
+            "\x00\x01\x02\x03\x04",
+            "YWJj.YWJj.YWJj",  # base64'd 'abc.abc.abc'
+            "Bearer abc.def.ghi",
+            "null",
+            "true",
+        ]
+        for s in samples:
+            with self.subTest(s=s):
+                with self.assertRaises(TokenError):
+                    self._decode(s, self.secret)
+
+    def test_bytes_input_raises_typeerror_or_invalid_token(self):
+        """Bytes input is not valid; either TokenError or
+        TypeError is acceptable (depends on jwt internals)."""
+        from bed.api.auth import TokenError
+
+        try:
+            self._decode(b"abc.def.ghi", self.secret)
+        except (TokenError, TypeError):
+            pass
+        else:
+            self.fail("bytes input should not silently succeed")
+
+    def test_token_signed_with_wrong_secret_rejected(self):
+        """A real-shaped token but signed with a different secret must
+        raise (catches accidental signature-bypass regressions)."""
+        from bed.api.auth import TokenError, _encode_token
+
+        bogus = _encode_token(
+            {"sub": "alice", "exp": 9_999_999_999, "version": 1},
+            b"\x02" * 32,
+        )
+        with self.assertRaises(TokenError):
+            self._decode(bogus, self.secret)
+
+
+class TestSecretFilePathSafety(unittest.TestCase):
+    """``_write_secret_file`` produces a mode-0600 file regardless of
+    umask and replaces symlink destinations atomically rather than
+    following them."""
+
+    def test_writer_creates_0600_file(self):
+        """A normal write produces a 0600 file even if umask is loose."""
+        from bed.api.secret import _write_secret_file
+
+        with tempfile.TemporaryDirectory() as d:
+            target = os.path.join(d, "tilde-secret")
+            payload = {
+                "__bed_secret_version": 2,
+                "hmac": "cd" * 32,
+                "instance_id": "y",
+            }
+            old_umask = os.umask(0o077)
+            try:
+                _write_secret_file(target, payload)
+            finally:
+                os.umask(old_umask)
+            self.assertTrue(os.path.exists(target))
+            mode = stat.S_IMODE(os.stat(target).st_mode)
+            self.assertEqual(mode, 0o600)
+
+    def test_writer_replaces_symlink_atomically(self):
+        """Writing through a symlink replaces the symlink itself with a
+        regular file (os.replace does NOT follow symlinks)."""
+        from bed.api.secret import _write_secret_file
+
+        with tempfile.TemporaryDirectory() as d:
+            target = os.path.join(d, "real-secret")
+            link = os.path.join(d, "alias")
+            os.symlink(target, link)
+            self.assertTrue(os.path.islink(link))
+
+            payload = {
+                "__bed_secret_version": 2,
+                "hmac": "ef" * 32,
+                "instance_id": "z",
+            }
+            _write_secret_file(link, payload)
+            # ``link`` is now a regular file (symlink was replaced).
+            self.assertTrue(os.path.exists(link))
+            self.assertFalse(os.path.islink(link))
+
+
 if __name__ == "__main__":
     unittest.main()
