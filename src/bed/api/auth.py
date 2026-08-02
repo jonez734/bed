@@ -42,13 +42,22 @@ class TokenError(Exception):
         self.code = code
 
 
+TOKEN_CLAIM_VERSION = 1
+SUPPORTED_TOKEN_VERSIONS = frozenset({TOKEN_CLAIM_VERSION})
+
+
 def _now_ts() -> float:
     return datetime.now(timezone.utc).timestamp()
 
 
 def _now_iso() -> str:
+    return _iso_from_ts(_now_ts())
+
+
+def _iso_from_ts(ts: float) -> str:
+    """Render a UNIX timestamp as an ISO-8601 UTC string with ``Z`` suffix."""
     return (
-        datetime.now(timezone.utc)
+        datetime.fromtimestamp(ts, tz=timezone.utc)
         .replace(microsecond=0)
         .isoformat()
         .replace("+00:00", "Z")
@@ -88,6 +97,12 @@ def _decode_token(token: str, secret: bytes) -> Dict[str, Any]:
         raise TokenError(CODE_TOKEN_INVALID, f"unparseable claims: {e}") from e
     if not isinstance(claims, dict):
         raise TokenError(CODE_TOKEN_INVALID, "claims not an object")
+    version = claims.get("version")
+    if not isinstance(version, int) or version not in SUPPORTED_TOKEN_VERSIONS:
+        raise TokenError(
+            CODE_TOKEN_INVALID,
+            f"unsupported token version: {version!r}",
+        )
     return claims
 
 
@@ -149,6 +164,7 @@ class AuthService(BaseService):
     ) -> TokenRecord:
         ts = now if now is not None else self._now()
         claims = {
+            "version": TOKEN_CLAIM_VERSION,
             "moniker": info.moniker,
             "issued_at": ts,
             "expires_at": ts + self.ttl_seconds,
@@ -282,9 +298,13 @@ class AuthService(BaseService):
             store_record.is_sysop,
         )
         rotated = self._mint_record(info, store_record.session_id, new_websocket_id)
-        self._persist(rotated)
-        state.auth_service_token = rotated.token
+        try:
+            self._persist(rotated)
+        except Exception:
+            self.token_store.delete(rotated.token)
+            raise
         self.token_store.delete(token)
+        state.auth_service_token = rotated.token
 
         pending = self.sessions.take_pending(store_record.session_id)
         io.echo(
@@ -347,9 +367,13 @@ class AuthService(BaseService):
             balance=store_record.claims.get("balance"),
         )
         rotated = self._mint_record(info, store_record.session_id, websocket_id)
-        self._persist(rotated)
-        live_state.auth_service_token = rotated.token
+        try:
+            self._persist(rotated)
+        except Exception:
+            self.token_store.delete(rotated.token)
+            raise
         self.token_store.delete(token)
+        live_state.auth_service_token = rotated.token
         return self._auth_result_envelope(rotated, info, fresh=False)
 
     async def _handle_auth_revoke(
@@ -363,12 +387,18 @@ class AuthService(BaseService):
         try:
             _claims = _decode_token(token, self.secret)
         except TokenError as e:
-            return {"type": "auth_revoke_result", "success": False, "code": e.code}
+            return {
+                "type": "auth_revoke_result",
+                "success": False,
+                "code": e.code,
+                "recoverable": False,
+            }
         deleted = self.token_store.delete(token)
         return {
             "type": "auth_revoke_result",
             "success": bool(deleted),
             "code": None if deleted else CODE_TOKEN_REVOKED,
+            "recoverable": not deleted,
         }
 
     def _auth_result_envelope(
@@ -381,7 +411,7 @@ class AuthService(BaseService):
             "is_sysop": bool(info.is_sysop),
             "session_id": record.session_id,
             "token": record.token,
-            "expires_at": _now_iso(),
+            "expires_at": _iso_from_ts(record.expires_at),
         }
         if info.balance is not None:
             env["balance"] = int(info.balance)
@@ -404,7 +434,7 @@ class AuthService(BaseService):
             "is_sysop": bool(info.is_sysop),
             "session_id": record.session_id,
             "token": record.token,
-            "expires_at": _now_iso(),
+            "expires_at": _iso_from_ts(record.expires_at),
             "replayed": pending,
         }
         if pending is not None:

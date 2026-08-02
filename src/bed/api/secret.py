@@ -34,18 +34,21 @@ def _is_world_or_group_readable(mode: int) -> bool:
 
 
 def _write_secret_file(path: str, payload: dict) -> None:
-    """Atomically write `payload` as JSON to `path` with mode 0600.
+    """Atomically write ``payload`` as JSON to ``path`` with mode 0600.
 
-    Uses NamedTemporaryFile in the same directory + os.replace to avoid
-    the classic rename-across-filesystems gotcha, and explicitly
-    os.fchmod before close to dodge umask surprises on some platforms.
+    Uses ``tempfile.mkstemp`` in the same directory + ``os.replace`` to
+    avoid the rename-across-filesystems gotcha, then explicitly
+    ``os.fchmod`` on the open fd *before* close so the umask cannot leak
+    permissions on any platform.  On any error the temp file is removed
+    and the destination is left untouched — the upgrade path cannot
+    destroy an existing good secret.
     """
     directory = os.path.dirname(os.path.abspath(path)) or "."
     fd, tmp_path = tempfile.mkstemp(prefix=".bed-secret-", dir=directory)
     try:
+        os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w") as f:
             json.dump(payload, f)
-        os.chmod(tmp_path, 0o600)
     except Exception:
         try:
             os.unlink(tmp_path)
@@ -114,7 +117,25 @@ def _read_secret_file(path: str) -> Tuple[bytes, str]:
         HMAC_KEY: hmac_bytes.hex(),
         INSTANCE_KEY: instance_id,
     }
-    _write_secret_file(path, payload)
+    try:
+        _write_secret_file(path, payload)
+    except Exception as e:
+        from bbsengine6 import io
+
+        io.echo(
+            f"bed secret: v1->v2 upgrade of {path!r} failed; "
+            f"leaving original intact ({e})",
+            level="warning",
+        )
+        return hmac_bytes, instance_id
+    from bbsengine6 import io
+
+    io.echo(
+        f"bed secret: v1->v2 upgrade of {path!r} completed; "
+        f"new instance_id={instance_id[:8]}… "
+        f"(previously had no instance_id, all existing tokens invalidated)",
+        level="warning",
+    )
     return hmac_bytes, instance_id
 
 

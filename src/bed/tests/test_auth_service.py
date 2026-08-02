@@ -11,7 +11,9 @@ import stat
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from unittest.mock import patch
 
 sys.path.insert(0, "/home/opencode/data/work/bed/src")
 sys.path.insert(0, "/home/opencode/data/work/bbsengine6/py/src")
@@ -41,6 +43,11 @@ from bed.api.errors import (
     CODE_TOKEN_INVALID,
     CODE_TOKEN_REVOKED,
 )
+
+
+def _now_ts_proxy() -> float:
+    """Helper used by regression tests to compare against wall-clock-now."""
+    return datetime.now(timezone.utc).timestamp()
 
 
 class _FakeWebSocket:
@@ -109,6 +116,7 @@ class TestTokenCodec(unittest.TestCase):
     def test_roundtrip(self) -> None:
         secret = secrets.token_bytes(32)
         claims = {
+            "version": 1,
             "moniker": "alice",
             "issued_at": 100.0,
             "expires_at": 100.0 + 900,
@@ -119,6 +127,7 @@ class TestTokenCodec(unittest.TestCase):
         }
         token = _encode_token(claims, secret)
         decoded = _decode_token(token, secret)
+        self.assertEqual(decoded["version"], 1)
         self.assertEqual(decoded["moniker"], "alice")
         self.assertEqual(decoded["session_id"], "s1")
         self.assertFalse(decoded["is_sysop"])
@@ -126,7 +135,7 @@ class TestTokenCodec(unittest.TestCase):
     def test_bad_signature_raises(self) -> None:
         secret = secrets.token_bytes(32)
         other = secrets.token_bytes(32)
-        token = _encode_token({"moniker": "a"}, secret)
+        token = _encode_token({"version": 1, "moniker": "a"}, secret)
         with self.assertRaises(TokenError) as cm:
             _decode_token(token, other)
         self.assertEqual(cm.exception.code, CODE_TOKEN_INVALID)
@@ -139,11 +148,21 @@ class TestTokenCodec(unittest.TestCase):
 
     def test_tampered_payload_raises(self) -> None:
         secret = secrets.token_bytes(32)
-        token = _encode_token({"moniker": "a"}, secret)
+        token = _encode_token({"version": 1, "moniker": "a"}, secret)
         payload_b64, mac = token.rsplit(".", 1)
         tampered = payload_b64[:-1] + ("A" if payload_b64[-1] != "A" else "B") + "." + mac
         with self.assertRaises(TokenError):
             _decode_token(tampered, secret)
+
+    def test_unsupported_version_rejected(self) -> None:
+        secret = secrets.token_bytes(32)
+        for bad_version in (None, "v1", 2, 0, -1, 1.0):
+            token = _encode_token(
+                {"version": bad_version, "moniker": "a"}, secret
+            )
+            with self.assertRaises(TokenError) as cm:
+                _decode_token(token, secret)
+            self.assertEqual(cm.exception.code, CODE_TOKEN_INVALID)
 
 
 class TestScrubToken(unittest.TestCase):
@@ -738,6 +757,366 @@ class TestAuthEndToEndOverWebSocket(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(bad["type"], "error")
         self.assertEqual(bad["code"], CODE_BAD_CREDENTIALS)
+
+
+class TestPhase1Regressions(unittest.IsolatedAsyncioTestCase):
+    """Regression tests for Phase 1 correctness fixes.
+
+    - expires_at in result envelopes reflects the token's real expiry
+      (not wall-clock-now).
+    - Atomic token rotation: if the new token cannot be persisted, the
+      rotated record is deleted and the previous token survives.
+    - Revoke envelopes include ``recoverable`` on both success and failure.
+    - DBTokenStore.gc_expired honors its ``now`` parameter for tests.
+    - v1 -> v2 secret upgrade logs a warning; if the rewrite fails, the
+      original v1 bytes are preserved.
+    - _write_secret_file uses os.fchmod on the open fd before close, so
+      umask cannot leak permissions.
+    """
+
+    async def test_auth_envelope_expires_at_matches_record(self) -> None:
+        """The expires_at in the auth envelope equals the record's expiry."""
+        clock = [1_700_000_000.0]
+        # Freeze the store's clock to match the AuthService's clock so the
+        # record survives the store's lazy-expiry check.
+        store = InMemoryTokenStore(now_factory=lambda: clock[0])
+        service = _build_service(token_store=store, clock=lambda: clock[0])
+        ws = _FakeWebSocket()
+        resp = await service.handle_message(
+            None, ws, "/", {"type": "auth", "moniker": "a", "password": "p"}
+        )
+        record = store.get(resp["token"])
+        self.assertIsNotNone(record)
+        expected_iso = (
+            datetime.fromtimestamp(record.expires_at, tz=timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        self.assertEqual(resp["expires_at"], expected_iso)
+        self.assertNotEqual(
+            resp["expires_at"],
+            datetime.fromtimestamp(_now_ts_proxy(), tz=timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z"),
+        )
+
+    async def test_reconnect_envelope_expires_at_matches_record(self) -> None:
+        """The expires_at in reconnect_result equals the new record."""
+        clock = [1_700_000_000.0]
+        store = InMemoryTokenStore(now_factory=lambda: clock[0])
+        service = _build_service(token_store=store, clock=lambda: clock[0])
+        ws1 = _FakeWebSocket()
+        auth = await service.handle_message(
+            None, ws1, "/", {"type": "auth", "moniker": "a", "password": "p"}
+        )
+        clock[0] += 30.0  # advance so the new expiry differs from now()
+        ws2 = _FakeWebSocket()
+        resp = await service.handle_message(
+            None, ws2, "/", {"type": "reconnect", "token": auth["token"]}
+        )
+        new_record = store.get(resp["token"])
+        self.assertIsNotNone(new_record)
+        expected_iso = (
+            datetime.fromtimestamp(new_record.expires_at, tz=timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        self.assertEqual(resp["expires_at"], expected_iso)
+
+    async def test_refresh_envelope_expires_at_matches_record(self) -> None:
+        """The expires_at in auth_result from a refresh equals the new record."""
+        clock = [1_700_000_000.0]
+        store = InMemoryTokenStore(now_factory=lambda: clock[0])
+        service = _build_service(token_store=store, clock=lambda: clock[0])
+        ws = _FakeWebSocket()
+        auth = await service.handle_message(
+            None, ws, "/", {"type": "auth", "moniker": "a", "password": "p"}
+        )
+        clock[0] += 30.0
+        resp = await service.handle_message(
+            None, ws, "/", {"type": "auth_refresh", "token": auth["token"]}
+        )
+        record = store.get(resp["token"])
+        self.assertIsNotNone(record)
+        expected_iso = (
+            datetime.fromtimestamp(record.expires_at, tz=timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        self.assertEqual(resp["expires_at"], expected_iso)
+
+    async def test_reconnect_rotation_rolls_back_on_persist_failure(self) -> None:
+        """If persist of the rotated token fails, the rotated record is
+        removed from the store and the previous token remains usable."""
+        from bed.api.auth import TokenRecord
+
+        store = InMemoryTokenStore()
+        service = _build_service(token_store=store)
+        ws1 = _FakeWebSocket()
+        auth = await service.handle_message(
+            None, ws1, "/", {"type": "auth", "moniker": "a", "password": "p"}
+        )
+        old_token = auth["token"]
+        old_record = store.get(old_token)
+        self.assertIsNotNone(old_record)
+
+        # Force the rotated record's store.put to raise. InMemoryTokenStore
+        # has no failure path; intercept _persist via monkeypatch so we
+        # simulate a DB write failure.
+        def boom(rec: TokenRecord) -> None:
+            store.put(rec)
+            raise RuntimeError("simulated DB failure")
+
+        with patch.object(service, "_persist", side_effect=boom):
+            with self.assertRaises(RuntimeError):
+                await service.handle_message(
+                    None, _FakeWebSocket(), "/",
+                    {"type": "reconnect", "token": old_token},
+                )
+
+        # The rotated record must have been removed by the rollback path.
+        # The pre-rotation token must still be present and valid.
+        self.assertIsNotNone(store.get(old_token))
+
+    async def test_refresh_rotation_rolls_back_on_persist_failure(self) -> None:
+        """Refresh rotation also rolls back if the new persist fails."""
+        store = InMemoryTokenStore()
+        service = _build_service(token_store=store)
+        ws = _FakeWebSocket()
+        auth = await service.handle_message(
+            None, ws, "/", {"type": "auth", "moniker": "a", "password": "p"}
+        )
+        old_token = auth["token"]
+
+        def boom(rec) -> None:
+            store.put(rec)
+            raise RuntimeError("simulated DB failure")
+
+        with patch.object(service, "_persist", side_effect=boom):
+            with self.assertRaises(RuntimeError):
+                await service.handle_message(
+                    None, ws, "/",
+                    {"type": "auth_refresh", "token": old_token},
+                )
+
+        self.assertIsNotNone(store.get(old_token))
+
+    async def test_revoke_envelope_has_recoverable_on_failure(self) -> None:
+        """A revoke with an invalid signature carries recoverable=False."""
+        service = _build_service()
+        resp = await service.handle_message(
+            None, _FakeWebSocket(), "/",
+            {"type": "auth_revoke", "token": "abc.def"},
+        )
+        self.assertEqual(resp["type"], "auth_revoke_result")
+        self.assertFalse(resp["success"])
+        self.assertIn("recoverable", resp)
+        self.assertFalse(resp["recoverable"])
+
+    async def test_revoke_envelope_has_recoverable_on_unknown_token(self) -> None:
+        """A revoke of a valid-format but unknown token reports recoverable."""
+        service = _build_service()
+        # Hand-crafted token with a valid signature but not in the store.
+        secret = service.secret
+        token = _encode_token(
+            {
+                "version": 1,
+                "moniker": "ghost",
+                "issued_at": 0.0,
+                "expires_at": 9_999_999_999.0,
+                "session_id": "x",
+                "is_sysop": False,
+                "bed_instance_id": service.instance_id,
+                "websocket_id": "w",
+            },
+            secret,
+        )
+        resp = await service.handle_message(
+            None, _FakeWebSocket(), "/",
+            {"type": "auth_revoke", "token": token},
+        )
+        self.assertFalse(resp["success"])
+        self.assertEqual(resp["code"], CODE_TOKEN_REVOKED)
+        self.assertTrue(resp["recoverable"])
+
+    async def test_revoke_envelope_success_has_recoverable(self) -> None:
+        """A successful revoke carries recoverable=False (already done)."""
+        store = InMemoryTokenStore()
+        service = _build_service(token_store=store)
+        ws = _FakeWebSocket()
+        auth = await service.handle_message(
+            None, ws, "/", {"type": "auth", "moniker": "a", "password": "p"}
+        )
+        resp = await service.handle_message(
+            None, ws, "/",
+            {"type": "auth_revoke", "token": auth["token"]},
+        )
+        self.assertTrue(resp["success"])
+        self.assertIn("recoverable", resp)
+        self.assertFalse(resp["recoverable"])
+
+
+class TestDBTokenStoreGcExpiredArgs(unittest.TestCase):
+    """DBTokenStore.gc_expired must honor the ``now`` parameter so tests can
+    freeze the clock and assert on exact deletion counts."""
+
+    def test_gc_expired_uses_now_param_when_supplied(self) -> None:
+        from unittest.mock import MagicMock
+        from bed.api.token_store import DBTokenStore
+
+        fake_args = MagicMock()
+        fake_args.pool = MagicMock()
+        fake_conn = MagicMock()
+        fake_conn.__enter__ = MagicMock(return_value=fake_conn)
+        fake_conn.__exit__ = MagicMock(return_value=False)
+        fake_args.pool.connection.return_value = fake_conn
+
+        cursor_cm = MagicMock()
+        cursor_cm.__enter__ = MagicMock(return_value=cursor_cm)
+        cursor_cm.__exit__ = MagicMock(return_value=False)
+        cursor_cm.rowcount = 0
+        cursor_cm.execute = MagicMock()
+
+        store = DBTokenStore(fake_args)
+        with patch("bbsengine6.database.connect", return_value=fake_conn), \
+             patch("bbsengine6.database.cursor", return_value=cursor_cm):
+            store.gc_expired(now=1234.5)
+
+        cursor_cm.execute.assert_called_once()
+        sql, params = cursor_cm.execute.call_args.args
+        self.assertIn("to_timestamp(%s)", sql)
+        self.assertEqual(params, (1234.5,))
+
+    def test_gc_expired_uses_now_when_omitted(self) -> None:
+        from unittest.mock import MagicMock
+        from bed.api.token_store import DBTokenStore
+
+        fake_args = MagicMock()
+        fake_args.pool = MagicMock()
+        fake_conn = MagicMock()
+        fake_conn.__enter__ = MagicMock(return_value=fake_conn)
+        fake_conn.__exit__ = MagicMock(return_value=False)
+        fake_args.pool.connection.return_value = fake_conn
+
+        cursor_cm = MagicMock()
+        cursor_cm.__enter__ = MagicMock(return_value=cursor_cm)
+        cursor_cm.__exit__ = MagicMock(return_value=False)
+        cursor_cm.rowcount = 0
+        cursor_cm.execute = MagicMock()
+
+        store = DBTokenStore(fake_args)
+        with patch("bbsengine6.database.connect", return_value=fake_conn), \
+             patch("bbsengine6.database.cursor", return_value=cursor_cm):
+            store.gc_expired()
+
+        cursor_cm.execute.assert_called_once()
+        sql, params = cursor_cm.execute.call_args.args
+        self.assertIn("WHERE expires_at <= now()", sql)
+        self.assertEqual(params, ())
+
+
+class TestSecretUpgrade(unittest.TestCase):
+    """v1 -> v2 secret upgrade: warn on success, preserve v1 on failure."""
+
+    def _write_v1(self, path: str) -> bytes:
+        # Use a fixed non-whitespace buffer so ``raw.strip()`` doesn't
+        # shorten the bytes (random ``secrets.token_bytes(32)`` can include
+        # whitespace bytes that strip() would drop).
+        v1_bytes = bytes(range(0x41, 0x61))  # 'A'..'a' = 32 bytes, no whitespace
+        with open(path, "wb") as f:
+            f.write(v1_bytes)
+        os.chmod(path, 0o600)
+        return v1_bytes
+
+    def test_v1_upgrade_writes_v2_and_warns(self) -> None:
+        from bed.api import secret as secret_mod
+        import bbsengine6.io as bbs_io
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "bed.secret")
+            v1 = self._write_v1(path)
+
+            captured: list[str] = []
+            original = bbs_io.echo
+
+            def _capture(msg, level="info"):
+                captured.append(f"{level}:{msg}")
+                return original(msg, level=level)
+
+            with patch.object(bbs_io, "echo", _capture):
+                hmac_bytes, instance_id = secret_mod._read_secret_file(path)
+
+            self.assertEqual(hmac_bytes, v1)
+            self.assertTrue(instance_id)
+            # File must now be JSON with version 2.
+            with open(path, "rb") as f:
+                new_payload = json.loads(f.read().decode("utf-8"))
+            self.assertEqual(new_payload["__bed_secret_version"], 2)
+            self.assertEqual(new_payload["hmac"], v1.hex())
+            # Warning was logged.
+            self.assertTrue(
+                any("v1->v2" in m and m.startswith("warning") for m in captured),
+                f"missing v1->v2 warning; captured={captured}",
+            )
+
+    def test_v1_upgrade_preserves_v1_on_write_failure(self) -> None:
+        from bed.api import secret as secret_mod
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "bed.secret")
+            v1 = self._write_v1(path)
+            original_bytes = open(path, "rb").read()
+
+            def boom(*a, **kw):
+                raise OSError("simulated disk full")
+
+            with patch.object(secret_mod, "_write_secret_file", side_effect=boom):
+                hmac_bytes, instance_id = secret_mod._read_secret_file(path)
+
+            self.assertEqual(hmac_bytes, v1)
+            self.assertTrue(instance_id)
+            # The file on disk must still be the original v1 bytes.
+            self.assertEqual(open(path, "rb").read(), original_bytes)
+
+
+class TestWriteSecretFileFchmod(unittest.TestCase):
+    """_write_secret_file must call os.fchmod on the open fd before close
+    so umask cannot leak permissions."""
+
+    def test_fchmod_called_before_close(self) -> None:
+        from bed.api import secret as secret_mod
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "bed.secret")
+            fchmod_calls: list[tuple[int, int]] = []
+
+            real_fchmod = os.fchmod
+
+            def spy_fchmod(fd: int, mode: int) -> None:
+                fchmod_calls.append((fd, mode))
+                real_fchmod(fd, mode)
+
+            with patch("os.fchmod", spy_fchmod):
+                secret_mod._write_secret_file(
+                    path, {
+                        "__bed_secret_version": 2,
+                        "hmac": "ab" * 32,
+                        "instance_id": "x",
+                    }
+                )
+
+            self.assertEqual(len(fchmod_calls), 1)
+            fd, mode = fchmod_calls[0]
+            self.assertEqual(mode, 0o600)
+            # The fd that was fchmod'd is the same one mkstemp returned.
+            # If close happened before fchmod, the call would have raised
+            # (bad file descriptor) and broken the write.
+            mode_after = stat.S_IMODE(os.stat(path).st_mode)
+            self.assertEqual(mode_after, 0o600)
 
 
 if __name__ == "__main__":

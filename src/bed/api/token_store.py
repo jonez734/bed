@@ -223,11 +223,16 @@ class DBTokenStore:
     def gc_expired(self, now: Optional[float] = None) -> int:
         from bbsengine6.database import connect, cursor as _cursor
 
-        del now
         pool = self._pool()
+        if now is None:
+            cur_sql = f"DELETE FROM {self.TABLE} WHERE expires_at <= now()"
+            params: tuple = ()
+        else:
+            cur_sql = f"DELETE FROM {self.TABLE} WHERE expires_at <= to_timestamp(%s)"
+            params = (float(now),)
         with connect(self._args, pool=pool) as conn:
             with _cursor(conn) as cur:
-                cur.execute(f"DELETE FROM {self.TABLE} WHERE expires_at <= now()")
+                cur.execute(cur_sql, params)
                 return cur.rowcount
 
 
