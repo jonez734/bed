@@ -23,7 +23,13 @@ import json
 import logging
 from typing import Any, Dict, Optional, Set
 
+try:
+    import psycopg
+except ImportError:
+    psycopg = None  # type: ignore[assignment]
+
 from bbsengine6 import io
+from bbsengine6.database import make_dsn
 from bbsengine6.message import get_pending_messages
 
 from .handler import BaseService
@@ -89,13 +95,19 @@ class MessageService(BaseService):
             except (asyncio.CancelledError, Exception):
                 pass
             self._listener_task = None
-        if self._async_conn is not None:
-            try:
-                await self._async_conn.close()
-            except Exception as e:
-                logger.warning("MessageService: error closing async conn: %s", e)
-            self._async_conn = None
+        await self._close_async_conn()
         logger.info("MessageService: listener stopped")
+
+    async def _close_async_conn(self) -> None:
+        """Close the async connection if one is open. Idempotent."""
+        conn = self._async_conn
+        if conn is None:
+            return
+        self._async_conn = None
+        try:
+            await conn.close()
+        except Exception as e:
+            logger.warning("MessageService: error closing async conn: %s", e)
 
     async def _listen_loop(self) -> None:
         """Long-lived LISTEN loop on the engine_message_recipient channel.
@@ -103,11 +115,8 @@ class MessageService(BaseService):
         Holds a dedicated psycopg AsyncConnection (bypassing the
         ConnectionPool) because LISTEN registrations are per-connection.
         """
-        try:
-            import psycopg
-            from bbsengine6.database import make_dsn
-        except ImportError as e:
-            logger.error("MessageService: missing dependency: %s", e)
+        if psycopg is None:
+            logger.error("MessageService: psycopg not installed; listener disabled")
             return
 
         dsn = make_dsn(self.args)
@@ -130,18 +139,13 @@ class MessageService(BaseService):
                         await self._dispatch_notification(n.payload)
             except asyncio.CancelledError:
                 raise
-            except Exception as e:
+            except (psycopg.Error, OSError) as e:
                 logger.warning(
                     "MessageService: listener error (will retry in %.1fs): %s",
                     backoff,
                     e,
                 )
-                if self._async_conn is not None:
-                    try:
-                        await self._async_conn.close()
-                    except Exception:
-                        pass
-                    self._async_conn = None
+                await self._close_async_conn()
                 try:
                     await asyncio.wait_for(
                         self._stop_event.wait(), timeout=backoff
@@ -151,12 +155,7 @@ class MessageService(BaseService):
                     pass
                 backoff = min(backoff * 2, 30.0)
             finally:
-                if self._async_conn is not None:
-                    try:
-                        await self._async_conn.close()
-                    except Exception:
-                        pass
-                    self._async_conn = None
+                await self._close_async_conn()
 
     async def _dispatch_notification(self, payload: str) -> None:
         """Parse a NOTIFY payload and push to the matching websocket."""

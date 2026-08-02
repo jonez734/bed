@@ -65,19 +65,23 @@ class BedMessageServiceClient:
         if not reply.get("ok"):
             return reply
 
-        loop = asyncio.get_event_loop()
-        running_loop = loop
-
         def _push(msg: Dict[str, Any]) -> None:
             if msg.get("type") != "message":
                 return
             if msg.get("recipient_moniker") != moniker:
                 return
             status = msg.get("status", "pending")
-            if status == "read":
-                message_module.bump_local_unread_count(moniker, -1)
-            elif status == "pending":
-                message_module.bump_local_unread_count(moniker, 1)
+            try:
+                if status == "read":
+                    message_module.bump_local_unread_count(moniker, -1)
+                elif status == "pending":
+                    message_module.bump_local_unread_count(moniker, 1)
+            except Exception as e:
+                logger.warning(
+                    "BedMessageClient: local unread update failed for %s: %s",
+                    moniker,
+                    e,
+                )
 
         await self._conn.subscribe(_push)
         self._subscribed_moniker = moniker
@@ -87,7 +91,12 @@ class BedMessageServiceClient:
             pending = await self.list_pending(moniker)
             if pending.get("ok"):
                 count = len(pending.get("messages", []))
-                message_module.set_local_unread_count(moniker, count)
+                try:
+                    message_module.set_local_unread_count(moniker, count)
+                except Exception as e:
+                    logger.warning(
+                        "BedMessageClient: set_local_unread_count failed: %s", e
+                    )
         except BedUnavailable:
             pass
 

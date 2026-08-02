@@ -248,3 +248,117 @@ def test_lifecycle_start_stop_is_idempotent():
     asyncio.run(runner())
     assert service._listener_task is None
     assert service._async_conn is None
+
+
+# ---------------------------------------------------------------------
+# Phase 3 hardening: dependency imports moved to module top, idempotent
+# _close_async_conn, narrowed except clause, graceful psycopg absence.
+
+
+def test_close_async_conn_is_idempotent_when_none():
+    """Calling _close_async_conn with no open connection is a no-op."""
+    from bed.api.message import MessageService
+
+    service = MessageService(_make_args(), _make_session_manager())
+    asyncio.run(service._close_async_conn())
+    assert service._async_conn is None
+
+
+def test_close_async_conn_clears_ref_after_close():
+    """After _close_async_conn, the internal ref is cleared so a second
+    call does NOT re-close the same connection."""
+    from bed.api.message import MessageService
+
+    service = MessageService(_make_args(), _make_session_manager())
+
+    fake_conn = MagicMock()
+    fake_conn.close = AsyncMock()
+    service._async_conn = fake_conn
+
+    async def runner():
+        await service._close_async_conn()
+        await service._close_async_conn()  # second call must be no-op
+
+    asyncio.run(runner())
+    fake_conn.close.assert_awaited_once()
+    assert service._async_conn is None
+
+
+def test_listen_loop_handles_psycopg_missing_dependency():
+    """When psycopg is None (ImportError at module load), the LISTEN
+    loop returns immediately without raising."""
+    from bed.api import message as message_module
+
+    service = message_module.MessageService(_make_args(), _make_session_manager())
+
+    async def runner():
+        with patch.object(message_module, "psycopg", None):
+            await service._listen_loop()
+
+    # Must not raise.
+    asyncio.run(runner())
+    assert service._async_conn is None
+
+
+def test_listen_loop_propagates_cancelled_error():
+    """asyncio.CancelledError is NOT swallowed by the broad except."""
+    from bed.api import message as message_module
+
+    service = message_module.MessageService(_make_args(), _make_session_manager())
+
+    fake_psycopg = MagicMock()
+    fake_conn = MagicMock()
+    fake_conn.close = AsyncMock()
+    fake_psycopg.AsyncConnection.connect = AsyncMock(return_value=fake_conn)
+    # Use a dedicated exception class so generic TypeErrors (like
+    # ``'MagicMock' object can't be awaited``) don't accidentally
+    # match the psycopg.Error branch.
+    class _FakePsycopgError(Exception):
+        pass
+    fake_psycopg.Error = _FakePsycopgError
+
+    fake_cursor_cm = MagicMock()
+    fake_cur = MagicMock()
+    fake_cur.execute = AsyncMock(return_value=None)
+    fake_cursor_cm.__aenter__ = AsyncMock(return_value=fake_cur)
+    fake_cursor_cm.__aexit__ = AsyncMock(return_value=None)
+    fake_conn.cursor = MagicMock(return_value=fake_cursor_cm)
+    fake_conn.notifies = AsyncMock(side_effect=asyncio.CancelledError())
+
+    async def runner():
+        with patch.object(message_module, "psycopg", fake_psycopg):
+            with pytest.raises(asyncio.CancelledError):
+                await service._listen_loop()
+
+    asyncio.run(runner())
+
+
+def test_listen_loop_recovers_from_psycopg_operational_error():
+    """A psycopg.OperationalError on connect causes a graceful
+    backoff retry, not a crash."""
+    from bed.api import message as message_module
+
+    class _FakePsycopgError(Exception):
+        pass
+
+    service = message_module.MessageService(_make_args(), _make_session_manager())
+
+    fake_psycopg = MagicMock()
+    fake_psycopg.AsyncConnection.connect = AsyncMock(
+        side_effect=_FakePsycopgError("operational: conn refused")
+    )
+    fake_psycopg.Error = _FakePsycopgError
+
+    async def runner():
+        # Stop after one iteration of the outer reconnect loop.
+        async def _stop():
+            await asyncio.sleep(0.05)
+            service._stop_event.set()
+
+        with patch.object(message_module, "psycopg", fake_psycopg):
+            await asyncio.gather(service._listen_loop(), _stop())
+
+    # Must not raise.
+    asyncio.run(runner())
+    assert service._async_conn is None
+

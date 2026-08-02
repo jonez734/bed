@@ -184,9 +184,10 @@ class BedConnection:
         Non-matching messages (e.g. server-pushed notifications) are
         delivered to any registered push handlers and then dropped.
         """
-        deadline = asyncio.get_event_loop().time() + timeout
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
         while True:
-            remaining = deadline - asyncio.get_event_loop().time()
+            remaining = deadline - loop.time()
             if remaining <= 0:
                 raise asyncio.TimeoutError
             raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
@@ -209,7 +210,7 @@ class BedConnection:
                 except Exception as e:
                     logger.warning("bed.client push handler error: %s", e)
 
-        await asyncio.get_event_loop().run_in_executor(None, _call)
+        await asyncio.get_running_loop().run_in_executor(None, _call)
 
     async def subscribe(self, handler: PushHandler) -> None:
         """Register a push handler for server-pushed messages.
