@@ -5,7 +5,7 @@ VERSION = $(shell date +%Y%m%d%H%M)
 PYTHON ?= python3.12
 RSYNC = rsync --chmod=F0644 --mkpath --archive --verbose
 
-.PHONY: all help clean build version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon setup-db deploy
+.PHONY: all help clean build version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon setup-db deploy commit-version
 
 all: help
 
@@ -166,3 +166,7 @@ uninstall: uninstall-systemd uninstall-venv uninstall-tmpfiles uninstall-sysuser
 	@echo "bed fully uninstalled"
 
 deploy: install
+
+commit-version:
+	git add src/$(PROJECT)/_version.py
+	git diff --cached --quiet || git commit -m "Bump $(PROJECT) version to $(VERSION)"
