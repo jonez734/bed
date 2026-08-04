@@ -166,6 +166,7 @@ def menu(args, moniker: str) -> bool:
             "[P]ending  [H]istory  [L]ist all  [Q]uit: {var:inputcolor}",
             "b,a,w,t,p,h,l,q",
             default="q",
+            args=args,
         )
 
         if cmd == "B":
@@ -210,7 +211,9 @@ def main_with_args(args) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser("bank")
     buildargs(parser)
-    main_with_args(parser.parse_args())
+    args = parser.parse_args()
+    io.echo(f"{args=}", level="debug")
+    main_with_args(args)
 
 
 if __name__ == "__main__":
