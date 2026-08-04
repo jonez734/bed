@@ -144,3 +144,11 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         help="Disable the in-process MessageService (PG LISTEN/NOTIFY "
         "fanout to connected WebSocket clients).",
     )
+    parentparser.add_argument(
+        "--no-bank-service",
+        dest="no_bank_service",
+        action="store_true",
+        default=False,
+        help="Disable the in-process BankService (bed-native handler for "
+        "bank_balance / bank_add / bank_remove / bank_history).",
+    )

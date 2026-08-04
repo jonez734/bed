@@ -18,6 +18,7 @@ from bbsengine6.net import WebSocketServer
 from . import config, lib
 from .api import (
     AuthService,
+    BankService,
     InMemoryTokenStore,
     DBTokenStore,
     MessageService,
@@ -52,6 +53,8 @@ def _get_bed_defaults() -> dict:
         "token_ttl": parser.get_default("token_ttl"),
         "token_persistence": parser.get_default("token_persistence"),
         "credential_provider": parser.get_default("credential_provider"),
+        "no_message_service": parser.get_default("no_message_service"),
+        "no_bank_service": parser.get_default("no_bank_service"),
     }
     return _BED_DEFAULTS
 
@@ -322,6 +325,7 @@ class BED:
         self.token_store: Any = None
         self.message_service: Optional[MessageService] = None
         self._message_listener_task: Optional[asyncio.Task] = None
+        self.bank_service: Optional[BankService] = None
         self._session_registry: Optional[SessionRegistry] = None
         self._gc_task: Optional[asyncio.Task] = None
         self._running = False
@@ -395,6 +399,12 @@ class BED:
                     self.message_service.start_listener()
                 )
 
+            if not getattr(self.args, "no_bank_service", False):
+                self.bank_service = BankService(
+                    db_args, self._session_registry
+                )
+                self.bank_service.register_all(self.server)
+
             session_registry = self._session_registry
 
             async def _pre_dispatch(websocket: Any) -> None:
@@ -424,6 +434,8 @@ class BED:
             self._gc_task = asyncio.create_task(self._gc_loop())
         if self.message_service is not None:
             io.echo("BED MessageService: LISTEN engine_message_recipient", level="info")
+        if self.bank_service is not None:
+            io.echo("BED BankService: bank_balance/add/remove/history", level="info")
         io.echo(f"Registered services: {self.server.list_services()}", level="info")
 
         try:
@@ -448,6 +460,8 @@ class BED:
             except Exception as e:
                 io.echo(f"BED cleanup: message_service.stop_listener failed: {e}", level="warning")
             self.message_service = None
+        if self.bank_service is not None:
+            self.bank_service = None
         if self.server is not None:
             try:
                 await self.server.stop()

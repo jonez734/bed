@@ -6,6 +6,11 @@ empyre and casino import from here.
 """
 
 from bed.client.bank import BedBankClient
+from bed.client.bankservice import (
+    BedBankServiceClient,
+    get_bank_client,
+    reset_bank_client,
+)
 from bed.client.connection import BedConnection
 from bed.client.exceptions import BedUnavailable
 from bed.client.messages import BedMessageClient
@@ -22,13 +27,16 @@ from bed.client.singleton import (
 
 __all__ = [
     "BedBankClient",
+    "BedBankServiceClient",
     "BedConnection",
     "BedMessageClient",
     "BedMessageServiceClient",
     "BedUnavailable",
+    "get_bank_client",
     "get_bed_connection",
     "get_message_client",
     "probe_bed",
+    "reset_bank_client",
     "reset_bed_connection",
     "reset_message_client",
-]
+] 

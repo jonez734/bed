@@ -2,6 +2,7 @@
 # Public re-exports for bed's API package.
 
 from .auth import AuthService, TokenError, _decode_token, _encode_token
+from .bank import BankService
 from .credential_provider import (
     CredentialProvider,
     MonikerOnlyCredentialProvider,
@@ -41,6 +42,7 @@ from .token_store import (
 
 __all__ = [
     "AuthService",
+    "BankService",
     "BaseService",
     "CredentialProvider",
     "DBTokenStore",
