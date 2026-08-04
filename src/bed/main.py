@@ -12,7 +12,7 @@ from typing import Any, Optional, Type
 
 from bbsengine6 import io
 from bbsengine6.common import safe_path
-from bbsengine6.database import getpool, set_current_role
+from bbsengine6.database import getpool, parse_dsn, set_current_role
 from bbsengine6.module import load as bbs_module_load
 from bbsengine6.net import WebSocketServer
 
@@ -290,6 +290,12 @@ def _apply_database_config(args: argparse.Namespace, cfg: dict) -> None:
     ``_load_from_env`` – the underscore-free name doesn't get nested
     under a ``"database"`` section, so we must handle it here as a
     fallback.
+
+    A libpq-style ``"dsn"`` key (e.g. ``"host=db.local port=5432 dbname=zoid6
+    user=bed"``) is also accepted as a shorthand for the individual
+    components.  Recognized components are ``dbname``, ``host``, ``port``,
+    ``user``, ``password``; only those that the CLI did not set explicitly
+    are applied, so ``dsn`` plays nicely with explicit ``--database*`` flags.
     """
     _apply_config_section(args, cfg, "database", DATABASE_FIELDS)
     defaults = _get_bed_defaults()
@@ -297,6 +303,40 @@ def _apply_database_config(args: argparse.Namespace, cfg: dict) -> None:
         args.databaseuser = cfg["databaseuser"]
     if "databasepassword" in cfg and args.databasepassword == defaults["databasepassword"]:
         args.databasepassword = cfg["databasepassword"]
+
+    db_sect = cfg.get("database")
+    if isinstance(db_sect, dict) and isinstance(db_sect.get("dsn"), str):
+        dsn = db_sect["dsn"]
+        dsn_parts = parse_dsn(dsn)
+        if (
+            "dbname" in dsn_parts
+            and args.databasename == defaults["databasename"]
+        ):
+            args.databasename = dsn_parts["dbname"]
+        if (
+            "host" in dsn_parts
+            and args.databasehost == defaults["databasehost"]
+        ):
+            args.databasehost = dsn_parts["host"]
+        if (
+            "port" in dsn_parts
+            and args.databaseport == defaults["databaseport"]
+        ):
+            try:
+                args.databaseport = int(dsn_parts["port"])
+            except (TypeError, ValueError):
+                io.echo(
+                    f"Ignoring non-integer port in database.dsn: "
+                    f"{dsn_parts['port']!r}",
+                    level="warning",
+                )
+        if "user" in dsn_parts and args.databaseuser == defaults["databaseuser"]:
+            args.databaseuser = dsn_parts["user"]
+        if (
+            "password" in dsn_parts
+            and args.databasepassword == defaults["databasepassword"]
+        ):
+            args.databasepassword = dsn_parts["password"]
 
 
 def _apply_auth_config(args: argparse.Namespace, cfg: dict) -> None:

@@ -6,7 +6,8 @@
   },
   "debug": false,
   "database": {
-    "user": "bed"
+    "user": "bed",
+    "dsn": "host=localhost port=5432 dbname=bed user=bed"
   },
   "auth": {
     "bed_secret_path": "~/.config/bed/bed.secret",

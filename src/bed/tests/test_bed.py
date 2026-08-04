@@ -642,6 +642,102 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
         _apply_database_config(args, cfg)
         self.assertEqual(args.databaseuser, "cli_user")
 
+    def test_dsn_key_populates_database_args(self):
+        """A libpq-style 'dsn' key in the database section populates
+        databasename/databasehost/databaseport/databaseuser when the CLI
+        did not pass those flags, so --database* is unnecessary."""
+        from bed.main import _apply_database_config
+
+        args = self._parse([])
+        cfg = {
+            "database": {
+                "dsn": (
+                    "host=db.local port=5433 dbname=zoid6prod user=bed "
+                    "password=s3cret"
+                )
+            }
+        }
+        _apply_database_config(args, cfg)
+        self.assertEqual(args.databasename, "zoid6prod")
+        self.assertEqual(args.databasehost, "db.local")
+        self.assertEqual(args.databaseport, 5433)
+        self.assertEqual(args.databaseuser, "bed")
+        self.assertEqual(args.databasepassword, "s3cret")
+
+    def test_dsn_key_does_not_override_explicit_cli_flags(self):
+        """If the user passes --databasename/--databasehost/etc. on the CLI,
+        the 'dsn' key in config does not override those explicit values."""
+        from bed.main import _apply_database_config
+
+        args = self._parse([
+            "--databasename", "cli_db",
+            "--databasehost", "cli_host",
+            "--databaseport", "6543",
+        ])
+        cfg = {
+            "database": {
+                "dsn": (
+                    "host=db.local port=5433 dbname=zoid6prod user=bed "
+                    "password=s3cret"
+                )
+            }
+        }
+        _apply_database_config(args, cfg)
+        self.assertEqual(args.databasename, "cli_db")
+        self.assertEqual(args.databasehost, "cli_host")
+        self.assertEqual(args.databaseport, 6543)
+        # user/password were not set on the CLI, so they should be filled
+        # in from the dsn.
+        self.assertEqual(args.databaseuser, "bed")
+        self.assertEqual(args.databasepassword, "s3cret")
+
+    def test_dsn_key_partial_components(self):
+        """'dsn' may carry only some components; missing keys are ignored."""
+        from bed.main import _apply_database_config
+
+        args = self._parse([])
+        cfg = {"database": {"dsn": "host=db.local dbname=zoid6prod"}}
+        _apply_database_config(args, cfg)
+        self.assertEqual(args.databasename, "zoid6prod")
+        self.assertEqual(args.databasehost, "db.local")
+        # port/user/password not in dsn — argparse defaults remain.
+        self.assertEqual(args.databaseport, 5432)
+        self.assertIsNone(args.databaseuser)
+        self.assertIsNone(args.databasepassword)
+
+    def test_dsn_key_ignores_non_integer_port(self):
+        """A non-integer port in 'dsn' is ignored (with a warning) rather
+        than crashing the config-apply path."""
+        from bed.main import _apply_database_config
+
+        args = self._parse([])
+        cfg = {"database": {"dsn": "port=notanumber dbname=foo"}}
+        _apply_database_config(args, cfg)
+        self.assertEqual(args.databasename, "foo")
+        # Default port survives the bad dsn port.
+        self.assertEqual(args.databaseport, 5432)
+
+    def test_dsn_key_plays_nice_with_other_database_keys(self):
+        """When both 'dsn' and individual database.* keys are present,
+        individual keys are applied first (via _apply_config_section) and
+        dsn only fills in components still at argparse defaults."""
+        from bed.main import _apply_database_config
+
+        args = self._parse([])
+        cfg = {
+            "database": {
+                "name": "from_name_key",
+                "dsn": "host=dsn_host dbname=from_dsn user=dsn_user",
+            }
+        }
+        _apply_database_config(args, cfg)
+        # 'name' (via _apply_config_section) is applied before dsn runs.
+        self.assertEqual(args.databasename, "from_name_key")
+        # 'host' was not in the database section individually, so dsn fills it.
+        self.assertEqual(args.databasehost, "dsn_host")
+        # 'user' was not in the database section individually, so dsn fills it.
+        self.assertEqual(args.databaseuser, "dsn_user")
+
     def test_config_does_not_overwrite_explicit_bed_secret(self):
         """An explicit --bed-secret on the CLI wins over auth.bed_secret_path
         in the config. The '~' expansion must not run when the user passed
