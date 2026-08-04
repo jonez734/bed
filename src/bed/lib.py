@@ -1,6 +1,7 @@
 import argparse
 import os
 
+from bbsengine6.common import safe_path
 from bbsengine6.database import buildargs as databasebuildargs
 
 
@@ -9,6 +10,12 @@ def _default_secret_path() -> str:
     expanded by the shell at argparse-parse time (we keep the literal
     default here and let os.path.expanduser handle it on use)."""
     return os.path.expanduser("~/.config/bed/bed.secret")
+
+
+def _config_path_type(value: str) -> str:
+    """argparse type= for --config: expand ~ and $VAR via safe_path,
+    with symlinks NOT resolved so the textual form is preserved."""
+    return safe_path(value, resolve_symlinks=False)
 
 
 def buildargs(parentparser: argparse.ArgumentParser) -> None:
@@ -133,8 +140,9 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         "--config",
         dest="config_file",
         required=True,
-        help="Path to a JSON config file (required). No fallback search "
-        "is performed — the path must be provided explicitly.",
+        type=_config_path_type,
+        help="Path to a JSON config file (required). Supports ~ and $VAR. "
+        "No fallback search is performed — the path must be provided explicitly.",
     )
     parentparser.add_argument(
         "--no-message-service",

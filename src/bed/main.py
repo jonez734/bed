@@ -11,6 +11,7 @@ import sys
 from typing import Any, Optional, Type
 
 from bbsengine6 import io
+from bbsengine6.common import safe_path
 from bbsengine6.database import getpool, set_current_role
 from bbsengine6.module import load as bbs_module_load
 from bbsengine6.net import WebSocketServer
@@ -477,8 +478,10 @@ class BED:
         NOT registered against the server here — ``start()`` registers
         services against the freshly-constructed ``WebSocketServer``.
         """
-        secret_path = getattr(self.args, "bed_secret", None) or os.path.expanduser(
-            "~/.config/bed/bed.secret"
+        secret_path = (
+            safe_path(self.args.bed_secret, resolve_symlinks=False)
+            if getattr(self.args, "bed_secret", None)
+            else safe_path("~/.config/bed/bed.secret", resolve_symlinks=False)
         )
         explicit_id = getattr(self.args, "bed_instance_id", None)
         try:

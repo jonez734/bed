@@ -336,6 +336,117 @@ class TestConfig(unittest.IsolatedAsyncioTestCase):
         self.assertIn("bed", cfg)
         self.assertIn("debug", cfg)
 
+    def test_load_config_expands_tilde_in_path_key(self):
+        """A literal '~' in auth.bed_secret_path is expanded to the user's
+        home directory. Regression test for the bug where a literal
+        '~/.config/bed/bed.secret' in bed.json was not expanded and bed
+        created a stray './~/.config/...' directory."""
+        import json
+        import os
+        import tempfile
+        from bed import config
+
+        tmp = tempfile.mkdtemp()
+        cfg_path = os.path.join(tmp, "bed.json")
+        with open(cfg_path, "w") as f:
+            json.dump(
+                {"auth": {"bed_secret_path": "~/.config/bed/bed.secret"}}, f
+            )
+        cfg = config.load_config(cfg_path)
+        self.assertEqual(
+            cfg["auth"]["bed_secret_path"],
+            os.path.expanduser("~/.config/bed/bed.secret"),
+        )
+        self.assertFalse(cfg["auth"]["bed_secret_path"].startswith("~"))
+
+    def test_load_config_expands_env_var_in_path_key(self):
+        """$VAR and ${VAR} in path-shaped JSON values are expanded."""
+        import json
+        import os
+        import tempfile
+        from bed import config
+
+        os.environ["BED_TEST_HOME"] = "/tmp/bedcfg-test-home"
+        try:
+            tmp = tempfile.mkdtemp()
+            cfg_path = os.path.join(tmp, "bed.json")
+            with open(cfg_path, "w") as f:
+                json.dump(
+                    {
+                        "auth": {
+                            "bed_secret_path": "$BED_TEST_HOME/.config/bed/bed.secret"
+                        }
+                    },
+                    f,
+                )
+            cfg = config.load_config(cfg_path)
+            self.assertEqual(
+                cfg["auth"]["bed_secret_path"],
+                "/tmp/bedcfg-test-home/.config/bed/bed.secret",
+            )
+        finally:
+            del os.environ["BED_TEST_HOME"]
+
+    def test_load_config_does_not_treat_non_path_keys_as_paths(self):
+        """Strings whose keys do not end in a path suffix pass through
+        unchanged. Module names like 'bed.api.message', mode strings like
+        'memory', and hostnames like '127.0.0.1' must NOT be turned into
+        filesystem paths (e.g. '/cwd/bed.api.message')."""
+        import json
+        import os
+        import tempfile
+        from bed import config
+
+        tmp = tempfile.mkdtemp()
+        cfg_path = os.path.join(tmp, "bed.json")
+        with open(cfg_path, "w") as f:
+            json.dump(
+                {
+                    "message_service": {
+                        "modulepath": "bed.api.message",
+                        "description": "Push notifications",
+                    },
+                    "auth": {
+                        "token_persistence": "memory",
+                        "credential_provider": "password",
+                    },
+                    "bind": {"host": "127.0.0.1", "port": 8765},
+                },
+                f,
+            )
+        cfg = config.load_config(cfg_path)
+        self.assertEqual(
+            cfg["message_service"]["modulepath"], "bed.api.message"
+        )
+        self.assertEqual(
+            cfg["message_service"]["description"], "Push notifications"
+        )
+        self.assertEqual(cfg["auth"]["token_persistence"], "memory")
+        self.assertEqual(cfg["auth"]["credential_provider"], "password")
+        self.assertEqual(cfg["bind"]["host"], "127.0.0.1")
+        self.assertEqual(cfg["bind"]["port"], 8765)
+
+    def test_load_config_expands_env_supplied_path(self):
+        """A BED_AUTH_BED_SECRET_PATH env var (a path-shaped value) is
+        expanded at load time."""
+        import os
+        import tempfile
+        from bed import config
+
+        os.environ["BED_AUTH_BED_SECRET_PATH"] = "~/env-supplied-secret"
+        try:
+            tmp = tempfile.mkdtemp()
+            cfg_path = os.path.join(tmp, "bed.json")
+            with open(cfg_path, "w") as f:
+                f.write("{}")
+            cfg = config.load_config(cfg_path)
+            self.assertEqual(
+                cfg["auth"]["bed_secret_path"],
+                os.path.expanduser("~/env-supplied-secret"),
+            )
+        finally:
+            del os.environ["BED_AUTH_BED_SECRET_PATH"]
+
 
 class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
     """Test the --config CLI flag and the bind/database/autorestart merge."""
@@ -784,6 +895,10 @@ class TestBedJsonModuleImports(unittest.TestCase):
     exposes a MessageRouter with a register_all method."""
 
     _BED_JSON = Path(__file__).resolve().parent.parent.parent.parent.parent / "zoid6" / "src" / "zoid6" / "data" / "bed.json"
+    # postoffice is enabled but its module is not yet importable; it is
+    # marked "required": false in bed.json so a missing module does not
+    # abort the daemon. This constant is the importability-test escape
+    # hatch (the test never sees it fail at runtime).
     _KNOWN_UNIMPORTABLE = {"postoffice"}
 
     def _load_services(self):

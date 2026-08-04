@@ -4,6 +4,9 @@ from pathlib import Path
 from typing import Any, Dict
 
 from bbsengine6 import io
+from bbsengine6.common import safe_path
+
+_PATH_KEY_SUFFIXES = ("_path", "_file", "_dir", "_socket", "_log")
 
 
 def get_package_data_path(filename: str) -> Path:
@@ -29,10 +32,13 @@ def load_config(
     io.echo(f"bed.json config path: {config_file}", level="info")
     with open(config_file) as f:
         config = json.load(f)
+    config = _expand_paths(config)
 
     env_config = _load_from_env(env_prefix)
+    env_config = _expand_paths(env_config)
     config = _merge_config(config, env_config)
 
+    config = _expand_paths(config)
     config = _merge_config(config, overrides)
 
     return config
@@ -86,5 +92,25 @@ def _load_from_env(prefix: str) -> Dict[str, Any]:
                 config[key_name] = value
 
     return config
+
+
+def _expand_paths(value: Any, *, key: str | None = None) -> Any:
+    """Recursively expand path-shaped values via bbsengine6.common.safe_path,
+    which handles ``~`` and ``$VAR`` plus normalization/abspath, with symlinks
+    NOT resolved so the textual form is preserved.
+
+    Non-path keys (module names like ``bed.api.message``, hostnames like
+    ``127.0.0.1``, mode strings like ``memory``) and all non-string values
+    pass through unchanged.
+    """
+    if isinstance(value, str):
+        if key is not None and any(key.endswith(s) for s in _PATH_KEY_SUFFIXES):
+            return safe_path(value, resolve_symlinks=False)
+        return value
+    if isinstance(value, dict):
+        return {k: _expand_paths(v, key=k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_expand_paths(v, key=key) for v in value]
+    return value
 
 
