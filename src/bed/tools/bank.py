@@ -25,7 +25,8 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
 def _resolve_moniker(args) -> str | None:
     if args.moniker:
         return args.moniker
-    moniker = member.getcurrentmoniker(args)
+    pool = database.getpool(args)
+    moniker = member.getcurrentmoniker(args, pool=pool)
     if moniker is None:
         io.echo("Could not determine current user.", level="error")
     return moniker
@@ -187,11 +188,13 @@ def menu(args, moniker: str) -> bool:
     return True
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser("bank")
-    buildargs(parser)
-    args = parser.parse_args()
+def main_with_args(args) -> None:
+    """Run the bank menu loop against a pre-parsed args object.
 
+    Split out from ``main()`` so tests can drive the menu without
+    going through argparse. ``main()`` is just ``parse_args`` +
+    ``main_with_args``.
+    """
     moniker = _resolve_moniker(args)
     if moniker is None:
         return
@@ -202,6 +205,12 @@ def main() -> None:
         io.echo("{/all}{restorecursor}*INTR*")
     except EOFError:
         io.echo("{/all}{restorecursor}*EOF*")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser("bank")
+    buildargs(parser)
+    main_with_args(parser.parse_args())
 
 
 if __name__ == "__main__":
