@@ -1,8 +1,9 @@
 PROJECT = bed
 OUTDIR = ../dist/ # /srv/repo/$(PROJECT)/
-VERSION = $(shell date +%Y%m%d%H%M)
+VERSION := $(shell date +%Y%m%d%H%M)
 
-PYTHON = python3
+PYTHON ?= python3
+PIP ?= $(PYTHON) -m pip
 
 UNIT_SRC = bed/daemon/bed.service
 UNIT_DST = /usr/lib/systemd/system/bed.service
@@ -16,9 +17,12 @@ TMPFILES_DST = /usr/lib/tmpfiles.d/bed.conf
 FACTORY_DIR = ../usr/share/factory/etc/bed
 ETC_DIR = /etc/bed
 
-.PHONY: build version
-.PHONY: clean build rename-sdist sign release all
+.PHONY: install build version
+.PHONY: clean rename-sdist sign release all
 .PHONY: install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-systemd uninstall-systemd install-etc uninstall-etc
+
+install: version
+	cd .. && $(PIP) install --no-cache-dir -e .
 
 build: version
 	cd .. && $(PYTHON) -m build --outdir $(OUTDIR)
