@@ -12,6 +12,64 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: add `commit-version` target; factory: disable `autorestart`, enable `message_service`
+
+- `Makefile`: new `commit-version` target that `git add`s the freshly
+  stamped `src/bed/_version.py` and commits it with a generated
+  subject (`bed: bump version to <ver> (githash <hash>)`).
+- `usr/share/factory/etc/bed/bed.json`: `autorestart` is now `false`
+  so systemd owns the restart loop. `message_service.enabled` is
+  now `true` so the in-process MessageService is wired by default.
+- The systemd unit is unchanged; operators relying on its default
+  autorestart behaviour should re-check their environment.
+
+### bed: `make install` runs `version` and rebuilds with `--no-cache-dir`
+
+- `Makefile` `install` now depends on `version` (closes a gap where
+  `bed --version` reported a stale date if the operator invoked
+  `install` without first running `make version`).
+- The venv rebuild step now passes `--no-cache-dir` so wheel reuse
+  from a previous build can never silently regress the install.
+
+### bed: add `SPEC.md` entry-point spec and link from `README.md`
+
+Adds [`SPEC.md`](SPEC.md) as the canonical entry point for
+understanding bed: v1 status, what doesn't work yet, the phase gates
+beyond v1, the bed→bbsengine6 migration map, and the bbsengine6-side
+prerequisites for each bed service. `README.md` now opens with a
+pointer to `SPEC.md` and explains the role of each doc
+(`SPEC.md`, `TODO.md`, `docs/BED_AUTH.md`, `CHANGELOG.md`,
+`FHS.md`).
+
+### bed: native `BankService` (parallels `MessageService`)
+
+Adds a bed-native server-side bank handler and a high-level client
+wrapper, both modelled on the `MessageService` /
+`BedMessageServiceClient` pair. `bed.api.bank.BankService` registers
+four wire types (`bank_balance` / `bank_add` / `bank_remove` /
+`bank_history`) against the WebSocket server and delegates to the
+existing `bbsengine6.bank.BankService` for the actual ledger work.
+`bed.client.bankservice.BedBankServiceClient` is the matching
+high-level convenience client (`get_balance` / `add_funds` /
+`remove_funds` / `get_history`) with the same soft-failure envelope
+shape as the message-service client.
+
+- New file `bed/api/bank.py` — `BankService` class with lazy
+  bbsengine6.bank construction, `missing_moniker` /
+  `invalid_amount` / `database_error` error envelopes, empyre wire
+  shape (`{type: bank_*, moniker, amount/balance/transactions}`).
+- New file `bed/client/bankservice.py` — `BedBankServiceClient` +
+  `get_bank_client` / `reset_bank_client` singleton helpers.
+- `bed.api.__init__` re-exports `BankService`; `bed.client.__init__`
+  re-exports `BedBankServiceClient` and the helpers.
+- `bed.main.BED.start()` auto-registers `BankService` after the
+  message service; opt out with `--no-bank-service`. `_BED_DEFAULTS`
+  tracks the new default so SIGHUP reload detection stays consistent.
+- New tests `bed/src/bed/tests/test_bank_service.py` (31 tests
+  covering registration, every handle_* path, missing-moniker /
+  invalid-amount envelopes, lazy bbsengine6 construction, and the
+  client wrappers + singletons).
+
 ### bed: Phase 1-6 hardening (multi-phase plan)
 
 Cumulative correctness + lifecycle + asyncio + refactor + packaging +

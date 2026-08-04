@@ -1,6 +1,6 @@
 # bed (BBS Engine Daemon) — Specification
 
-> **Status (2026-07-22):** v1 stable (daemon core, AuthService, MessageService, FHS install). v1.1 in flight (MessageService GA + cross-repo adoption). v2 design-only.
+> **Status (2026-08-03):** v1 stable (daemon core, AuthService, MessageService, BankService, FHS install). v1.1 in flight (MessageService GA + cross-repo adoption). v2 design-only.
 >
 > This file is the **entry point** for understanding `bed`. For per-item line numbers, see:
 >
@@ -10,7 +10,7 @@
 > - `bed/FHS.md` — FHS/UAPI compliance design
 > - `bbsengine6/TODO.md`, `bbsengine6/TODO-BOTTOMBAR.md` — engine-side dependencies
 >
-> Last updated: 2026-07-22
+> Last updated: 2026-08-03
 
 ---
 
@@ -69,24 +69,27 @@ Per the `BBSENGINE6_NOTIFYD_OVERVIEW.md` 2026-07-22 banner: *"The actual bbsengi
 
 ### 2.1 v1 stable features
 
-- WebSocket daemon core (start/stop/restart, PID file, `--config`)
+- WebSocket daemon core (start/stop/restart, PID file, `--config` mandatory)
 - Dynamic router loading (`--router FQCN`)
 - `AuthService` — bearer-token auth (HMAC-SHA256, 15-min TTL)
 - Token storage (`InMemoryTokenStore`, `DBTokenStore`, `none`)
-- `MessageService` — PG LISTEN/NOTIFY push notifications
-- `bed.client.*` — connection/bank/messageservice/probe/singleton helpers
-- Database bootstrap (`bed.startup` runs `bbsengine6.startup` + creates `bed` PG role)
-- FHS-compliant install (Makefile, systemd unit, sysusers, tmpfiles, factory config)
+- `MessageService` — PG LISTEN/NOTIFY push notifications (auto-wired with any non-default router)
+- `BankService` — bed-native empyre-shape bank handler (4 wire types; auto-wired alongside MessageService)
+- `bed.client.*` — connection / bank / bankservice / messageservice / probe / singleton helpers
+- Database bootstrap (`bed.startup` runs `bbsengine6.startup` + creates `bed` PG role; also auto-invoked at daemon start)
+- FHS-compliant install (Makefile, systemd unit, sysusers, tmpfiles, factory config + env file)
 - SELinux integration (`semanage` + `restorecon` automatic)
 - 4 CLI scripts: `bed`, `bed-startup`, `bank`, `ping`
 
 ### 2.2 Test count
 
-4 test modules, ~2,098 lines:
-- `bed/src/bed/tests/test_bed.py` — 772 lines
-- `bed/src/bed/tests/test_auth_service.py` — 744 lines
+6 test modules, ~4,148 lines:
+- `bed/src/bed/tests/test_bed.py` — ~1,223 lines
+- `bed/src/bed/tests/test_auth_service.py` — ~1,252 lines
 - `bed/src/bed/tests/test_startup.py` — 332 lines
-- `bed/src/bed/tests/test_message_service.py` — 250 lines
+- `bed/src/bed/tests/test_message_service.py` — 425 lines
+- `bed/src/bed/tests/test_bank_service.py` — 710 lines (new — bed-native BankService)
+- `bed/src/bed/tests/test_client.py` — 206 lines (Phase 3 asyncio hardening)
 
 Plus: `bed/tests/scripts/stop_bed.sh` (SIGTERM/SIGKILL test helper).
 
@@ -126,11 +129,15 @@ Plus: `bed/tests/scripts/stop_bed.sh` (SIGTERM/SIGKILL test helper).
 | `--no-message-service` flag | `bed/src/bed/lib.py` | `test_bed.py` | Disables MessageService for tests |
 | `bed.client.BedConnection` | `bed/src/bed/client/connection.py:326` | (client-side, not bed tests) | subscribe/unsubscribe, background _recv_loop, _recv_match |
 | `bed.client.BedBankClient` | `bed/src/bed/client/bank.py` | (client-side) | empyre shape; subclass of `BedMessageClient` |
+| `bed.client.BedBankServiceClient` | `bed/src/bed/client/bankservice.py` | (client-side) | High-level wrapper: get_balance / add_funds / remove_funds / get_history; soft-failure envelopes |
 | `bed.client.BedMessageServiceClient` | `bed/src/bed/client/messageservice.py` | (client-side) | Push handler; sets bbsengine6 local cache |
 | `bed.client.probe_bed` | `bed/src/bed/client/probe.py` | (client-side) | Synchronous TCP probe |
 | `bed.client.singleton` | `bed/src/bed/client/singleton.py` | (client-side) | `get_bed_connection`, `reset_bed_connection` |
 | `bed.startup` | `bed/src/bed/startup.py` | `test_startup.py:332` | Runs `bbsengine6.startup` then creates `bed` PG role |
 | `bed.defaultrouter.DefaultRouter` | `bed/src/bed/defaultrouter.py` | `test_bed.py` | Registers `AuthService` + `BankServiceHandler` (9 bank message types) |
+| `BankService` (bed-native) | `bed/src/bed/api/bank.py` | `test_bank_service.py` | Registers `bank_balance` / `bank_add` / `bank_remove` / `bank_history`; delegates to `bbsengine6.bank.BankService` |
+| Wire BankService | `bed/src/bed/main.py` (BED.start) | `test_bank_service.py` | Auto-registered alongside MessageService; opt out with `--no-bank-service` |
+| `--no-bank-service` flag | `bed/src/bed/lib.py` | `test_bank_service.py` | Disables the bed-native BankService |
 | FHS install chain | `bed/Makefile` | n/a (install) | `install-sysusers` → `install-tmpfiles` → `install-venv` → `install-systemd` → `install-etc` |
 | `/etc/bed/bed.json` factory | `bed/usr/share/factory/etc/bed/bed.json` | n/a | FHS factory default; installed by `install-etc` |
 | systemd unit | `bed/src/bed/daemon/bed.service` | n/a | `Type=simple`, `User=bed`, `Restart=on-failure`, `TimeoutStopSec=30s`; `bed.service` ships generic; per-game `zoid6-bed.service` etc. live in the game repo and pass `--config` + `--router` |
@@ -161,7 +168,7 @@ These items are currently bed-local but could/should move to bbsengine6 once the
 
 - **Tilde expansion in `_apply_*_config`** — `bed/src/bed/main.py:90-115` (and `_apply_bind_config:57-67`, `_apply_database_config:70-87`). The pattern is generic; could become `bbsengine6.config.expand_user_deep(obj)`.
 - **`BedMessageClient` base class** — `bed/src/bed/client/messages.py`. Currently a thin transport wrapper. Could move to `bbsengine6.net.client` once multiple non-bed consumers exist.
-- **`bed.defaultrouter.DefaultRouter` `BankServiceHandler`** — `bed/src/bed/defaultrouter.py`. Already wraps `bbsengine6.bank.api.handler.BankServiceHandler`; could collapse to a re-export once all games adopt the bbsengine6 router directly.
+- **`bed.defaultrouter.DefaultRouter` `BankServiceHandler`** — `bed/src/bed/defaultrouter.py`. Already wraps `bbsengine6.bank.api.handler.BankServiceHandler`; could collapse to a re-export once all games adopt the bbsengine6 router directly. **Now superseded** by the bed-native `bed.api.bank.BankService` (4-message empyre shape) for callers that don't need the 9-message full bank surface (transfers, pending, sysop list-all).
 - **`BBSENGINE6_NOTIFYD_*.md` specs (10 files)** — already marked SUPERSEDED in place; eventual deletion is a bbsengine6-side cleanup.
 
 ---
@@ -189,8 +196,8 @@ These items are currently bed-local but could/should move to bbsengine6 once the
 
 | Gap | File | Status | Source |
 |---|---|---|---|
-| FHS default-config path drift | `bed/src/bed/config.py` | open | `bed/FHS.md`, `bed/README.md` still says "packaged bed/data/bed.json" |
-| `bed.service` not passing `--config /etc/bed/bed.json` | `bed/src/bed/daemon/bed.service` | open | `bed/FHS.md` |
+| FHS default-config path drift | `bed/src/bed/config.py` | **resolved (commit `8124105`)** | `--config` is now `required=True`; `install-etc` deploys `/etc/bed/bed.json` |
+| `bed.service` not passing `--config /etc/bed/bed.json` | `bed/src/bed/daemon/bed.service` | **resolved** | `bed.service` ships with `ExecStart=/var/lib/bed/venv/bin/bed --config /etc/bed/bed.json` |
 | End-to-end DB LISTEN tests | `bed/src/bed/tests/test_message_lib.py` (in bbsengine6) | deferred | `bed/TODO-message-service.md` Phase 7 |
 | `zoid6/src/zoid6/data/bed.json` not updated | `zoid6/src/zoid6/data/bed.json` | open | `bed/TODO-message-service.md` Phase 8 |
 | `bbsengine6` config docs not updated | (docs) | open | `bed/TODO-message-service.md` Phase 8 |

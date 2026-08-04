@@ -18,23 +18,42 @@ JSON-over-WebSocket, and lets the game own the wire protocol.
 
 ```bash
 pip install -e .
-bed --router zoid6.api.handler.MonikerAuthRouter
+# --config is REQUIRED — there is no fallback search.
+bed --config /etc/bed/bed.json --router zoid6.api.handler.MonikerAuthRouter
+```
+
+For development without an FHS install, point `--config` at the packaged
+default:
+
+```bash
+bed --config "$(python -c 'import bed.data, os; print(os.path.dirname(bed.data.__file__) + "/bed.json")')" \
+    --router zoid6.api.handler.MonikerAuthRouter
+```
+
+The `zoid6` console script (from the [`zoid6`](../zoid6/) package)
+automatically resolves `/etc/zoid6/bed.json` → packaged default if no
+override is set, so most callers want:
+
+```bash
+pip install -e . -e ../bbsengine6/py -e ../zoid6/src
+zoid6
 ```
 
 ### Database setup
 
-Before running bed, bootstrap the database (schema, roles, functions)
-and create the `bed` PostgreSQL role:
+Bed bootstraps the database automatically on daemon start (since the
+`008b9d1` commit). If you want to run the bootstrap standalone, or
+audit the schema without starting the daemon:
 
 ```bash
 bed-startup
 # or: python -m bed.startup
 ```
 
-This runs `bbsengine6.startup` first (creating the `engine` schema,
-core roles `member`/`web`/`sysop`/`term`, and all SECURITY DEFINER
-functions), then creates the `bed` role with LOGIN and grants it
-USAGE on the `engine` schema.  The role is idempotent — re-running
+`bed-startup` runs `bbsengine6.startup` first (creating the `engine`
+schema, core roles `member`/`web`/`sysop`/`term`, and all SECURITY
+DEFINER functions), then creates the `bed` role with LOGIN and grants
+it USAGE on the `engine` schema.  The role is idempotent — re-running
 after the role already exists is a no-op.
 
 ### systemd service (dedicated venv)
@@ -90,7 +109,8 @@ and the 203 error will persist.
 cd /path/to/bed && sudo make install && sudo systemctl enable --now bed
 ```
 
-This chains: `install-sysusers` → `install-tmpfiles` → `install-venv` → `install-systemd`.
+This chains: `install-sysusers` → `install-tmpfiles` → `install-venv` →
+`install-systemd` → `install-etc`.
 
 The unit at `src/bed/daemon/bed.service` runs as `User=bed` and uses
 `ExecStart=/var/lib/bed/venv/bin/bed --config /etc/bed/bed.json`.  Any Python package
@@ -106,6 +126,16 @@ wscat -c ws://127.0.0.1:8765
    "token":"…","session_id":"…","expires_at":"…","balance":0}
 ```
 
+Or use the `ping` console script for a no-credential smoke test:
+
+```bash
+pip install -e .
+ping --url ws://127.0.0.1:8765
+```
+
+The `bank` console script provides a standalone CLI for balance, add,
+remove, history, transfer request/approve/reject, and list-all.
+
 ## Routers
 
 | FQCN                                                | behavior                                               |
@@ -113,37 +143,44 @@ wscat -c ws://127.0.0.1:8765
 | `bbsengine6.net.defaultrouter.DefaultRouter`        | no-credential stub; wscat / development                |
 | `bed.defaultrouter.DefaultRouter`                   | bank + auth services                                   |
 | `zoid6.api.handler.MonikerAuthRouter`               | verifies the moniker exists; any password accepted     |
-| `zoid6.api.MessageRouter`                           | full zoid6 unified router                              |
+| `zoid6.api.handler.MessageRouter`                   | full zoid6 unified router                              |
 | any custom router                                   | your game; `bed` wires AuthService alongside          |
 
 `bed` automatically registers `AuthService` (bearer tokens,
 reconnect, refresh, revoke) before any non-`DefaultRouter` runs. When
-using `bed.defaultrouter.DefaultRouter`, `BankServiceHandler` is also
-registered alongside auth, exposing all bank message types
-(`bank_balance`, `bank_add`, `bank_remove`, `bank_transfer_request`,
-`bank_transfer_approve`, `bank_transfer_reject`, `bank_pending`,
-`bank_history`, `bank_list_all`). See
+the router is anything other than the bbsengine6 no-credential stub,
+`MessageService` (server-push via PG `LISTEN`/`NOTIFY` on
+`engine_message_recipient`) and `BankService` (bed-native empyre
+shape: `bank_balance` / `bank_add` / `bank_remove` / `bank_history`)
+are also auto-registered. Opt out with `--no-message-service` or
+`--no-bank-service`. Using `bed.defaultrouter.DefaultRouter` exposes
+the full 9-message bank surface (`bank_balance`, `bank_add`,
+`bank_remove`, `bank_transfer_request`, `bank_transfer_approve`,
+`bank_transfer_reject`, `bank_pending`, `bank_history`,
+`bank_list_all`) via `bbsengine6.bank.BankServiceHandler`. See
 [`docs/BED_AUTH.md`](docs/BED_AUTH.md) for the auth wire protocol, TTL
 knobs, and threat model.
 
 ## CLI flags
 
 ```
---host HOST              default: 127.0.0.1
---port PORT              default: 8765
---router DOTTED.NAME     default: bbsengine6.net.defaultrouter.DefaultRouter
---config PATH            default: packaged bed/data/bed.json
---bed-secret PATH        default: ~/.config/bed/bed.secret
---token-ttl SECONDS      default: 900
---token-persistence MODE default: memory  (none | memory | db)
---credential-provider N  default: password  (password | moniker-only)
---bed-instance-id UUID   default: auto-generated, persisted with the secret
---autorestart            (default: from bed.json, or True)
---restart-delay N
---max-restarts N
+--host HOST                default: 127.0.0.1
+--port PORT                default: 8765
+--router DOTTED.NAME       default: bbsengine6.net.defaultrouter.DefaultRouter
+--config PATH              REQUIRED (no fallback search)
+--bed-secret PATH          default: ~/.config/bed/bed.secret
+--token-ttl SECONDS        default: 900
+--token-persistence MODE   default: memory  (none | memory | db)
+--credential-provider N    default: password  (password | moniker-only)
+--bed-instance-id UUID     default: auto-generated, persisted with the secret
+--autorestart              (default: from bed.json, or False)
+--restart-delay N          default: 5
+--max-restarts N           default: 10
 --pidfile PATH
 --foreground / -f
 --debug
+--no-message-service       Disable in-process MessageService (PG LISTEN/NOTIFY)
+--no-bank-service          Disable in-process bed-native BankService
 ```
 
 Run `bed --help` for the authoritative list.
@@ -154,15 +191,19 @@ Run `bed --help` for the authoritative list.
 
 ```json
 {
-  "bed":   {"autorestart": true, "restart_delay": 5, "max_restarts": 10},
+  "bed":   {"autorestart": false, "restart_delay": 5, "max_restarts": 10},
   "auth":  {"bed_secret_path": "~/.config/bed/bed.secret",
             "token_ttl": 900, "token_persistence": "memory",
             "credential_provider": "password", "bed_instance_id": null},
-  "bind":  {"host": "0.0.0.0", "port": 8765},
   "database": {"name": "…", "host": "…", "port": 5432,
-               "user": "…", "password": "…"}
+               "user": "bed", "password": "…"}
 }
 ```
+
+The shipped default config (`src/bed/data/bed.json`, byte-identical
+to `usr/share/factory/etc/bed/bed.json`) disables `autorestart` so
+that systemd owns the restart loop. Set it to `true` for
+foreground-only deployments without systemd.
 
 ### PID file
 
@@ -209,11 +250,16 @@ invocations cannot both believe they own the file.
 bed/
 ├── src/bed/
 │   ├── api/                AuthService, TokenStore, SessionRegistry,
-│   │                       CredentialProvider, error envelopes, secret loader
+│   │                       CredentialProvider, error envelopes,
+│   │                       secret loader, MessageService, BankService
+│   ├── client/             BedConnection, BedBankClient,
+│   │                       BedBankServiceClient, BedMessageClient,
+│   │                       BedMessageServiceClient, probe, singleton
 │   ├── daemon/
 │   │   ├── bed.service     systemd unit file
 │   │   ├── bed.sysusers    systemd-sysusers config (creates bed user/group)
 │   │   └── bed.tmpfiles    systemd-tmpfiles config (/var/log/bed, /var/lib/bed)
+│   ├── tools/              bank, ping console-script CLIs
 │   ├── data/
 │   │   ├── bed.json        packaged default config
 │   │   └── sql/bed_token.sql   optional DB token-store schema
@@ -222,26 +268,54 @@ bed/
 │   ├── startup.py          database bootstrap (bbsengine6 startup + bed role)
 │   ├── lib.py              argparse
 │   ├── config.py           bed.json loader
-│   └── tests/              pytest
+│   ├── defaultrouter.py    DefaultRouter stub
+│   └── tests/              pytest (~4,148 LOC across 6 modules)
 ├── docs/
 │   └── BED_AUTH.md         bearer-token protocol reference
+├── usr/
+│   └── share/factory/etc/bed/
+│       ├── bed.json        FHS factory default config
+│       └── bed.env         FHS factory env file (BED_DATABASE_USER=bed)
+├── tests/
+│   └── scripts/
+│       └── stop_bed.sh     SIGTERM→SIGKILL pidfile-driven stop helper
 ├── pyproject.toml
-└── Makefile
+├── src/Makefile            thin shim; canonical at root
+└── Makefile                root install chain
 ```
+
+## Console scripts
+
+`pip install .` registers four entry points:
+
+| Script         | Module                  | Purpose                                       |
+|----------------|-------------------------|-----------------------------------------------|
+| `bed`          | `bed.main:main`         | the WebSocket daemon                          |
+| `bed-startup`  | `bed.startup:main`      | standalone database bootstrap                 |
+| `bank`         | `bed.tools.bank:main`   | standalone bank CLI (balance, add, remove, history, transfer) |
+| `ping`         | `bed.tools.ping:main`   | smoke-test WebSocket + auth round-trip        |
 
 ## Tests
 
 ```bash
 cd bed
-PYTHONPATH=src:../bbsengine6/py/src pytest
+PYTHONPATH=src:../bbsengine6/py/src pytest src/bed/tests
 ```
 
-Tests cover:
+Six modules, ~4,148 LOC:
 
-- **test_bed.py** — BED server lifecycle, config parsing, pidfile
-- **test_auth_service.py** — bearer token encode/decode, AuthService
-- **test_startup.py** — startup module (role creation, main flow,
-  server stays running)
+- **`test_auth_service.py`** (~1,252 lines) — bearer token
+  encode/decode, AuthService, fuzz for decode / secret / dispatch.
+- **`test_bed.py`** (~1,223 lines) — BED server lifecycle, config
+  parsing, pidfile, mocked DB.
+- **`test_bank_service.py`** (~710 lines) — bed-native BankService
+  + BedBankServiceClient.
+- **`test_message_service.py`** (~425 lines) — MessageService
+  registration / dispatch / list_pending.
+- **`test_startup.py`** (~332 lines) — role creation, idempotency,
+  main flow.
+- **`test_client.py`** (~206 lines) — Phase 3 asyncio hardening
+  (running_loop, weakref cache, push handlers).
 
 ## License
 
