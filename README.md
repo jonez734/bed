@@ -270,6 +270,7 @@ bed/
 │   ├── config.py           bed.json loader
 │   ├── defaultrouter.py    DefaultRouter stub
 │   └── tests/              pytest (~4,148 LOC across 6 modules)
+│                          Router load uses `bbsengine6.module.load()`; tracebacks on failure are emitted via `io.echo_traceback()`.
 ├── docs/
 │   └── BED_AUTH.md         bearer-token protocol reference
 ├── usr/

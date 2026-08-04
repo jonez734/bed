@@ -154,6 +154,78 @@ class TestBEDParseArgs(unittest.IsolatedAsyncioTestCase):
         from zoid6.api.monikerrouter import MonikerAuthRouter
         self.assertIs(router_class, MonikerAuthRouter)
 
+    def test_load_router_class_bad_fqcn_emits_traceback_and_exits(self):
+        """A non-existent --router FQCN routes through bbsengine6.module.load,
+        which calls io.echo_traceback and re-raises; main_async emits an
+        exit message and exits 1."""
+        import importlib
+        import os
+        import tempfile
+        from unittest.mock import patch
+
+        bed_main = importlib.import_module("bed.main")
+        bed_config = importlib.import_module("bed.config")
+        bed_io = importlib.import_module("bbsengine6.io")
+
+        tmp = tempfile.mkdtemp()
+        cfg_path = os.path.join(tmp, "bed.json")
+        with open(cfg_path, "w") as f:
+            f.write("{}")
+
+        traceback_calls = []
+        echo_calls = []
+
+        def fake_echo_traceback(msg, level="error"):
+            traceback_calls.append((msg, level))
+
+        def fake_echo(msg, **kwargs):
+            echo_calls.append((msg, kwargs))
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "bed",
+                    "--config",
+                    cfg_path,
+                    "--router",
+                    "this.module.does.not.exist.MyRouter",
+                ],
+            ),
+            patch.object(bed_config, "load_config", return_value={}),
+            patch.object(bed_main, "_apply_bind_config", lambda *a, **k: None),
+            patch.object(
+                bed_main, "_apply_database_config", lambda *a, **k: None
+            ),
+            patch.object(
+                bed_main, "_apply_auth_config", lambda *a, **k: None
+            ),
+            patch.object(bed_io, "echo_traceback", fake_echo_traceback),
+            patch.object(bed_io, "echo", fake_echo),
+        ):
+            with self.assertRaises(SystemExit) as cm:
+                asyncio.run(bed_main.main_async())
+            self.assertEqual(cm.exception.code, 1)
+
+        # bbsengine6.module.load emitted the traceback with the bad FQCN
+        self.assertTrue(
+            any(
+                "this.module.does.not.exist" in msg
+                for msg, _ in traceback_calls
+            ),
+            f"expected echo_traceback with the bad FQCN; "
+            f"got {traceback_calls!r}",
+        )
+        # main_async emitted the human-readable exit message
+        self.assertTrue(
+            any(
+                "BED exiting" in msg and kwargs.get("level") == "error"
+                for msg, kwargs in echo_calls
+            ),
+            f"expected 'BED exiting' error-level echo; "
+            f"got {echo_calls!r}",
+        )
+
 
 class TestSessionManager(unittest.IsolatedAsyncioTestCase):
     """Test SessionManager class."""

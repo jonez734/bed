@@ -117,7 +117,7 @@ Plus: `bed/tests/scripts/stop_bed.sh` (SIGTERM/SIGKILL test helper).
 | PID file (atomic) | `bed/src/bed/main.py:68-` | `test_bed.py::TestPidfile` | O_EXCL TOCTOU retry, stale-overwrite, live-collision exit 1 |
 | `bed.json` loader | `bed/src/bed/config.py:21-48` | `test_bed.py` | CLI > file > argparse default; BED_* env-var support; deep-merge |
 | Missing-config error | `bed/src/bed/main.py:336-345` | `test_bed.py` | Exits 1 with `Config file not found:` |
-| Dynamic router loading | `bed/src/bed/main.py` | `test_bed.py` | `importlib` resolves FQCN; bbsengine6 + bed routers both supported |
+| Dynamic router loading | `bed/src/bed/main.py` | `test_bed.py` | `bbsengine6.module.load()` resolves FQCN (traceback on failure via `io.echo_traceback`, info-log on success); passes `args=None` to suppress the debug-reload branch so the long-running daemon never re-imports its router |
 | `AuthService` (bearer) | `bed/src/bed/api/auth.py:412` | `test_auth_service.py:744` | HMAC-SHA256, 15-min TTL, websocket_id binding, instance check |
 | `TokenStore` (memory) | `bed/src/bed/api/token_store.py` | `test_auth_service.py` | Default; in-process dict |
 | `TokenStore` (db) | `bed/src/bed/api/token_store.py` | `test_bed_token_persistence.py` (planned) | Opt-in; `engine.__bed_token` created lazily |

@@ -5,7 +5,6 @@
 
 import argparse
 import asyncio
-import importlib
 import os
 import signal
 import sys
@@ -13,6 +12,7 @@ from typing import Any, Optional, Type
 
 from bbsengine6 import io
 from bbsengine6.database import getpool, set_current_role
+from bbsengine6.module import load as bbs_module_load
 from bbsengine6.net import WebSocketServer
 
 from . import config, lib
@@ -597,7 +597,10 @@ def load_router_class(router_path: str) -> Type:
         return DefaultRouter
 
     module_path, class_name = router_path.rsplit(".", 1)
-    module = importlib.import_module(module_path)
+    # args=None disables bbsengine6.module.load's debug-time reload
+    # (module.py:270-274) so the long-running daemon does not silently
+    # re-import its router. Traceback-on-failure is handled by load().
+    module = bbs_module_load(None, module_path)
     return getattr(module, class_name)
 
 
@@ -731,8 +734,14 @@ async def main_async() -> None:
 
     try:
         router_class = load_router_class(args.router)
-    except Exception as e:
-        io.echo(f"Failed to load router class '{args.router}': {e}", level="error")
+        io.echo(
+            f"Loaded router module "
+            f"{args.router.rsplit('.', 1)[0]} from {router_class.__module__}",
+            level="info",
+        )
+    except Exception:
+        # bbsengine6.module.load() already emitted io.echo_traceback(...).
+        io.echo("BED exiting: router load failed", level="error")
         sys.exit(1)
 
     if not ensure_startup(args):
