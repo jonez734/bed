@@ -20,7 +20,6 @@ import argparse
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 
 # ---------------------------------------------------------------------
@@ -227,7 +226,7 @@ def test_bank_add_rejects_zero_and_negative():
     for bad in (0, -1, -50):
         with patch.object(tool, "_bank_service", return_value=bank), \
              patch.object(tool.io, "inputinteger", return_value=bad), \
-             patch.object(tool.io, "echo") as echo:
+             patch.object(tool.io, "echo"):
             assert tool.bank_add(args, "alice") is False
     assert bank.add_funds.call_count == 0
 
@@ -412,7 +411,7 @@ def test_bank_reject_happy_path():
     )
     with patch.object(tool, "_bank_service", return_value=bank), \
          patch.object(tool.io, "inputinteger", return_value=3), \
-         patch.object(tool.io, "echo") as echo:
+         patch.object(tool.io, "echo"):
         assert tool.bank_reject(args, "alice") is True
     bank.reject_transfer.assert_called_once_with(3, "alice")
 
@@ -423,7 +422,7 @@ def test_bank_reject_rejects_none_id():
     bank = _make_bank_mock()
     with patch.object(tool, "_bank_service", return_value=bank), \
          patch.object(tool.io, "inputinteger", return_value=None), \
-         patch.object(tool.io, "echo") as echo:
+         patch.object(tool.io, "echo"):
         assert tool.bank_reject(args, "alice") is False
     bank.reject_transfer.assert_not_called()
 

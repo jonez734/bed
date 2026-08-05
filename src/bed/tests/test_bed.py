@@ -9,7 +9,6 @@ import json
 import os
 import sys
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import websockets
@@ -158,7 +157,6 @@ class TestBEDParseArgs(unittest.IsolatedAsyncioTestCase):
         """A non-existent --router FQCN routes through bbsengine6.module.load,
         which calls io.echo_traceback and re-raises; main_async emits an
         exit message and exits 1."""
-        import importlib
         import os
         import tempfile
         from unittest.mock import patch
@@ -537,7 +535,6 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
 
     def test_config_file_missing_exits(self):
         """--config pointing at a missing file causes main_async to sys.exit(1)."""
-        import importlib
         import os
         import tempfile
         from unittest.mock import patch
@@ -792,8 +789,6 @@ class TestPidfile(unittest.TestCase):
     def test_pidfile_optional(self):
         """_write_pidfile is not called when args.pidfile is None (no file
         is created in the temp dir)."""
-        import os
-        from bed.main import _write_pidfile
 
         self.assertIsNone(getattr(type("A", (), {"pidfile": None})(), "pidfile"))
 
@@ -860,7 +855,6 @@ class TestPidfileIntegration(unittest.IsolatedAsyncioTestCase):
         path. Returns the task. The caller awaits the task and
         asserts on the exception.
         """
-        import importlib
         from unittest.mock import MagicMock, patch
 
         bed_main = importlib.import_module("bed.main")
@@ -929,7 +923,6 @@ class TestPidfileIntegration(unittest.IsolatedAsyncioTestCase):
     async def test_main_async_refuses_live_pid_collision(self):
         """A pre-existing pidfile with a 'live' pid causes main_async to
         sys.exit(1) without overwriting the file."""
-        import importlib
         from unittest.mock import MagicMock, patch
 
         bed_main = importlib.import_module("bed.main")
@@ -943,7 +936,6 @@ class TestPidfileIntegration(unittest.IsolatedAsyncioTestCase):
                 return  # pretend it succeeded
             return os.kill(pid, sig)
 
-        import tempfile
         cfg_path = os.path.join(self._tmp, "bed.json")
         with open(cfg_path, "w") as f:
             f.write("{}")
@@ -1155,7 +1147,6 @@ class TestPhase2BED(unittest.IsolatedAsyncioTestCase):
         """start() creates _session_registry BEFORE constructing the
         WebSocketServer so a failure in _start_auth cannot leak a
         half-wired server."""
-        import importlib
 
         from bbsengine6.net.defaultrouter import DefaultRouter
         from bed.main import BED
@@ -1406,7 +1397,6 @@ class TestSighupHandler(unittest.TestCase):
         warning and returns without touching anything."""
         # bed/__init__.py shadows ``bed.main`` with the ``main()`` function,
         # so we go through importlib to reach the module.
-        import importlib
 
         bed_main = importlib.import_module("bed.main")
 

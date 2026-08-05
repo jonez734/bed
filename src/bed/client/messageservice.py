@@ -10,9 +10,8 @@ down both the server-side and client-side state.
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from bed.client.connection import BedConnection, PushHandler
 from bed.client.exceptions import BedUnavailable
