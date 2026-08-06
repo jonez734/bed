@@ -69,6 +69,36 @@ and UAPI Linux File System Hierarchy specification.
 - Update `mcfeely-authd.conf` destination to `/etc/postoffice/`
 - Update systemd service destination to `/usr/lib/systemd/system/`
 
+## Shared venv under `zoid6`
+
+zoid6 is the anchor package for a single shared venv at `/var/lib/zoid6/venv`,
+owned by a `zoid6` system user/group. All bbsengine6 services (bed, postoffice,
+casino, empyre, murdermotel, etc.) are installed into it so any service user can
+`import` any package. `deploytool` owns the topology — per-project Makefiles do
+not hard-code venv paths.
+
+### 1. Makefile venv defaults
+- Both Makefiles use `VENV_DIR ?= /var/lib/zoid6/venv` (overridable, no longer a
+  per-service path like `/var/lib/bed/venv`)
+- `VENV_OWNER ?= zoid6`, `VENV_GROUP ?= zoid6`
+
+### 2. Install behavior
+- `install-venv` builds wheels for `../bbsengine6/py`, `../getdate_next`, and
+  the project, then installs them via `sudo -u $(VENV_OWNER) $(VENV_DIR)/bin/pip install`
+- The anchor venv is created by `make install-venv` in `zoid6/src` (sysusers,
+  tmpfiles, venv); `deploytool postoffice bed zoid6` populates it
+
+### 3. systemd units
+- `ExecStart` uses the `@VENV_DIR@` placeholder; `install-systemd` substitutes
+  it with `$(VENV_DIR)` at install time
+- Service `User=` stays per-service (bed, postoffice) even though the venv is
+  shared; the sysusers bridge (`m bed zoid6`, `m postoffice zoid6`) grants the
+  zoid6 group so service users can read the shared venv
+
+### 4. SELinux
+- `restorecon` / `semanage` rules target `$(VENV_DIR)/bin(/.*)?`, i.e. the shared
+  `/var/lib/zoid6/venv/bin/`
+
 ## Files Modified
 
 | Project | File | Change |
