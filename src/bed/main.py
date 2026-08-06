@@ -8,7 +8,7 @@ import asyncio
 import os
 import signal
 import sys
-from typing import Any, Optional, Type
+from typing import Any, Dict, Optional, Type
 
 from bbsengine6 import io
 from bbsengine6.common import safe_path
@@ -448,10 +448,32 @@ class BED:
 
             session_registry = self._session_registry
 
-            async def _pre_dispatch(websocket: Any) -> None:
-                state = session_registry.get_by_websocket(id(websocket))
+            async def _pre_dispatch(websocket: Any, message: Dict[str, Any]) -> None:
+                ws_id = str(websocket.id)
+                state = session_registry.get_by_websocket(ws_id)
                 if state is not None:
                     set_current_role(state.moniker)
+                    moniker = state.moniker
+                    session_id = state.session_id
+                else:
+                    moniker = None
+                    session_id = ws_id
+                msg_type = message.get("type") or ""
+                if msg_type in ("bank_add", "bank_remove"):
+                    amount = message.get("amount")
+                    description = message.get("description") or ""
+                    io.echo(
+                        f"router: in session_id={session_id} "
+                        f"moniker={moniker or ''} type={msg_type} "
+                        f"amount={amount} description={description}",
+                        level="info",
+                    )
+                else:
+                    io.echo(
+                        f"router: in session_id={session_id} "
+                        f"moniker={moniker or ''} type={msg_type}",
+                        level="info",
+                    )
 
             self.server._pre_dispatch = _pre_dispatch
 
