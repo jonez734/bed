@@ -101,6 +101,7 @@ uninstall-tmpfiles:
 VENV_DIR ?= /var/lib/zoid6/venv
 VENV_OWNER ?= zoid6
 VENV_GROUP ?= zoid6
+VENV_SHARED ?= /var/lib/zoid6/venv
 
 WHEEL_DIR = /tmp/$(PROJECT)-$$
 BBSENGINE_DIR = $(CURDIR)/../bbsengine6/py
@@ -127,6 +128,12 @@ install-venv:
 	@echo "Installed bed into $(VENV_DIR)"
 
 uninstall-venv:
+	@if [ "$(VENV_DIR)" = "$(VENV_SHARED)" ] && [ -z "$(VENV_FORCE_UNINSTALL)" ]; then \
+		echo "Error: $(VENV_DIR) is the shared zoid6 venv"; \
+		echo "Removing it would break other services. Use 'make -C ../zoid6/src uninstall-venv' instead,"; \
+		echo "or set VENV_FORCE_UNINSTALL=1 to override."; \
+		exit 1; \
+	fi
 	-rm -rf $(VENV_DIR)
 	@echo "Removed $(VENV_DIR)"
 
