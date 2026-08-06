@@ -23,10 +23,10 @@ help:
 	@echo "  uninstall-sysusers Remove sysusers.d/bed.conf"
 	@echo "  install-tmpfiles   Create /var/log/bed via systemd-tmpfiles"
 	@echo "  uninstall-tmpfiles Remove tmpfiles.d/bed.conf"
-	@echo "  install-venv       Create venv and install bed wheel at /var/lib/bed/venv"
-	@echo "  uninstall-venv     Remove /var/lib/bed/venv"
+	@echo "  install-venv       Install bed wheel into shared venv at $(VENV_DIR)"
+	@echo "  uninstall-venv     Remove $(VENV_DIR)"
 	@echo "  restorecon         Relabel venv binaries for SELinux (Fedora/RHEL)"
-	@echo "  install-systemd    Copy bed.service to /usr/lib/systemd/system/ and daemon-reload"
+	@echo "  install-systemd    Install bed.service (@VENV_DIR@ templated) and daemon-reload"
 	@echo "  uninstall-systemd  Stop, disable, and remove the bed.service unit"
 	@echo "  install-etc        Install /etc/bed/ config from factory defaults"
 	@echo "  uninstall-etc      Remove installed config files"
@@ -98,7 +98,9 @@ uninstall-tmpfiles:
 	-sudo rm -f $(TMPFILES_DST)
 	@echo "Removed $(TMPFILES_DST)"
 
-VENV_DIR = /var/lib/bed/venv
+VENV_DIR ?= /var/lib/zoid6/venv
+VENV_OWNER ?= zoid6
+VENV_GROUP ?= zoid6
 
 WHEEL_DIR = /tmp/$(PROJECT)-$$
 BBSENGINE_DIR = $(CURDIR)/../bbsengine6/py
@@ -106,8 +108,8 @@ GETDATE_DIR = $(CURDIR)/../getdate_next
 
 install-venv:
 	@command -v sudo >/dev/null 2>&1 || { echo "Error: sudo required"; exit 1; }
-	@sudo -u bed test -d "$(VENV_DIR)" || sudo -u bed $(PYTHON) -m venv "$(VENV_DIR)"
-	sudo -u bed $(VENV_DIR)/bin/pip install --upgrade pip
+	@sudo -u $(VENV_OWNER) test -d "$(VENV_DIR)" || sudo -u $(VENV_OWNER) $(PYTHON) -m venv "$(VENV_DIR)"
+	sudo -u $(VENV_OWNER) $(VENV_DIR)/bin/pip install --upgrade pip
 	$(PYTHON) -m ensurepip --upgrade >/dev/null 2>&1 || true
 	$(PYTHON) -m pip install build setuptools wheel
 	mkdir -p $(WHEEL_DIR)
@@ -117,7 +119,7 @@ install-venv:
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(BBSENGINE_DIR)
 	$(MAKE) version
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
-	sudo -u bed $(VENV_DIR)/bin/pip install $(WHEEL_DIR)/*.whl
+	sudo -u $(VENV_OWNER) $(VENV_DIR)/bin/pip install $(WHEEL_DIR)/*.whl
 	rm -rf $(WHEEL_DIR)
 	@command -v semanage >/dev/null 2>&1 && \
 		sudo semanage fcontext -a -t bin_t "$(VENV_DIR)/bin(/.*)?" 2>/dev/null || true
@@ -151,7 +153,9 @@ setup-db:
 	@echo "Database bootstrapped. Run: systemctl enable --now $(PROJECT)"
 
 install-systemd:
-	sudo $(RSYNC) $(UNIT_SRC) $(UNIT_DST)
+	sed 's|@VENV_DIR@|$(VENV_DIR)|g' $(UNIT_SRC) | sudo tee $(UNIT_DST) > /dev/null
+	sudo chmod 0644 $(UNIT_DST)
+	sudo chown root:root $(UNIT_DST)
 	sudo systemctl daemon-reload
 	@echo "Installed $(UNIT_DST). Run: systemctl enable --now $(PROJECT)"
 
