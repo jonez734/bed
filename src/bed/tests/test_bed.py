@@ -144,14 +144,16 @@ class TestBEDParseArgs(unittest.IsolatedAsyncioTestCase):
             args = self._parse_args()
             self.assertEqual(args.router, "mymodule.MyRouter")
 
-    def test_moniker_auth_router_resolves(self):
-        """--router zoid6.api.handler.MonikerAuthRouter resolves via load_router_class."""
+    def test_external_router_resolves(self):
+        """--router bbsengine6.net.defaultrouter.DefaultRouter resolves via load_router_class.
+        Uses a router class from bed's own bbsengine6 dependency (not a downstream
+        consumer like zoid6) so this test does not require zoid6 to be installed."""
         from bed.main import load_router_class
 
-        router_class = load_router_class("zoid6.api.handler.MonikerAuthRouter")
+        router_class = load_router_class("bbsengine6.net.defaultrouter.DefaultRouter")
         self.assertTrue(callable(router_class))
-        from zoid6.api.monikerrouter import MonikerAuthRouter
-        self.assertIs(router_class, MonikerAuthRouter)
+        from bbsengine6.net.defaultrouter import DefaultRouter
+        self.assertIs(router_class, DefaultRouter)
 
     def test_load_router_class_bad_fqcn_emits_traceback_and_exits(self):
         """A non-existent --router FQCN routes through bbsengine6.module.load,

@@ -69,35 +69,52 @@ and UAPI Linux File System Hierarchy specification.
 - Update `mcfeely-authd.conf` destination to `/etc/postoffice/`
 - Update systemd service destination to `/usr/lib/systemd/system/`
 
-## Shared venv under `zoid6`
+## Per-service venv; consumers install the bed wheel
 
-zoid6 is the anchor package for a single shared venv at `/var/lib/zoid6/venv`,
-owned by a `zoid6` system user/group. All bbsengine6 services (bed, postoffice,
-casino, empyre, murdermotel, etc.) are installed into it so any service user can
-`import` any package. `deploytool` owns the topology — per-project Makefiles do
-not hard-code venv paths.
+`bed` is the foundational WebSocket daemon. It owns a per-service venv at
+`/var/lib/bed/venv` (owned by `bed:bed`). It does **not** share a venv with
+any other package. The dependency direction is:
+
+```
+games  ──consume──>  zoid6  ──consume──>  bed  ──consume──>  bbsengine6
+                                       └────consume────>  websockets
+```
+
+`bed` does not depend on `zoid6`. `bed/pyproject.toml` only lists `bbsengine6`
+and `websockets` as runtime dependencies. Consumers of `bed` (`zoid6`, games,
+`bbsengine6`) own their own venvs and install the bed wheel into theirs via
+`pip install`.
 
 ### 1. Makefile venv defaults
-- Both Makefiles use `VENV_DIR ?= /var/lib/zoid6/venv` (overridable, no longer a
-  per-service path like `/var/lib/bed/venv`)
-- `VENV_OWNER ?= zoid6`, `VENV_GROUP ?= zoid6`
+- `bed/Makefile` uses `VENV_DIR ?= /var/lib/bed/venv`,
+  `VENV_OWNER ?= bed`, `VENV_GROUP ?= bed`. Each service Makefile declares its
+  own venv path and owner; the topology is per-service, not shared.
+- `zoid6/src/Makefile` uses `VENV_DIR ?= /var/lib/zoid6/venv`,
+  `VENV_OWNER ?= zoid6`, `VENV_GROUP ?= zoid6`.
+- Each consumer Makefile that imports `bed` (currently `zoid6`) builds and
+  installs the bed wheel as part of `install-venv`.
 
 ### 2. Install behavior
-- `install-venv` builds wheels for `../bbsengine6/py`, `../getdate_next`, and
-  the project, then installs them via `sudo -u $(VENV_OWNER) $(VENV_DIR)/bin/pip install`
-- The anchor venv is created by `make install-venv` in `zoid6/src` (sysusers,
-  tmpfiles, venv); `deploytool postoffice bed zoid6` populates it
+- `bed/Makefile` `install-venv` builds wheels for `../bbsengine6/py`,
+  `../getdate_next`, and `bed` itself, then installs them into
+  `/var/lib/bed/venv` via `sudo -u bed /var/lib/bed/venv/bin/pip install`.
+- `zoid6/src/Makefile` `install-venv` builds the `bed` wheel and installs it
+  into `/var/lib/zoid6/venv` alongside the zoid6 wheel, so `import bed` works
+  inside the zoid6 daemon.
+- The two venvs are independent: removing one does not affect the other.
 
 ### 3. systemd units
 - `ExecStart` uses the `@VENV_DIR@` placeholder; `install-systemd` substitutes
-  it with `$(VENV_DIR)` at install time
-- Service `User=` stays per-service (bed, postoffice) even though the venv is
-  shared; the sysusers bridge (`m bed zoid6`, `m postoffice zoid6`) grants the
-  zoid6 group so service users can read the shared venv
+  it with `$(VENV_DIR)` at install time. Each service unit points at its own
+  per-service venv (`/var/lib/bed/venv/bin/bed` for `bed.service`,
+  `/var/lib/zoid6/venv/bin/zoid6` for `zoid6.service`).
+- Service `User=` is per-service (`bed`, `zoid6`). No cross-service group
+  bridge is required because the venvs are not shared.
 
 ### 4. SELinux
-- `restorecon` / `semanage` rules target `$(VENV_DIR)/bin(/.*)?`, i.e. the shared
-  `/var/lib/zoid6/venv/bin/`
+- `restorecon` / `semanage` rules target `$(VENV_DIR)/bin(/.*)?`. Each Makefile
+  labels its own per-service venv (`/var/lib/bed/venv/bin` for `bed`,
+  `/var/lib/zoid6/venv/bin` for `zoid6`).
 
 ## Files Modified
 

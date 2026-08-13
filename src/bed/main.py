@@ -281,8 +281,8 @@ def _apply_bind_config(args: argparse.Namespace, cfg: dict) -> None:
 
 def _apply_database_config(args: argparse.Namespace, cfg: dict) -> None:
     """Apply database.* from a loaded config when the CLI did not explicitly
-    set those flags. The zoid6 bed.json only carries name/host/port; user
-    and password stay on the CLI or env.
+    set those flags. The shipped factory config only carries name/host/port;
+    user and password stay on the CLI or env.
 
     Accepts both nested (``{"database": {"user": ...}}``) and flat
     (``{"databaseuser": ...}``) keys.  The flat form is produced when
@@ -291,7 +291,7 @@ def _apply_database_config(args: argparse.Namespace, cfg: dict) -> None:
     under a ``"database"`` section, so we must handle it here as a
     fallback.
 
-    A libpq-style ``"dsn"`` key (e.g. ``"host=db.local port=5432 dbname=zoid6
+    A libpq-style ``"dsn"`` key (e.g. ``"host=db.local port=5432 dbname=myapp
     user=bed"``) is also accepted as a shorthand for the individual
     components.  Recognized components are ``dbname``, ``host``, ``port``,
     ``user``, ``password``; only those that the CLI did not set explicitly

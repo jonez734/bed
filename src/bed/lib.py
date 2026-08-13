@@ -51,11 +51,9 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         "--router",
         default="bbsengine6.net.defaultrouter.DefaultRouter",
         help=(
-            "Module path to MessageRouter class. Built-in examples: "
+            "Module path to MessageRouter class. Built-in example: "
             "'bbsengine6.net.defaultrouter.DefaultRouter' (no-credential stub "
-            "for development and wscat smoke tests) and "
-            "'zoid6.api.handler.MonikerAuthRouter' (verifies the moniker "
-            "exists in the database; password still not checked). "
+            "for development and wscat smoke tests). "
             "Any router other than DefaultRouter will additionally be wired "
             "to bed's AuthService (bearer tokens, reconnect, refresh, revoke)."
         ),
@@ -103,8 +101,7 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         help=(
             "How AuthService validates login credentials. 'password' "
             "(default) calls bbsengine6.member.checkpassword. "
-            "'moniker-only' mirrors zoid6.api.handler.MonikerAuthRouter "
-            "and accepts any password once the moniker resolves."
+            "'moniker-only' accepts any password once the moniker resolves."
         ),
     )
     parentparser.add_argument(

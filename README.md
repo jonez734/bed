@@ -56,16 +56,18 @@ DEFINER functions), then creates the `bed` role with LOGIN and grants
 it USAGE on the `engine` schema.  The role is idempotent — re-running
 after the role already exists is a no-op.
 
-### systemd service (shared venv)
+### systemd service (per-service venv)
 
 The system Python may be too new for `bed`'s requirement (`>=3.9,<3.13`).
-bed installs into the shared bbsengine6 venv at `/var/lib/zoid6/venv`
-(owned by `zoid6:zoid6`), so any service user can `import` any package.
-Create the anchor venv from zoid6, then let deploytool populate it:
+`bed` owns a per-service venv at `/var/lib/bed/venv` (owned by `bed:bed`).
+Consumers of bed (`zoid6`, games) own their own venvs and install the bed
+wheel into theirs via `pip install`. The dep direction is `zoid6 → bed`;
+bed does not depend on zoid6.
+
+One-command install:
 
 ```bash
-cd /path/to/zoid6/src && sudo make install-sysusers install-tmpfiles install-venv
-deploytool postoffice bed zoid6
+cd /path/to/bed && sudo make install && sudo systemctl enable --now bed
 ```
 
 Install the systemd unit and start the service:
@@ -91,15 +93,15 @@ owner may not have access to the source tree).
 #### SELinux
 
 On systems with SELinux enforcing (Fedora, RHEL, CentOS), the venv binaries
-under `/var/lib/zoid6/venv/bin/` get labeled `var_lib_t` by default.
+under `/var/lib/bed/venv/bin/` get labeled `var_lib_t` by default.
 systemd cannot execute scripts with this context — it causes a 203/EXEC error.
 
 `make install-venv` adds a `semanage` rule and runs `restorecon` automatically
 when available. If you install manually, run:
 
 ```bash
-sudo semanage fcontext -a -t bin_t "/var/lib/zoid6/venv/bin(/.*)?"
-sudo restorecon -R /var/lib/zoid6/venv/bin/
+sudo semanage fcontext -a -t bin_t "/var/lib/bed/venv/bin(/.*)?"
+sudo restorecon -R /var/lib/bed/venv/bin/
 ```
 
 Without `semanage`, `restorecon` will restore the default `var_lib_t` label
@@ -116,9 +118,9 @@ This chains: `install-sysusers` → `install-tmpfiles` → `install-venv` →
 
 The unit at `src/bed/daemon/bed.service` runs as `User=bed` and uses a
 templated `ExecStart=@VENV_DIR@/bin/bed --config /etc/bed/bed.json`
-(`install-systemd` substitutes `$(VENV_DIR)` → `/var/lib/zoid6/venv`).
-Any Python package installed into that shared venv (router games, database
-drivers, …) is available at runtime.
+(`install-systemd` substitutes `$(VENV_DIR)` → `/var/lib/bed/venv`).
+bed does not share this venv with any other service; any consumer that
+needs `import bed` installs the bed wheel into its own per-service venv.
 
 In another terminal:
 

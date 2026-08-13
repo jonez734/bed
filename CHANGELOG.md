@@ -12,6 +12,39 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: fix inverted install dependency (`sudo -u zoid6`, shared venv)
+
+`bed/Makefile` was running `sudo -u zoid6 …` and installing into
+`/var/lib/zoid6/venv`, but bed is the foundational daemon and must
+not depend on zoid6. The dep direction is `zoid6 → bed`, not
+`bed → zoid6`.
+
+- `bed/Makefile` `VENV_DIR`, `VENV_OWNER`, `VENV_GROUP` reverted
+  to `bed` (i.e. `/var/lib/bed/venv`, owner `bed:bed`).
+  `VENV_SHARED` removed.
+- `bed/Makefile` `uninstall-venv` no longer has the
+  `VENV_FORCE_UNINSTALL` guard; per-service venv ownership means
+  removing `/var/lib/bed/venv` only affects bed.
+- `deploytool/src/deploytool/lib.py:57` `VENV_LAYOUT["bed"]` updated
+  to `/var/lib/bed/venv`. (Other zoid6-venv consumers — `zoid6`,
+  `casino`, `empyre`, `murdermotel`, `mistermcfeely`, `bbsengine6`,
+  etc. — still own `/var/lib/zoid6/venv` legitimately.)
+- `zoid6/src/Makefile` `install-venv` now also builds and installs
+  the bed wheel, so `import bed` keeps working from inside the
+  zoid6 daemon.
+- `bed/FHS.md`, `bed/README.md` updated to reflect the corrected
+  per-service topology.
+- `bed/src/bed/tests/test_bed.py` `test_moniker_auth_router_resolves`
+  rewritten as `test_external_router_resolves` using
+  `bbsengine6.net.defaultrouter.DefaultRouter` (a bed dependency)
+  instead of `zoid6.api.handler.MonikerAuthRouter`. The test no
+  longer requires zoid6 to be installed.
+- `bed/src/bed/main.py` / `lib.py` docstrings and argparse help
+  text scrubbed of zoid6 references; examples use generic names.
+
+Reverts the design intent of commits `1b3027e` (shared-venv switch)
+and `90ea05a` (VENV_FORCE_UNINSTALL guard); preserves their history.
+
 ### bed: add `commit-version` target; factory: disable `autorestart`, enable `message_service`
 
 - `Makefile`: new `commit-version` target that `git add`s the freshly
