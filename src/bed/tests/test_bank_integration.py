@@ -153,6 +153,13 @@ async def _start_bed_with_bank(bank_mock: Any) -> tuple[Any, int]:
                     balance=7,
                     loginid="alice_os",
                 )
+            if moniker == "root" and password == "rootpw":
+                return MemberInfo(
+                    moniker="root",
+                    is_sysop=True,
+                    balance=0,
+                    loginid="root_os",
+                )
             return None
 
     registry = SessionRegistry()
@@ -477,7 +484,7 @@ class TestBankOperationsWireEndToEnd(unittest.IsolatedAsyncioTestCase):
         server, port = await _start_bed_with_bank(bank)
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
-                await _authenticate(ws)
+                await _authenticate(ws, moniker="root", password="rootpw")
                 await ws.send(json.dumps(
                     {
                         "type": "bank_pending",
@@ -504,7 +511,7 @@ class TestBankOperationsWireEndToEnd(unittest.IsolatedAsyncioTestCase):
         server, port = await _start_bed_with_bank(bank)
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
-                await _authenticate(ws)
+                await _authenticate(ws, moniker="root", password="rootpw")
                 await ws.send(json.dumps({"type": "bank_list_all"}))
                 reply = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
             self.assertEqual(reply["type"], "bank_list_all")
@@ -516,6 +523,225 @@ class TestBankOperationsWireEndToEnd(unittest.IsolatedAsyncioTestCase):
                 ],
             )
             bank.list_all.assert_called_once_with()
+        finally:
+            await server.stop()
+
+
+# ---------------------------------------------------------------------
+# Authentication gate: every bank_* message must require a session.
+
+
+class TestBankAuthGateWireEndToEnd(unittest.IsolatedAsyncioTestCase):
+    """Wire-level tests for the authentication / ownership gate.
+
+    Boots the same WebSocketServer harness as the other integration
+    tests but skips the ``auth`` step: a fresh websocket should be
+    rejected for every ``bank_*`` request with ``code=not_authenticated``
+    and ``recoverable=True``. Cross-moniker requests after a successful
+    ``auth`` must come back as ``code=forbidden``.
+    """
+
+    async def _send_and_recv(self, ws, payload):
+        await ws.send(json.dumps(payload))
+        return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+
+    async def test_unauthenticated_balance_rejected(self):
+        import websockets
+
+        bank = _make_bank_mock(balance=7)
+        server, port = await _start_bed_with_bank(bank)
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                reply = await self._send_and_recv(
+                    ws, {"type": "bank_balance", "moniker": "alice"}
+                )
+            self.assertEqual(reply["type"], "error")
+            self.assertEqual(reply["code"], "not_authenticated")
+            self.assertTrue(reply["recoverable"])
+            bank.get_balance.assert_not_called()
+        finally:
+            await server.stop()
+
+    async def test_unauthenticated_add_rejected(self):
+        import websockets
+
+        bank = _make_bank_mock()
+        server, port = await _start_bed_with_bank(bank)
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                reply = await self._send_and_recv(
+                    ws,
+                    {
+                        "type": "bank_add",
+                        "moniker": "alice",
+                        "amount": 5,
+                    },
+                )
+            self.assertEqual(reply["code"], "not_authenticated")
+            self.assertTrue(reply["recoverable"])
+            bank.add_funds.assert_not_called()
+        finally:
+            await server.stop()
+
+    async def test_unauthenticated_remove_rejected(self):
+        import websockets
+
+        bank = _make_bank_mock()
+        server, port = await _start_bed_with_bank(bank)
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                reply = await self._send_and_recv(
+                    ws,
+                    {
+                        "type": "bank_remove",
+                        "moniker": "alice",
+                        "amount": 5,
+                    },
+                )
+            self.assertEqual(reply["code"], "not_authenticated")
+            bank.remove_funds.assert_not_called()
+        finally:
+            await server.stop()
+
+    async def test_unauthenticated_history_rejected(self):
+        import websockets
+
+        bank = _make_bank_mock()
+        server, port = await _start_bed_with_bank(bank)
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                reply = await self._send_and_recv(
+                    ws, {"type": "bank_history", "moniker": "alice"}
+                )
+            self.assertEqual(reply["code"], "not_authenticated")
+            bank.get_history.assert_not_called()
+        finally:
+            await server.stop()
+
+    async def test_unauthenticated_transfer_request_rejected(self):
+        import websockets
+
+        bank = _make_bank_mock()
+        server, port = await _start_bed_with_bank(bank)
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                reply = await self._send_and_recv(
+                    ws,
+                    {
+                        "type": "bank_transfer_request",
+                        "from": "alice",
+                        "to": "bob",
+                        "amount": 25,
+                        "requested_by": "alice",
+                    },
+                )
+            self.assertEqual(reply["code"], "not_authenticated")
+            bank.transfer.assert_not_called()
+        finally:
+            await server.stop()
+
+    async def test_unauthenticated_transfer_approve_rejected(self):
+        import websockets
+
+        bank = _make_bank_mock()
+        server, port = await _start_bed_with_bank(bank)
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                reply = await self._send_and_recv(
+                    ws,
+                    {
+                        "type": "bank_transfer_approve",
+                        "transfer_id": 5,
+                        "responded_by": "alice",
+                    },
+                )
+            self.assertEqual(reply["code"], "not_authenticated")
+            bank.approve_transfer.assert_not_called()
+        finally:
+            await server.stop()
+
+    async def test_unauthenticated_transfer_reject_rejected(self):
+        import websockets
+
+        bank = _make_bank_mock()
+        server, port = await _start_bed_with_bank(bank)
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                reply = await self._send_and_recv(
+                    ws,
+                    {
+                        "type": "bank_transfer_reject",
+                        "transfer_id": 5,
+                        "responded_by": "alice",
+                    },
+                )
+            self.assertEqual(reply["code"], "not_authenticated")
+            bank.reject_transfer.assert_not_called()
+        finally:
+            await server.stop()
+
+    async def test_unauthenticated_pending_rejected(self):
+        import websockets
+
+        bank = _make_bank_mock()
+        server, port = await _start_bed_with_bank(bank)
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                reply = await self._send_and_recv(
+                    ws, {"type": "bank_pending", "moniker": "alice"}
+                )
+            self.assertEqual(reply["code"], "not_authenticated")
+            bank.get_pending_transfers.assert_not_called()
+        finally:
+            await server.stop()
+
+    async def test_unauthenticated_list_all_rejected(self):
+        import websockets
+
+        bank = _make_bank_mock()
+        server, port = await _start_bed_with_bank(bank)
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                reply = await self._send_and_recv(
+                    ws, {"type": "bank_list_all"}
+                )
+            self.assertEqual(reply["code"], "not_authenticated")
+            bank.list_all.assert_not_called()
+        finally:
+            await server.stop()
+
+    async def test_authenticated_cross_moniker_balance_forbidden(self):
+        """alice authenticated must not be able to read bob's balance."""
+        import websockets
+
+        bank = _make_bank_mock(balance=99)
+        server, port = await _start_bed_with_bank(bank)
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                await _authenticate(ws)
+                reply = await self._send_and_recv(
+                    ws, {"type": "bank_balance", "moniker": "bob"}
+                )
+            self.assertEqual(reply["type"], "error")
+            self.assertEqual(reply["code"], "forbidden")
+            bank.get_balance.assert_not_called()
+        finally:
+            await server.stop()
+
+    async def test_authenticated_list_all_forbidden_for_non_sysop(self):
+        """alice (non-sysop) authenticated must not see list_all."""
+        import websockets
+
+        bank = _make_bank_mock()
+        server, port = await _start_bed_with_bank(bank)
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                await _authenticate(ws)
+                reply = await self._send_and_recv(
+                    ws, {"type": "bank_list_all"}
+                )
+            self.assertEqual(reply["code"], "forbidden")
+            bank.list_all.assert_not_called()
         finally:
             await server.stop()
 
@@ -570,7 +796,7 @@ class TestBankOperationsAllTogetherWire(unittest.IsolatedAsyncioTestCase):
         try:
             uri = f"ws://127.0.0.1:{port}/"
             async with websockets.connect(uri) as ws:
-                await _authenticate(ws)
+                await _authenticate(ws, moniker="root", password="rootpw")
 
                 async def call(payload):
                     await ws.send(json.dumps(payload))

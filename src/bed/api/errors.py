@@ -15,6 +15,7 @@ CODE_BAD_CREDENTIALS = "bad_credentials"
 CODE_BED_SECRET_INSECURE = "bed_secret_insecure"
 CODE_MISSING_CREDENTIALS = "missing_credentials"
 CODE_DATABASE_ERROR = "database_error"
+CODE_FORBIDDEN = "forbidden"
 
 
 def error_envelope(code: str, message: str, *, recoverable: bool = False) -> dict:
@@ -38,6 +39,11 @@ def not_authenticated() -> dict:
         "Authentication required",
         recoverable=True,
     )
+
+
+def forbidden(message: str = "Operation not permitted for this account") -> dict:
+    """Build a forbidden envelope for ownership / authorization failures."""
+    return error_envelope(CODE_FORBIDDEN, message, recoverable=False)
 
 
 _TOKEN_KEYS = frozenset({"token", "tokens", "old_token", "new_token"})
