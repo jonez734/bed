@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import datetime
 import logging
 from typing import Any, Dict, Optional
 
@@ -35,6 +36,33 @@ logger = logging.getLogger(__name__)
 CODE_MISSING_MONIKER = "missing_moniker"
 CODE_INVALID_AMOUNT = "invalid_amount"
 CODE_OPERATION_FAILED = "operation_failed"
+
+
+def _jsonable(value: Any) -> Any:
+    """Coerce a single value into something ``json.dumps`` can encode.
+
+    ``datetime.datetime`` / ``datetime.date`` -> ISO 8601 string;
+    ``Decimal`` -> ``int`` (banks track integer cents); everything
+    else passes through untouched. Used to make DB row dicts safe
+    for the WebSocket JSON transport.
+    """
+    if isinstance(value, datetime.datetime):
+        return value.isoformat()
+    if isinstance(value, datetime.date):
+        return value.isoformat()
+    try:
+        from decimal import Decimal
+
+        if isinstance(value, Decimal):
+            return int(value)
+    except ImportError:  # pragma: no cover - decimal is stdlib
+        pass
+    return value
+
+
+def _jsonable_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Return ``row`` with every value coerced via :func:`_jsonable`."""
+    return {key: _jsonable(value) for key, value in row.items()}
 
 
 class BankService(BaseService):
@@ -249,7 +277,7 @@ class BankService(BaseService):
         return {
             "type": "bank_history",
             "moniker": moniker,
-            "transactions": list(rows),
+            "transactions": [_jsonable_row(row) for row in rows],
         }
 
     async def _handle_transfer_request(
@@ -390,7 +418,7 @@ class BankService(BaseService):
             "type": "bank_pending",
             "moniker": moniker,
             "is_sysop": is_sysop,
-            "transfers": list(rows),
+            "transfers": [_jsonable_row(row) for row in rows],
         }
 
     async def _handle_list_all(

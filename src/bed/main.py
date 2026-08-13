@@ -499,6 +499,37 @@ class BED:
                         f"moniker={moniker or ''} type={msg_type}",
                         level="debug",
                     )
+                if msg_type.startswith("bank_") and isinstance(response, dict):
+                    ok = response.get("ok")
+                    if ok is False:
+                        io.echo(
+                            f"router: out session_id={session_id} "
+                            f"loginid={loginid or ''} "
+                            f"moniker={moniker or ''} type={msg_type} "
+                            f"ok=False code={response.get('code') or ''} "
+                            f"message={response.get('message') or ''}",
+                            level="debug",
+                        )
+                    else:
+                        out_fields = []
+                        for key in (
+                            "balance",
+                            "new_balance",
+                            "transfer_id",
+                            "amount",
+                            "transactions",
+                            "transfers",
+                            "accounts",
+                        ):
+                            if key in response:
+                                out_fields.append(f"{key}={response[key]}")
+                        io.echo(
+                            f"router: out session_id={session_id} "
+                            f"loginid={loginid or ''} "
+                            f"moniker={moniker or ''} type={msg_type} "
+                            f"ok=True {' '.join(out_fields)}",
+                            level="debug",
+                        )
 
             self.server._pre_dispatch = _pre_dispatch
             self.server._post_dispatch = _post_dispatch
