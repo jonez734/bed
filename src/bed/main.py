@@ -472,10 +472,11 @@ class BED:
                 # here carries the populated loginid/moniker for
                 # every message, including the auth message itself.
                 # ``state.loginid`` is set by the credential provider
-                # from ``engine.__member.loginid``. When the lookup
-                # failed (DB outage, NULL column, no session yet) we
-                # leave the field empty rather than substitute an
-                # unrelated value.
+                # from ``engine.__member.loginid``. When no session
+                # has been bound yet (pre-auth traffic, or a session
+                # whose credential lookup came back empty) we render
+                # the fields as ``unbound`` rather than printing
+                # blank values that look like a zero-length loginid.
                 ws_id = str(websocket.id)
                 state = session_registry.get_by_websocket(ws_id)
                 if state is not None:
@@ -486,22 +487,29 @@ class BED:
                     moniker = None
                     loginid = None
                     session_id = ws_id
+                # Marker emitted when the websocket has no bound
+                # SessionState (e.g. pre-auth traffic). Keeps the
+                # log line greppable while clearly distinguishing
+                # "no auth yet" from "auth but loginid is empty".
+                UNBOUND = "unbound"
+                loginid_str = loginid or UNBOUND
+                moniker_str = moniker or UNBOUND
                 msg_type = message.get("type") or ""
                 if msg_type in ("bank_add", "bank_remove"):
                     amount = message.get("amount")
                     description = message.get("description") or ""
                     io.echo(
                         f"router: in session_id={session_id} "
-                        f"loginid={loginid or ''} "
-                        f"moniker={moniker or ''} type={msg_type} "
+                        f"loginid={loginid_str} "
+                        f"moniker={moniker_str} type={msg_type} "
                         f"amount={amount} description={description}",
                         level="debug",
                     )
                 else:
                     io.echo(
                         f"router: in session_id={session_id} "
-                        f"loginid={loginid or ''} "
-                        f"moniker={moniker or ''} type={msg_type}",
+                        f"loginid={loginid_str} "
+                        f"moniker={moniker_str} type={msg_type}",
                         level="debug",
                     )
                 if msg_type.startswith("bank_") and isinstance(response, dict):
@@ -509,8 +517,8 @@ class BED:
                     if ok is False:
                         io.echo(
                             f"router: out session_id={session_id} "
-                            f"loginid={loginid or ''} "
-                            f"moniker={moniker or ''} type={msg_type} "
+                            f"loginid={loginid_str} "
+                            f"moniker={moniker_str} type={msg_type} "
                             f"ok=False code={response.get('code') or ''} "
                             f"message={response.get('message') or ''}",
                             level="debug",
@@ -530,8 +538,8 @@ class BED:
                                 out_fields.append(f"{key}={response[key]}")
                         io.echo(
                             f"router: out session_id={session_id} "
-                            f"loginid={loginid or ''} "
-                            f"moniker={moniker or ''} type={msg_type} "
+                            f"loginid={loginid_str} "
+                            f"moniker={moniker_str} type={msg_type} "
                             f"ok=True {' '.join(out_fields)}",
                             level="debug",
                         )

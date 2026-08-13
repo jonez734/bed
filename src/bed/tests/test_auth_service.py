@@ -1371,11 +1371,15 @@ class TestPreDispatchLogFormat(unittest.TestCase):
 
         # Each fragment can be a separate f-string literal that Python
         # implicitly concatenates, so check the keys appear in the
-        # expected order anywhere in the default branch.
+        # expected order anywhere in the default branch. The unbound
+        # marker (``unbound``) replaces the empty-string fallback so a
+        # pre-auth log line is grep-friendly and visually distinct
+        # from an authenticated empty loginid.
+        self.assertIn("unbound", src)
         positions = {
             "session_id": src.find("router: in session_id={session_id}"),
-            "loginid": src.find("loginid={loginid or ''}"),
-            "moniker": src.find("moniker={moniker or ''}"),
+            "loginid": src.find("loginid={loginid_str}"),
+            "moniker": src.find("moniker={moniker_str}"),
             "type": src.find("type={msg_type}"),
         }
         for key, pos in positions.items():

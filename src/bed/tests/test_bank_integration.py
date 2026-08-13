@@ -27,6 +27,14 @@ everything between the wire and the handler is real:
 A random port (``port=0``) is used so concurrent suites do not
 collide.
 
+The wire-level tests authenticate before issuing any ``bank_*``
+request, mirroring how the production clients drive bed: the
+:class:`AuthService` runs alongside :class:`BankService` and the
+client sends ``{"type": "auth", ...}`` first so the server binds
+a :class:`SessionState` (with ``loginid`` / ``moniker`` /
+``session_id``) before any bank traffic. This way the production
+``_post_dispatch`` router log path is exercised end-to-end.
+
 The wire-level tests use raw ``websockets.connect`` to send and
 receive JSON envelopes (matches the protocol that the production
 WebSocket transport speaks). The client-wrapper tests use the
@@ -41,12 +49,14 @@ The direct-mode tests drive ``bed.tools.bank`` against the local
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
+import secrets
 import sys
 import unittest
 from typing import Any, Dict, List
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 
 sys.path.insert(0, "/home/opencode/data/work/bed/src")
@@ -113,7 +123,11 @@ def _make_bank_mock(
 
 
 async def _start_bed_with_bank(bank_mock: Any) -> tuple[Any, int]:
-    """Spin up a WebSocketServer with bed.api.bank.BankService registered.
+    """Spin up a WebSocketServer with both AuthService and BankService
+    registered. The auth credential provider accepts the well-known
+    test pair ``("alice", "pw")`` and returns a ``MemberInfo`` with
+    ``loginid="alice_os"`` so every wire test can authenticate
+    before issuing its bank_* request.
 
     The underlying ``bbsengine6.bank.BankService`` is short-circuited
     via ``service._get_bank`` so the real DB is never touched.
@@ -122,18 +136,64 @@ async def _start_bed_with_bank(bank_mock: Any) -> tuple[Any, int]:
     actually bound port (we pass ``port=0`` to the server and read
     it back).
     """
+    import socket as _socket
+
     from bbsengine6.net import WebSocketServer
+    from bed.api import AuthService, InMemoryTokenStore
     from bed.api.bank import BankService
     from bed.api.session import SessionRegistry
+    from bed.api.token_store import MemberInfo
 
-    server = WebSocketServer(host="127.0.0.1", port=0)
-    service = BankService(MagicMock(), SessionRegistry())
-    service._get_bank = MagicMock(return_value=bank_mock)
-    service.register_all(server)
+    class _Provider:
+        def authenticate(self, args, moniker, password, *, pool=None):
+            if moniker == "alice" and password == "pw":
+                return MemberInfo(
+                    moniker="alice",
+                    is_sysop=False,
+                    balance=7,
+                    loginid="alice_os",
+                )
+            return None
+
+    registry = SessionRegistry()
+    auth_service = AuthService(
+        args=argparse.Namespace(debug=False, pool=None),
+        session_registry=registry,
+        token_store=InMemoryTokenStore(),
+        credential_provider=_Provider(),
+        secret=secrets.token_bytes(32),
+        instance_id="bank-integration-test",
+        ttl_seconds=900,
+    )
+
+    bank_service = BankService(MagicMock(), registry)
+    bank_service._get_bank = MagicMock(return_value=bank_mock)
+
+    # Bind to an ephemeral port ourselves so the test sees the same
+    # port number the client will dial.
+    with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    server = WebSocketServer(host="127.0.0.1", port=port)
+    auth_service.register_all(server)
+    bank_service.register_all(server)
 
     await server.start()
-    bound_port = server._server.sockets[0].getsockname()[1]
-    return server, bound_port
+    return server, port
+
+
+async def _authenticate(
+    ws: Any,
+    *,
+    moniker: str = "alice",
+    password: str = "pw",
+) -> Dict[str, Any]:
+    """Send ``auth`` and return the parsed ``auth_result`` envelope."""
+    await ws.send(json.dumps(
+        {"type": "auth", "moniker": moniker, "password": password}
+    ))
+    return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
 
 
 # ---------------------------------------------------------------------
@@ -162,6 +222,7 @@ class TestBankOperationsWireEndToEnd(unittest.IsolatedAsyncioTestCase):
         server, port = await _start_bed_with_bank(bank)
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                await _authenticate(ws)
                 await ws.send(json.dumps(
                     {
                         "type": "bank_balance",
@@ -186,6 +247,7 @@ class TestBankOperationsWireEndToEnd(unittest.IsolatedAsyncioTestCase):
         server, port = await _start_bed_with_bank(bank)
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                await _authenticate(ws)
                 await ws.send(json.dumps(
                     {
                         "type": "bank_balance",
@@ -210,6 +272,7 @@ class TestBankOperationsWireEndToEnd(unittest.IsolatedAsyncioTestCase):
         server, port = await _start_bed_with_bank(bank)
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                await _authenticate(ws)
                 await ws.send(json.dumps(
                     {"type": "bank_balance", "moniker": "alice"}
                 ))
@@ -226,6 +289,7 @@ class TestBankOperationsWireEndToEnd(unittest.IsolatedAsyncioTestCase):
         server, port = await _start_bed_with_bank(bank)
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                await _authenticate(ws)
                 await ws.send(json.dumps(
                     {"type": "bank_balance", "moniker": "alice"}
                 ))
@@ -246,6 +310,7 @@ class TestBankOperationsWireEndToEnd(unittest.IsolatedAsyncioTestCase):
         server, port = await _start_bed_with_bank(bank)
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                await _authenticate(ws)
                 await ws.send(json.dumps(
                     {
                         "type": "bank_add",
@@ -278,6 +343,7 @@ class TestBankOperationsWireEndToEnd(unittest.IsolatedAsyncioTestCase):
         server, port = await _start_bed_with_bank(bank)
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                await _authenticate(ws)
                 await ws.send(json.dumps(
                     {
                         "type": "bank_remove",
@@ -307,6 +373,7 @@ class TestBankOperationsWireEndToEnd(unittest.IsolatedAsyncioTestCase):
         server, port = await _start_bed_with_bank(bank)
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                await _authenticate(ws)
                 await ws.send(json.dumps(
                     {"type": "bank_history", "moniker": "alice", "limit": 10}
                 ))
@@ -326,6 +393,7 @@ class TestBankOperationsWireEndToEnd(unittest.IsolatedAsyncioTestCase):
         server, port = await _start_bed_with_bank(bank)
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                await _authenticate(ws)
                 await ws.send(json.dumps(
                     {
                         "type": "bank_transfer_request",
@@ -358,6 +426,7 @@ class TestBankOperationsWireEndToEnd(unittest.IsolatedAsyncioTestCase):
         server, port = await _start_bed_with_bank(bank)
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                await _authenticate(ws)
                 await ws.send(json.dumps(
                     {
                         "type": "bank_transfer_approve",
@@ -383,6 +452,7 @@ class TestBankOperationsWireEndToEnd(unittest.IsolatedAsyncioTestCase):
         server, port = await _start_bed_with_bank(bank)
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                await _authenticate(ws)
                 await ws.send(json.dumps(
                     {
                         "type": "bank_transfer_reject",
@@ -407,6 +477,7 @@ class TestBankOperationsWireEndToEnd(unittest.IsolatedAsyncioTestCase):
         server, port = await _start_bed_with_bank(bank)
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                await _authenticate(ws)
                 await ws.send(json.dumps(
                     {
                         "type": "bank_pending",
@@ -433,6 +504,7 @@ class TestBankOperationsWireEndToEnd(unittest.IsolatedAsyncioTestCase):
         server, port = await _start_bed_with_bank(bank)
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                await _authenticate(ws)
                 await ws.send(json.dumps({"type": "bank_list_all"}))
                 reply = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
             self.assertEqual(reply["type"], "bank_list_all")
@@ -498,6 +570,7 @@ class TestBankOperationsAllTogetherWire(unittest.IsolatedAsyncioTestCase):
         try:
             uri = f"ws://127.0.0.1:{port}/"
             async with websockets.connect(uri) as ws:
+                await _authenticate(ws)
 
                 async def call(payload):
                     await ws.send(json.dumps(payload))
@@ -594,6 +667,7 @@ class TestBankErrorEnvelopesWireEndToEnd(unittest.IsolatedAsyncioTestCase):
         server, port = await _start_bed_with_bank(bank)
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                await _authenticate(ws)
                 await ws.send(json.dumps(
                     {"type": "bank_balance", "moniker": ""}
                 ))
@@ -610,6 +684,7 @@ class TestBankErrorEnvelopesWireEndToEnd(unittest.IsolatedAsyncioTestCase):
         server, port = await _start_bed_with_bank(bank)
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                await _authenticate(ws)
                 await ws.send(json.dumps(
                     {"type": "bank_add", "moniker": "alice", "amount": 0}
                 ))
@@ -633,6 +708,7 @@ class TestBankErrorEnvelopesWireEndToEnd(unittest.IsolatedAsyncioTestCase):
         server, port = await _start_bed_with_bank(bank)
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                await _authenticate(ws)
                 await ws.send(json.dumps(
                     {
                         "type": "bank_remove",
@@ -657,6 +733,7 @@ class TestBankErrorEnvelopesWireEndToEnd(unittest.IsolatedAsyncioTestCase):
         server, port = await _start_bed_with_bank(bank)
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
+                await _authenticate(ws)
                 await ws.send(json.dumps(
                     {"type": "bank_balance", "moniker": "alice"}
                 ))
