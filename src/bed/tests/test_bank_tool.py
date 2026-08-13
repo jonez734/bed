@@ -37,6 +37,12 @@ def _make_args(**overrides: Any) -> argparse.Namespace:
     args.moniker = None
     args.sysop = False
     args.debug = False
+    args.direct = True
+    args.bed_host = "localhost"
+    args.bed_port = 8765
+    args.bed_path = "/"
+    args.bed_call_timeout = 5.0
+    args.bed_probe_timeout = 0.25
     for k, v in overrides.items():
         setattr(args, k, v)
     return args
@@ -541,3 +547,403 @@ def test_main_eof_swallowed():
          patch.object(tool.io, "echo") as echo:
         tool.main_with_args(args)
     assert any("*EOF*" in c.args[0] for c in echo.call_args_list)
+
+
+# ---------------------------------------------------------------------
+# routing layer
+
+
+def test_buildargs_registers_bed_and_direct_flags():
+    """--bed-host / --bed-port / --direct all parse."""
+    tool = _import_tool()
+    parser = argparse.ArgumentParser()
+    tool.buildargs(parser)
+    a = parser.parse_args(
+        ["--bed-host", "b", "--bed-port", "9999", "--direct"]
+    )
+    assert a.bed_host == "b"
+    assert a.bed_port == 9999
+    assert a.direct is True
+
+
+def test_buildargs_database_args_hidden_from_help():
+    """Database args still parse (legacy) but are suppressed in --help."""
+    tool = _import_tool()
+    parser = argparse.ArgumentParser()
+    tool.buildargs(parser)
+    a = parser.parse_args(["--databasename", "mydb"])
+    assert a.databasename == "mydb"
+    help_text = parser.format_help()
+    assert "--databasename" not in help_text
+
+
+def test_bank_service_returns_direct_for_default_backend():
+    """When args._backend is unset or 'direct', return the local BankService."""
+    from bbsengine6.bank import BankService
+
+    tool = _import_tool()
+    args = _make_args()
+    svc = tool._bank_service(args)
+    assert isinstance(svc, BankService)
+
+
+def test_bank_service_returns_facade_when_backend_is_bed():
+    """When args._backend == 'bed', return the sync _BedBankFacade."""
+    tool = _import_tool()
+    args = _make_args()
+    args._backend = "bed"
+    svc = tool._bank_service(args)
+    assert isinstance(svc, tool._BedBankFacade)
+
+
+def test_main_with_args_calls_routing_and_stashes_backend():
+    """select_backend is called and its result lands on args._backend."""
+    tool = _import_tool()
+    args = _make_args(moniker="alice")
+    with patch.object(tool._routing, "select_backend", return_value="bed") as sb, \
+         patch.object(tool, "_resolve_moniker", return_value="alice"), \
+         patch.object(tool.io, "inputchoice", return_value="Q"):
+        tool.main_with_args(args)
+    sb.assert_called_once_with(args)
+    assert args._backend == "bed"
+
+
+def test_main_with_args_unreachable_bed_echoes_error_and_returns():
+    """When bed is unreachable, exit with the operator-facing message."""
+    tool = _import_tool()
+    args = _make_args(moniker="alice")
+    with patch.object(
+        tool._routing, "select_backend",
+        side_effect=tool._routing.BedNotReachable("h", 9),
+    ), patch.object(tool.io, "echo") as echo:
+        rc = tool.main_with_args(args)
+    assert rc is None
+    assert any(
+        "bed unreachable at h:9" in c.args[0] for c in echo.call_args_list
+    )
+    assert any(
+        "rerun with --direct" in c.args[0] for c in echo.call_args_list
+    )
+
+
+# ---------------------------------------------------------------------
+# _BedBankFacade — sync bridge over BedBankServiceClient
+
+
+def test_facade_uses_get_bed_connection_singleton():
+    """The facade shares the module-level BedConnection singleton."""
+    from bed.client.singleton import get_bed_connection
+
+    tool = _import_tool()
+    args = _make_args()
+    facade = tool._BedBankFacade(args)
+    assert facade._client._conn is get_bed_connection(args)
+
+
+def test_facade_get_balance_returns_int_on_ok():
+    tool = _import_tool()
+    args = _make_args()
+    facade = tool._BedBankFacade(args)
+    with patch.object(
+        facade._client, "get_balance",
+        new=_async_return({"ok": True, "balance": 250}),
+    ):
+        assert facade.get_balance("alice") == 250
+
+
+def test_facade_get_balance_returns_zero_on_soft_failure():
+    tool = _import_tool()
+    args = _make_args()
+    facade = tool._BedBankFacade(args)
+    with patch.object(
+        facade._client, "get_balance",
+        new=_async_return({"ok": False, "code": "bed_unavailable", "message": "x"}),
+    ):
+        assert facade.get_balance("alice") == 0
+
+
+def test_facade_add_funds_translates_wire_to_direct_shape():
+    tool = _import_tool()
+    args = _make_args()
+    facade = tool._BedBankFacade(args)
+    with patch.object(
+        facade._client, "add_funds",
+        new=_async_return({"ok": True, "new_balance": 350, "amount": 50}),
+    ):
+        result = facade.add_funds("alice", 50, transaction_type="credit")
+    assert result["success"] is True
+    assert result["new_balance"] == 350
+    assert "50" in result["message"]
+
+
+def test_facade_remove_funds_translates_wire_to_direct_shape():
+    tool = _import_tool()
+    args = _make_args()
+    facade = tool._BedBankFacade(args)
+    with patch.object(
+        facade._client, "remove_funds",
+        new=_async_return({"ok": True, "new_balance": 75, "amount": 25}),
+    ):
+        result = facade.remove_funds("alice", 25, transaction_type="debit")
+    assert result["success"] is True
+    assert result["new_balance"] == 75
+
+
+def test_facade_transfer_translates_wire_to_direct_shape():
+    tool = _import_tool()
+    args = _make_args()
+    facade = tool._BedBankFacade(args)
+    with patch.object(
+        facade._client, "transfer",
+        new=_async_return(
+            {"ok": True, "transfer_id": 7, "message": "queued"}
+        ),
+    ):
+        result = facade.transfer("alice", "bob", 25, "alice")
+    assert result["success"] is True
+    assert result["transfer_id"] == 7
+
+
+def test_facade_transfer_soft_failure_returns_success_false():
+    tool = _import_tool()
+    args = _make_args()
+    facade = tool._BedBankFacade(args)
+    with patch.object(
+        facade._client, "transfer",
+        new=_async_return(
+            {"ok": False, "code": "bed_unavailable", "message": "down"}
+        ),
+    ):
+        result = facade.transfer("alice", "bob", 25, "alice")
+    assert result["success"] is False
+    assert result["message"] == "down"
+
+
+def test_facade_get_pending_transfers_returns_list():
+    tool = _import_tool()
+    args = _make_args()
+    facade = tool._BedBankFacade(args)
+    rows = [{"id": 1, "from_moniker": "a", "to_moniker": "b"}]
+    with patch.object(
+        facade._client, "get_pending_transfers",
+        new=_async_return({"ok": True, "transfers": rows}),
+    ):
+        assert facade.get_pending_transfers("alice", is_sysop=True) == rows
+
+
+def test_facade_approve_transfer_translates_wire_to_direct_shape():
+    tool = _import_tool()
+    args = _make_args()
+    facade = tool._BedBankFacade(args)
+    with patch.object(
+        facade._client, "approve_transfer",
+        new=_async_return(
+            {"ok": True, "transfer_id": 7, "from_balance": 50, "to_balance": 80}
+        ),
+    ):
+        result = facade.approve_transfer(7, "alice")
+    assert result["success"] is True
+    assert result["from_balance"] == 50
+    assert result["to_balance"] == 80
+
+
+def test_facade_reject_transfer_translates_wire_to_direct_shape():
+    tool = _import_tool()
+    args = _make_args()
+    facade = tool._BedBankFacade(args)
+    with patch.object(
+        facade._client, "reject_transfer",
+        new=_async_return({"ok": True, "transfer_id": 7}),
+    ):
+        result = facade.reject_transfer(7, "alice")
+    assert result["success"] is True
+    assert result["transfer_id"] == 7
+
+
+def test_facade_get_history_returns_list():
+    tool = _import_tool()
+    args = _make_args()
+    facade = tool._BedBankFacade(args)
+    rows = [{"id": 1, "amount": 50}]
+    with patch.object(
+        facade._client, "get_history",
+        new=_async_return({"ok": True, "transactions": rows}),
+    ):
+        assert facade.get_history("alice") == rows
+
+
+def test_facade_list_all_returns_list():
+    tool = _import_tool()
+    args = _make_args()
+    facade = tool._BedBankFacade(args)
+    rows = [{"moniker": "alice", "balance": 100}]
+    with patch.object(
+        facade._client, "list_all",
+        new=_async_return({"ok": True, "accounts": rows}),
+    ):
+        assert facade.list_all() == rows
+
+
+# ---------------------------------------------------------------------
+# end-to-end: bed-mode tool functions delegate through the facade
+
+
+def test_bank_balance_in_bed_mode_uses_facade():
+    """In bed mode, bank_balance delegates to the facade's get_balance."""
+    tool = _import_tool()
+    args = _make_args()
+    args._backend = "bed"
+    facade = tool._BedBankFacade(args)
+    with patch.object(facade, "get_balance", return_value=999) as gb, \
+         patch.object(tool.io, "echo") as echo:
+        with patch.object(tool, "_bank_service", return_value=facade):
+            assert tool.bank_balance(args, "alice") is True
+    gb.assert_called_once_with("alice")
+    rendered = " ".join(c.args[0] for c in echo.call_args_list)
+    assert "999" in rendered
+
+
+def test_bank_add_in_bed_mode_uses_facade():
+    tool = _import_tool()
+    args = _make_args()
+    args._backend = "bed"
+    facade = tool._BedBankFacade(args)
+    with patch.object(
+        facade, "add_funds",
+        return_value={"success": True, "new_balance": 200, "message": "ok"},
+    ), patch.object(tool.io, "inputinteger", return_value=100), \
+         patch.object(tool.io, "echo") as echo:
+        with patch.object(tool, "_bank_service", return_value=facade):
+            assert tool.bank_add(args, "alice") is True
+    rendered = " ".join(c.args[0] for c in echo.call_args_list)
+    assert "200" in rendered
+
+
+def test_bank_remove_in_bed_mode_uses_facade():
+    tool = _import_tool()
+    args = _make_args()
+    args._backend = "bed"
+    facade = tool._BedBankFacade(args)
+    with patch.object(
+        facade, "remove_funds",
+        return_value={"success": True, "new_balance": 50, "message": "ok"},
+    ), patch.object(tool.io, "inputinteger", return_value=50), \
+         patch.object(tool.io, "echo") as echo:
+        with patch.object(tool, "_bank_service", return_value=facade):
+            assert tool.bank_remove(args, "alice") is True
+    rendered = " ".join(c.args[0] for c in echo.call_args_list)
+    assert "50" in rendered
+
+
+def test_bank_transfer_in_bed_mode_uses_facade():
+    tool = _import_tool()
+    args = _make_args()
+    args._backend = "bed"
+    facade = tool._BedBankFacade(args)
+    with patch.object(
+        facade, "transfer",
+        return_value={"success": True, "message": "xfer ok"},
+    ) as transfer_mock, \
+         patch.object(tool.io, "inputinteger", return_value=25), \
+         patch.object(tool.io, "inputstring", return_value="bob"), \
+         patch.object(tool.io, "echo"):
+        with patch.object(tool, "_bank_service", return_value=facade):
+            assert tool.bank_transfer(args, "alice") is True
+    transfer_mock.assert_called_once_with("alice", "bob", 25, "alice")
+
+
+def test_bank_pending_in_bed_mode_uses_facade():
+    tool = _import_tool()
+    args = _make_args()
+    args._backend = "bed"
+    facade = tool._BedBankFacade(args)
+    rows = [
+        {
+            "id": 1,
+            "from_moniker": "a",
+            "to_moniker": "b",
+            "amount": 10,
+            "requestedby": "a",
+            "requestedat": "2026-08-04",
+        }
+    ]
+    with patch.object(
+        facade, "get_pending_transfers", return_value=rows,
+    ) as pending_mock, \
+         patch.object(tool.io, "echo"):
+        with patch.object(tool, "_bank_service", return_value=facade):
+            assert tool.bank_pending(args, "alice", is_sysop=True) is True
+    pending_mock.assert_called_once_with("alice", is_sysop=True)
+
+
+def test_bank_approve_in_bed_mode_uses_facade():
+    tool = _import_tool()
+    args = _make_args()
+    args._backend = "bed"
+    facade = tool._BedBankFacade(args)
+    with patch.object(
+        facade, "approve_transfer",
+        return_value={"success": True, "message": "ok"},
+    ) as approve_mock, \
+         patch.object(tool.io, "inputinteger", return_value=5), \
+         patch.object(tool.io, "echo"):
+        with patch.object(tool, "_bank_service", return_value=facade):
+            assert tool.bank_approve(args, "alice") is True
+    approve_mock.assert_called_once_with(5, "alice")
+
+
+def test_bank_reject_in_bed_mode_uses_facade():
+    tool = _import_tool()
+    args = _make_args()
+    args._backend = "bed"
+    facade = tool._BedBankFacade(args)
+    with patch.object(
+        facade, "reject_transfer",
+        return_value={"success": True, "message": "ok"},
+    ) as reject_mock, \
+         patch.object(tool.io, "inputinteger", return_value=5), \
+         patch.object(tool.io, "echo"):
+        with patch.object(tool, "_bank_service", return_value=facade):
+            assert tool.bank_reject(args, "alice") is True
+    reject_mock.assert_called_once_with(5, "alice")
+
+
+def test_bank_history_in_bed_mode_uses_facade():
+    tool = _import_tool()
+    args = _make_args()
+    args._backend = "bed"
+    facade = tool._BedBankFacade(args)
+    with patch.object(facade, "get_history", return_value=[]) as history_mock, \
+         patch.object(tool.io, "echo"):
+        with patch.object(tool, "_bank_service", return_value=facade):
+            assert tool.bank_history(args, "alice") is True
+    history_mock.assert_called_once_with("alice")
+
+
+def test_bank_list_all_in_bed_mode_uses_facade():
+    tool = _import_tool()
+    args = _make_args()
+    args._backend = "bed"
+    facade = tool._BedBankFacade(args)
+    rows = [{"moniker": "alice", "balance": 100}]
+    with patch.object(facade, "list_all", return_value=rows) as list_mock, \
+         patch.object(tool.io, "echo") as echo:
+        with patch.object(tool, "_bank_service", return_value=facade):
+            assert tool.bank_list_all(args, "alice") is True
+    list_mock.assert_called_once_with()
+    rendered = " ".join(c.args[0] for c in echo.call_args_list)
+    assert "alice" in rendered
+    assert "100" in rendered
+
+
+# ---------------------------------------------------------------------
+# helpers
+
+
+def _async_return(value):
+    """Build an AsyncMock that returns ``value`` when awaited."""
+
+    async def _coro(*args, **kwargs):
+        return value
+
+    return MagicMock(side_effect=_coro)

@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 CODE_MISSING_MONIKER = "missing_moniker"
 CODE_INVALID_AMOUNT = "invalid_amount"
+CODE_OPERATION_FAILED = "operation_failed"
 
 
 class BankService(BaseService):
@@ -55,6 +56,11 @@ class BankService(BaseService):
         "bank_add",
         "bank_remove",
         "bank_history",
+        "bank_transfer_request",
+        "bank_transfer_approve",
+        "bank_transfer_reject",
+        "bank_pending",
+        "bank_list_all",
     )
 
     def __init__(self, args: Any, session_manager: Any) -> None:
@@ -90,6 +96,16 @@ class BankService(BaseService):
             return await self._handle_remove(message)
         if msg_type == "bank_history":
             return await self._handle_history(message)
+        if msg_type == "bank_transfer_request":
+            return await self._handle_transfer_request(message)
+        if msg_type == "bank_transfer_approve":
+            return await self._handle_transfer_approve(message)
+        if msg_type == "bank_transfer_reject":
+            return await self._handle_transfer_reject(message)
+        if msg_type == "bank_pending":
+            return await self._handle_pending(message)
+        if msg_type == "bank_list_all":
+            return await self._handle_list_all(message)
         return None
 
     @staticmethod
@@ -234,4 +250,163 @@ class BankService(BaseService):
             "type": "bank_history",
             "moniker": moniker,
             "transactions": list(rows),
+        }
+
+    async def _handle_transfer_request(
+        self, message: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        from_moniker = (message.get("from") or "").strip()
+        to_moniker = (message.get("to") or "").strip()
+        if not from_moniker or not to_moniker:
+            return error_envelope(
+                CODE_MISSING_MONIKER, "from and to monikers are required"
+            )
+        try:
+            amount = int(message.get("amount", 0))
+        except (TypeError, ValueError):
+            return error_envelope(
+                CODE_INVALID_AMOUNT, "amount must be an integer"
+            )
+        if amount <= 0:
+            return error_envelope(
+                CODE_INVALID_AMOUNT, "amount must be positive"
+            )
+        requested_by = (message.get("requested_by") or "").strip()
+        try:
+            result = self._get_bank().transfer(
+                from_moniker, to_moniker, amount, requested_by
+            )
+        except Exception as e:
+            io.echo_traceback("bed.api.bank._handle_transfer_request:")
+            return error_envelope(
+                CODE_DATABASE_ERROR, f"transfer request failed: {e}"
+            )
+        if not result.get("success"):
+            return error_envelope(
+                CODE_OPERATION_FAILED,
+                result.get("message", "transfer request failed"),
+            )
+        try:
+            transfer_id = int(result.get("transfer_id", 0))
+        except (TypeError, ValueError):
+            transfer_id = 0
+        return {
+            "type": "bank_transfer_request",
+            "transfer_id": transfer_id,
+            "message": result.get("message", ""),
+        }
+
+    async def _handle_transfer_approve(
+        self, message: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        try:
+            transfer_id = int(message.get("transfer_id", 0))
+        except (TypeError, ValueError):
+            return error_envelope(
+                CODE_INVALID_AMOUNT, "transfer_id must be an integer"
+            )
+        if transfer_id <= 0:
+            return error_envelope(
+                CODE_INVALID_AMOUNT, "transfer_id must be positive"
+            )
+        responded_by = (message.get("responded_by") or "").strip()
+        try:
+            result = self._get_bank().approve_transfer(
+                transfer_id, responded_by
+            )
+        except Exception as e:
+            io.echo_traceback("bed.api.bank._handle_transfer_approve:")
+            return error_envelope(
+                CODE_DATABASE_ERROR, f"transfer approve failed: {e}"
+            )
+        if not result.get("success"):
+            return error_envelope(
+                CODE_OPERATION_FAILED,
+                result.get("message", "transfer approve failed"),
+            )
+        try:
+            from_balance = int(result.get("from_balance", 0))
+        except (TypeError, ValueError):
+            from_balance = 0
+        try:
+            to_balance = int(result.get("to_balance", 0))
+        except (TypeError, ValueError):
+            to_balance = 0
+        return {
+            "type": "bank_transfer_approve",
+            "transfer_id": transfer_id,
+            "from_balance": from_balance,
+            "to_balance": to_balance,
+        }
+
+    async def _handle_transfer_reject(
+        self, message: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        try:
+            transfer_id = int(message.get("transfer_id", 0))
+        except (TypeError, ValueError):
+            return error_envelope(
+                CODE_INVALID_AMOUNT, "transfer_id must be an integer"
+            )
+        if transfer_id <= 0:
+            return error_envelope(
+                CODE_INVALID_AMOUNT, "transfer_id must be positive"
+            )
+        responded_by = (message.get("responded_by") or "").strip()
+        try:
+            result = self._get_bank().reject_transfer(
+                transfer_id, responded_by
+            )
+        except Exception as e:
+            io.echo_traceback("bed.api.bank._handle_transfer_reject:")
+            return error_envelope(
+                CODE_DATABASE_ERROR, f"transfer reject failed: {e}"
+            )
+        if not result.get("success"):
+            return error_envelope(
+                CODE_OPERATION_FAILED,
+                result.get("message", "transfer reject failed"),
+            )
+        return {
+            "type": "bank_transfer_reject",
+            "transfer_id": transfer_id,
+        }
+
+    async def _handle_pending(
+        self, message: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        moniker = (message.get("moniker") or "").strip()
+        is_sysop = bool(message.get("is_sysop", False))
+        try:
+            rows = self._get_bank().get_pending_transfers(
+                moniker, is_sysop
+            )
+        except Exception as e:
+            io.echo_traceback("bed.api.bank._handle_pending:")
+            return error_envelope(
+                CODE_DATABASE_ERROR, f"pending lookup failed: {e}"
+            )
+        return {
+            "type": "bank_pending",
+            "moniker": moniker,
+            "is_sysop": is_sysop,
+            "transfers": list(rows),
+        }
+
+    async def _handle_list_all(
+        self, message: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        try:
+            rows = self._get_bank().list_all()
+        except Exception as e:
+            io.echo_traceback("bed.api.bank._handle_list_all:")
+            return error_envelope(
+                CODE_DATABASE_ERROR, f"list_all failed: {e}"
+            )
+        return {
+            "type": "bank_list_all",
+            "accounts": [
+                {"moniker": row["moniker"], "balance": int(row["balance"])}
+                for row in rows
+            ],
         }

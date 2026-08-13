@@ -1,13 +1,18 @@
 """Stand-alone bank operations script."""
 
 import argparse
+import asyncio
+from typing import Any, List
 
 from bbsengine6 import io, member, database
 from bbsengine6.bank import BankService
 
+from bed.tools import _routing
+
 
 def buildargs(parentparser: argparse.ArgumentParser) -> None:
-    database.buildargs(parentparser)
+    _routing.build_client_args(parentparser)
+    database.buildargs(parentparser, suppress=True)
     parentparser.add_argument(
         "--debug", action="store_true", help="Enable debug logging"
     )
@@ -32,7 +37,156 @@ def _resolve_moniker(args) -> str | None:
     return moniker
 
 
-def _bank_service(args) -> BankService:
+class _BedBankFacade:
+    """Sync wrapper around :class:`BedBankServiceClient`.
+
+    Bridges the async WebSocket client to the synchronous
+    :class:`bbsengine6.bank.BankService` shape so the ``bank_*`` call
+    sites don't need to know which backend is in use. Soft failures
+    (transport, server ``error`` envelope) come back as the same
+    ``{"success": False, "message": "..."}`` shape the tool already
+    renders.
+    """
+
+    def __init__(self, args: Any) -> None:
+        from bed.client import get_bed_connection
+        from bed.client.bankservice import BedBankServiceClient
+
+        self._client = BedBankServiceClient(get_bed_connection(args))
+
+    def _run(self, coro: Any) -> Any:
+        return asyncio.run(coro)
+
+    def get_balance(self, moniker: str) -> int:
+        reply = self._run(self._client.get_balance(moniker))
+        if not reply.get("ok"):
+            return 0
+        return int(reply.get("balance", 0))
+
+    def add_funds(
+        self,
+        moniker: str,
+        amount: int,
+        transaction_type: str = "credit",
+        description: str = "",
+    ) -> dict:
+        wire_desc = description or transaction_type
+        reply = self._run(
+            self._client.add_funds(moniker, amount, wire_desc)
+        )
+        if reply.get("ok"):
+            return {
+                "success": True,
+                "message": f"Added {amount} to {moniker}",
+                "new_balance": int(reply.get("new_balance", 0)),
+            }
+        return {"success": False, "message": reply.get("message", "Failed.")}
+
+    def remove_funds(
+        self,
+        moniker: str,
+        amount: int,
+        transaction_type: str = "debit",
+        description: str = "",
+    ) -> dict:
+        wire_desc = description or transaction_type
+        reply = self._run(
+            self._client.remove_funds(moniker, amount, wire_desc)
+        )
+        if reply.get("ok"):
+            return {
+                "success": True,
+                "message": f"Removed {amount} from {moniker}",
+                "new_balance": int(reply.get("new_balance", 0)),
+            }
+        return {"success": False, "message": reply.get("message", "Failed.")}
+
+    def transfer(
+        self,
+        from_moniker: str,
+        to_moniker: str,
+        amount: int,
+        requested_by: str,
+    ) -> dict:
+        reply = self._run(
+            self._client.transfer(
+                from_moniker, to_moniker, amount, requested_by
+            )
+        )
+        if reply.get("ok"):
+            return {
+                "success": True,
+                "transfer_id": int(reply.get("transfer_id", 0)),
+                "message": reply.get("message", ""),
+            }
+        return {
+            "success": False,
+            "message": reply.get("message", "Transfer failed."),
+        }
+
+    def get_pending_transfers(
+        self, moniker: str = "", is_sysop: bool = False
+    ) -> List[dict]:
+        reply = self._run(
+            self._client.get_pending_transfers(moniker, is_sysop)
+        )
+        if reply.get("ok"):
+            return list(reply.get("transfers", []))
+        return []
+
+    def approve_transfer(
+        self, transfer_id: int, responded_by: str
+    ) -> dict:
+        reply = self._run(
+            self._client.approve_transfer(transfer_id, responded_by)
+        )
+        if reply.get("ok"):
+            return {
+                "success": True,
+                "transfer_id": int(reply.get("transfer_id", 0)),
+                "from_balance": int(reply.get("from_balance", 0)),
+                "to_balance": int(reply.get("to_balance", 0)),
+                "message": f"approved #{transfer_id}",
+            }
+        return {
+            "success": False,
+            "message": reply.get("message", "Approval failed."),
+        }
+
+    def reject_transfer(
+        self, transfer_id: int, responded_by: str
+    ) -> dict:
+        reply = self._run(
+            self._client.reject_transfer(transfer_id, responded_by)
+        )
+        if reply.get("ok"):
+            return {
+                "success": True,
+                "transfer_id": int(reply.get("transfer_id", 0)),
+                "message": f"rejected #{transfer_id}",
+            }
+        return {
+            "success": False,
+            "message": reply.get("message", "Rejection failed."),
+        }
+
+    def get_history(self, moniker: str, limit: int = 50) -> List[dict]:
+        reply = self._run(self._client.get_history(moniker, limit))
+        if reply.get("ok"):
+            return list(reply.get("transactions", []))
+        return []
+
+    def list_all(self) -> List[dict]:
+        reply = self._run(self._client.list_all())
+        if reply.get("ok"):
+            return list(reply.get("accounts", []))
+        return []
+
+
+def _bank_service(args: Any) -> Any:
+    backend = getattr(args, "_backend", None)
+    if backend == "bed":
+        return _BedBankFacade(args)
     return BankService(args)
 
 
@@ -196,6 +350,12 @@ def main_with_args(args) -> None:
     going through argparse. ``main()`` is just ``parse_args`` +
     ``main_with_args``.
     """
+    try:
+        args._backend = _routing.select_backend(args)
+    except _routing.BedNotReachable as e:
+        io.echo(str(e), level="error")
+        return
+
     moniker = _resolve_moniker(args)
     if moniker is None:
         return

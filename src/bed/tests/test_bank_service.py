@@ -48,6 +48,11 @@ def _make_bank_mock(
     add_result: Dict[str, Any] | None = None,
     remove_result: Dict[str, Any] | None = None,
     history_rows: List[Dict[str, Any]] | None = None,
+    transfer_result: Dict[str, Any] | None = None,
+    approve_result: Dict[str, Any] | None = None,
+    reject_result: Dict[str, Any] | None = None,
+    pending_rows: List[Dict[str, Any]] | None = None,
+    list_rows: List[Dict[str, Any]] | None = None,
 ) -> Any:
     """Build a MagicMock that quacks like bbsengine6.bank.BankService."""
     bank = MagicMock()
@@ -63,6 +68,28 @@ def _make_bank_mock(
         else {"success": True, "new_balance": balance - 25}
     )
     bank.get_history = MagicMock(return_value=history_rows or [])
+    bank.transfer = MagicMock(
+        return_value=transfer_result
+        if transfer_result is not None
+        else {"success": True, "transfer_id": 1, "message": "queued"}
+    )
+    bank.approve_transfer = MagicMock(
+        return_value=approve_result
+        if approve_result is not None
+        else {
+            "success": True,
+            "transfer_id": 1,
+            "from_balance": 50,
+            "to_balance": 80,
+        }
+    )
+    bank.reject_transfer = MagicMock(
+        return_value=reject_result
+        if reject_result is not None
+        else {"success": True, "transfer_id": 1, "message": "rejected"}
+    )
+    bank.get_pending_transfers = MagicMock(return_value=pending_rows or [])
+    bank.list_all = MagicMock(return_value=list_rows or [])
     return bank
 
 
@@ -71,7 +98,7 @@ def _make_bank_mock(
 
 
 def test_bank_service_registers_handled_types():
-    """register_all registers exactly the four bank_* message types."""
+    """register_all registers exactly the nine bank_* message types."""
     from bed.api.bank import BankService
 
     service = BankService(_make_args(), _make_session_manager())
@@ -86,11 +113,21 @@ def test_bank_service_registers_handled_types():
     assert "bank_add" in types
     assert "bank_remove" in types
     assert "bank_history" in types
+    assert "bank_transfer_request" in types
+    assert "bank_transfer_approve" in types
+    assert "bank_transfer_reject" in types
+    assert "bank_pending" in types
+    assert "bank_list_all" in types
     assert set(types) == {
         "bank_balance",
         "bank_add",
         "bank_remove",
         "bank_history",
+        "bank_transfer_request",
+        "bank_transfer_approve",
+        "bank_transfer_reject",
+        "bank_pending",
+        "bank_list_all",
     }
 
 
@@ -385,6 +422,298 @@ def test_handle_history_rejects_negative_limit():
 
 
 # ---------------------------------------------------------------------
+# bed.api.bank.BankService — _handle_transfer_request
+
+
+def test_handle_transfer_request_happy_path():
+    from bed.api.bank import BankService
+
+    service = BankService(_make_args(), _make_session_manager())
+    bank = _make_bank_mock(
+        transfer_result={"success": True, "transfer_id": 42, "message": "ok"}
+    )
+    service._get_bank = MagicMock(return_value=bank)
+
+    async def runner():
+        return await service._handle_transfer_request(
+            {
+                "type": "bank_transfer_request",
+                "from": "alice",
+                "to": "bob",
+                "amount": 25,
+                "requested_by": "alice",
+            }
+        )
+
+    result = asyncio.run(runner())
+    assert result["type"] == "bank_transfer_request"
+    assert result["transfer_id"] == 42
+    assert result["message"] == "ok"
+    bank.transfer.assert_called_once_with("alice", "bob", 25, "alice")
+
+
+def test_handle_transfer_request_rejects_missing_moniker():
+    from bed.api.bank import BankService
+
+    service = BankService(_make_args(), _make_session_manager())
+
+    async def runner():
+        return await service._handle_transfer_request(
+            {
+                "type": "bank_transfer_request",
+                "from": "",
+                "to": "bob",
+                "amount": 25,
+                "requested_by": "alice",
+            }
+        )
+
+    result = asyncio.run(runner())
+    assert result["type"] == "error"
+    assert result["code"] == "missing_moniker"
+
+
+def test_handle_transfer_request_rejects_non_positive_amount():
+    from bed.api.bank import BankService
+
+    service = BankService(_make_args(), _make_session_manager())
+
+    async def runner():
+        return await service._handle_transfer_request(
+            {
+                "type": "bank_transfer_request",
+                "from": "alice",
+                "to": "bob",
+                "amount": 0,
+                "requested_by": "alice",
+            }
+        )
+
+    result = asyncio.run(runner())
+    assert result["type"] == "error"
+    assert result["code"] == "invalid_amount"
+
+
+def test_handle_transfer_request_bbsengine6_failure_envelope():
+    from bed.api.bank import BankService
+
+    service = BankService(_make_args(), _make_session_manager())
+    bank = _make_bank_mock(
+        transfer_result={"success": False, "message": "no such account"}
+    )
+    service._get_bank = MagicMock(return_value=bank)
+
+    async def runner():
+        return await service._handle_transfer_request(
+            {
+                "type": "bank_transfer_request",
+                "from": "alice",
+                "to": "bob",
+                "amount": 25,
+                "requested_by": "alice",
+            }
+        )
+
+    result = asyncio.run(runner())
+    assert result["type"] == "error"
+    assert result["code"] == "operation_failed"
+    assert "no such account" in result["message"]
+
+
+def test_handle_transfer_request_db_exception_envelope():
+    from bed.api.bank import BankService
+
+    service = BankService(_make_args(), _make_session_manager())
+    bank = MagicMock()
+    bank.transfer.side_effect = RuntimeError("db down")
+    service._get_bank = MagicMock(return_value=bank)
+
+    async def runner():
+        return await service._handle_transfer_request(
+            {
+                "type": "bank_transfer_request",
+                "from": "alice",
+                "to": "bob",
+                "amount": 25,
+                "requested_by": "alice",
+            }
+        )
+
+    result = asyncio.run(runner())
+    assert result["type"] == "error"
+    assert result["code"] == "database_error"
+
+
+# ---------------------------------------------------------------------
+# bed.api.bank.BankService — _handle_transfer_approve / _handle_transfer_reject
+
+
+def test_handle_transfer_approve_happy_path():
+    from bed.api.bank import BankService
+
+    service = BankService(_make_args(), _make_session_manager())
+    bank = _make_bank_mock(
+        approve_result={
+            "success": True,
+            "transfer_id": 5,
+            "from_balance": 25,
+            "to_balance": 75,
+        }
+    )
+    service._get_bank = MagicMock(return_value=bank)
+
+    async def runner():
+        return await service._handle_transfer_approve(
+            {"type": "bank_transfer_approve", "transfer_id": 5, "responded_by": "alice"}
+        )
+
+    result = asyncio.run(runner())
+    assert result["type"] == "bank_transfer_approve"
+    assert result["transfer_id"] == 5
+    assert result["from_balance"] == 25
+    assert result["to_balance"] == 75
+    bank.approve_transfer.assert_called_once_with(5, "alice")
+
+
+def test_handle_transfer_approve_rejects_zero_id():
+    from bed.api.bank import BankService
+
+    service = BankService(_make_args(), _make_session_manager())
+
+    async def runner():
+        return await service._handle_transfer_approve(
+            {"type": "bank_transfer_approve", "transfer_id": 0, "responded_by": "alice"}
+        )
+
+    result = asyncio.run(runner())
+    assert result["type"] == "error"
+    assert result["code"] == "invalid_amount"
+
+
+def test_handle_transfer_reject_happy_path():
+    from bed.api.bank import BankService
+
+    service = BankService(_make_args(), _make_session_manager())
+    bank = _make_bank_mock(
+        reject_result={"success": True, "transfer_id": 5, "message": "rejected"}
+    )
+    service._get_bank = MagicMock(return_value=bank)
+
+    async def runner():
+        return await service._handle_transfer_reject(
+            {"type": "bank_transfer_reject", "transfer_id": 5, "responded_by": "alice"}
+        )
+
+    result = asyncio.run(runner())
+    assert result["type"] == "bank_transfer_reject"
+    assert result["transfer_id"] == 5
+    bank.reject_transfer.assert_called_once_with(5, "alice")
+
+
+# ---------------------------------------------------------------------
+# bed.api.bank.BankService — _handle_pending
+
+
+def test_handle_pending_happy_path():
+    from bed.api.bank import BankService
+
+    rows = [{"id": 1, "from_moniker": "a", "to_moniker": "b", "amount": 10}]
+    service = BankService(_make_args(), _make_session_manager())
+    bank = _make_bank_mock(pending_rows=rows)
+    service._get_bank = MagicMock(return_value=bank)
+
+    async def runner():
+        return await service._handle_pending(
+            {
+                "type": "bank_pending",
+                "moniker": "alice",
+                "is_sysop": True,
+            }
+        )
+
+    result = asyncio.run(runner())
+    assert result["type"] == "bank_pending"
+    assert result["transfers"] == rows
+    assert result["is_sysop"] is True
+    bank.get_pending_transfers.assert_called_once_with("alice", True)
+
+
+def test_handle_pending_default_non_sysop():
+    from bed.api.bank import BankService
+
+    service = BankService(_make_args(), _make_session_manager())
+    bank = _make_bank_mock()
+    service._get_bank = MagicMock(return_value=bank)
+
+    async def runner():
+        return await service._handle_pending(
+            {"type": "bank_pending", "moniker": "alice"}
+        )
+
+    result = asyncio.run(runner())
+    assert result["is_sysop"] is False
+    bank.get_pending_transfers.assert_called_once_with("alice", False)
+
+
+def test_handle_pending_db_exception_envelope():
+    from bed.api.bank import BankService
+
+    service = BankService(_make_args(), _make_session_manager())
+    bank = MagicMock()
+    bank.get_pending_transfers.side_effect = RuntimeError("db down")
+    service._get_bank = MagicMock(return_value=bank)
+
+    async def runner():
+        return await service._handle_pending(
+            {"type": "bank_pending", "moniker": "alice"}
+        )
+
+    result = asyncio.run(runner())
+    assert result["type"] == "error"
+    assert result["code"] == "database_error"
+
+
+# ---------------------------------------------------------------------
+# bed.api.bank.BankService — _handle_list_all
+
+
+def test_handle_list_all_happy_path():
+    from bed.api.bank import BankService
+
+    rows = [
+        {"moniker": "alice", "balance": 100},
+        {"moniker": "bob", "balance": 50},
+    ]
+    service = BankService(_make_args(), _make_session_manager())
+    bank = _make_bank_mock(list_rows=rows)
+    service._get_bank = MagicMock(return_value=bank)
+
+    async def runner():
+        return await service._handle_list_all({"type": "bank_list_all"})
+
+    result = asyncio.run(runner())
+    assert result["type"] == "bank_list_all"
+    assert result["accounts"] == rows
+    bank.list_all.assert_called_once_with()
+
+
+def test_handle_list_all_db_exception_envelope():
+    from bed.api.bank import BankService
+
+    service = BankService(_make_args(), _make_session_manager())
+    bank = MagicMock()
+    bank.list_all.side_effect = RuntimeError("db down")
+    service._get_bank = MagicMock(return_value=bank)
+
+    async def runner():
+        return await service._handle_list_all({"type": "bank_list_all"})
+
+    result = asyncio.run(runner())
+    assert result["type"] == "error"
+    assert result["code"] == "database_error"
+
+
+# ---------------------------------------------------------------------
 # bed.api.bank.BankService — lazy bbsengine6 import
 
 
@@ -647,6 +976,252 @@ def test_client_get_history_missing_moniker_returns_empty_transactions():
     assert result["code"] == "missing_moniker"
     assert result["transactions"] == []
     conn.send.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------
+# bed.client.bankservice.BedBankServiceClient — transfer / approve / reject
+# / pending / list_all (new in v1)
+
+
+def test_client_transfer_happy_path():
+    from bed.client.bankservice import BedBankServiceClient
+
+    conn = MagicMock()
+    conn.send = AsyncMock(
+        return_value={
+            "type": "bank_transfer_request",
+            "transfer_id": 7,
+            "message": "queued",
+        }
+    )
+    client = BedBankServiceClient(conn)
+
+    async def runner():
+        return await client.transfer("alice", "bob", 25, "alice")
+
+    result = asyncio.run(runner())
+    assert result["ok"] is True
+    assert result["transfer_id"] == 7
+    assert result["message"] == "queued"
+    assert result["from_moniker"] == "alice"
+    assert result["to_moniker"] == "bob"
+    assert result["amount"] == 25
+    conn.send.assert_awaited_once_with(
+        {
+            "type": "bank_transfer_request",
+            "from": "alice",
+            "to": "bob",
+            "amount": 25,
+            "requested_by": "alice",
+        }
+    )
+
+
+def test_client_transfer_rejects_missing_moniker():
+    from bed.client.bankservice import BedBankServiceClient
+
+    conn = MagicMock()
+    conn.send = AsyncMock()
+    client = BedBankServiceClient(conn)
+
+    async def runner():
+        return await client.transfer("", "bob", 25, "alice")
+
+    result = asyncio.run(runner())
+    assert result["ok"] is False
+    assert result["code"] == "missing_moniker"
+    conn.send.assert_not_awaited()
+
+
+def test_client_transfer_rejects_non_positive_amount():
+    from bed.client.bankservice import BedBankServiceClient
+
+    conn = MagicMock()
+    conn.send = AsyncMock()
+    client = BedBankServiceClient(conn)
+
+    async def runner():
+        return await client.transfer("alice", "bob", 0, "alice")
+
+    result = asyncio.run(runner())
+    assert result["ok"] is False
+    assert result["code"] == "invalid_amount"
+    conn.send.assert_not_awaited()
+
+
+def test_client_transfer_error_envelope_propagates():
+    from bed.client.bankservice import BedBankServiceClient
+
+    conn = MagicMock()
+    conn.send = AsyncMock(
+        return_value={
+            "type": "error",
+            "code": "operation_failed",
+            "message": "nope",
+        }
+    )
+    client = BedBankServiceClient(conn)
+
+    async def runner():
+        return await client.transfer("alice", "bob", 25, "alice")
+
+    result = asyncio.run(runner())
+    assert result["ok"] is False
+    assert result["code"] == "operation_failed"
+    assert result["message"] == "nope"
+
+
+def test_client_approve_transfer_happy_path():
+    from bed.client.bankservice import BedBankServiceClient
+
+    conn = MagicMock()
+    conn.send = AsyncMock(
+        return_value={
+            "type": "bank_transfer_approve",
+            "transfer_id": 7,
+            "from_balance": 50,
+            "to_balance": 80,
+        }
+    )
+    client = BedBankServiceClient(conn)
+
+    async def runner():
+        return await client.approve_transfer(7, "alice")
+
+    result = asyncio.run(runner())
+    assert result["ok"] is True
+    assert result["transfer_id"] == 7
+    assert result["from_balance"] == 50
+    assert result["to_balance"] == 80
+    conn.send.assert_awaited_once_with(
+        {
+            "type": "bank_transfer_approve",
+            "transfer_id": 7,
+            "responded_by": "alice",
+        }
+    )
+
+
+def test_client_approve_transfer_rejects_zero_id():
+    from bed.client.bankservice import BedBankServiceClient
+
+    conn = MagicMock()
+    conn.send = AsyncMock()
+    client = BedBankServiceClient(conn)
+
+    async def runner():
+        return await client.approve_transfer(0, "alice")
+
+    result = asyncio.run(runner())
+    assert result["ok"] is False
+    assert result["code"] == "invalid_amount"
+    conn.send.assert_not_awaited()
+
+
+def test_client_reject_transfer_happy_path():
+    from bed.client.bankservice import BedBankServiceClient
+
+    conn = MagicMock()
+    conn.send = AsyncMock(
+        return_value={"type": "bank_transfer_reject", "transfer_id": 9}
+    )
+    client = BedBankServiceClient(conn)
+
+    async def runner():
+        return await client.reject_transfer(9, "alice")
+
+    result = asyncio.run(runner())
+    assert result["ok"] is True
+    assert result["transfer_id"] == 9
+    conn.send.assert_awaited_once_with(
+        {
+            "type": "bank_transfer_reject",
+            "transfer_id": 9,
+            "responded_by": "alice",
+        }
+    )
+
+
+def test_client_get_pending_transfers_happy_path():
+    from bed.client.bankservice import BedBankServiceClient
+
+    rows = [{"id": 1, "from_moniker": "a", "to_moniker": "b", "amount": 10}]
+    conn = MagicMock()
+    conn.send = AsyncMock(
+        return_value={"type": "bank_pending", "transfers": rows}
+    )
+    client = BedBankServiceClient(conn)
+
+    async def runner():
+        return await client.get_pending_transfers("alice", is_sysop=True)
+
+    result = asyncio.run(runner())
+    assert result["ok"] is True
+    assert result["transfers"] == rows
+    assert result["is_sysop"] is True
+    conn.send.assert_awaited_once_with(
+        {
+            "type": "bank_pending",
+            "moniker": "alice",
+            "is_sysop": True,
+        }
+    )
+
+
+def test_client_get_pending_transfers_bed_unavailable_returns_empty():
+    from bed.client.bankservice import BedBankServiceClient
+    from bed.client.exceptions import BedUnavailable
+
+    conn = MagicMock()
+    conn.send = AsyncMock(side_effect=BedUnavailable("down"))
+    client = BedBankServiceClient(conn)
+
+    async def runner():
+        return await client.get_pending_transfers("alice")
+
+    result = asyncio.run(runner())
+    assert result["ok"] is False
+    assert result["code"] == "bed_unavailable"
+    assert result["transfers"] == []
+
+
+def test_client_list_all_happy_path():
+    from bed.client.bankservice import BedBankServiceClient
+
+    rows = [
+        {"moniker": "alice", "balance": 100},
+        {"moniker": "bob", "balance": 50},
+    ]
+    conn = MagicMock()
+    conn.send = AsyncMock(
+        return_value={"type": "bank_list_all", "accounts": rows}
+    )
+    client = BedBankServiceClient(conn)
+
+    async def runner():
+        return await client.list_all()
+
+    result = asyncio.run(runner())
+    assert result["ok"] is True
+    assert result["accounts"] == rows
+    conn.send.assert_awaited_once_with({"type": "bank_list_all"})
+
+
+def test_client_list_all_bed_unavailable_returns_empty():
+    from bed.client.bankservice import BedBankServiceClient
+    from bed.client.exceptions import BedUnavailable
+
+    conn = MagicMock()
+    conn.send = AsyncMock(side_effect=BedUnavailable("down"))
+    client = BedBankServiceClient(conn)
+
+    async def runner():
+        return await client.list_all()
+
+    result = asyncio.run(runner())
+    assert result["ok"] is False
+    assert result["code"] == "bed_unavailable"
+    assert result["accounts"] == []
 
 
 # ---------------------------------------------------------------------
