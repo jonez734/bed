@@ -29,7 +29,7 @@ def load_config(
 
     Variable format: BED_<SECTION>_<KEY>=value or BED_KEY=value
     """
-    io.echo(f"bed.json config path: {config_file}", level="info")
+    io.echo(f"bed.json config path: {config_file}")
     with open(config_file) as f:
         config = json.load(f)
     config = _expand_paths(config)

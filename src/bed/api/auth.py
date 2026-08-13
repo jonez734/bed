@@ -245,7 +245,6 @@ class AuthService(BaseService):
         io.echo(
             f"AuthService: issued token for moniker={info.moniker!r} "
             f"session={session_id[:8]}…",
-            level="info",
         )
         return self._auth_result_envelope(record, info, fresh=True)
 
@@ -311,7 +310,6 @@ class AuthService(BaseService):
             f"AuthService: reconnected moniker={store_record.moniker!r} "
             f"session={store_record.session_id[:8]}… "
             f"pending={'yes' if pending else 'no'}",
-            level="info",
         )
         return self._reconnect_result_envelope(rotated, info, pending)
 

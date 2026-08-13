@@ -466,13 +466,13 @@ class BED:
                         f"router: in session_id={session_id} "
                         f"moniker={moniker or ''} type={msg_type} "
                         f"amount={amount} description={description}",
-                        level="info",
+                        level="debug",
                     )
                 else:
                     io.echo(
                         f"router: in session_id={session_id} "
                         f"moniker={moniker or ''} type={msg_type}",
-                        level="info",
+                        level="debug",
                     )
 
             self.server._pre_dispatch = _pre_dispatch
@@ -487,25 +487,24 @@ class BED:
 
         self._running = True
 
-        io.echo(f"BED started on {self.args.host}:{self.args.port}", level="info")
+        io.echo(f"BED started on {self.args.host}:{self.args.port}")
         if self.MessageRouterClass:
             io.echo(
                 f"Router: {self.MessageRouterClass.__module__}.{self.MessageRouterClass.__name__}",
-                level="info",
             )
         if self.auth_service is not None:
             self._gc_task = asyncio.create_task(self._gc_loop())
         if self.message_service is not None:
-            io.echo("BED MessageService: LISTEN engine_message_recipient", level="info")
+            io.echo("BED MessageService: LISTEN engine_message_recipient")
         if self.bank_service is not None:
-            io.echo("BED BankService: bank_balance/add/remove/history", level="info")
-        io.echo(f"Registered services: {self.server.list_services()}", level="info")
+            io.echo("BED BankService: bank_balance/add/remove/history")
+        io.echo(f"Registered services: {self.server.list_services()}")
 
         try:
             while self._running:
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
-            io.echo("BED cancelled", level="info")
+            io.echo("BED cancelled")
 
     async def _cleanup_partial_start(self) -> None:
         """Tear down whatever BED.start() managed to construct before the
@@ -579,7 +578,6 @@ class BED:
             f"BED AuthService: instance={instance_id[:8]}… "
             f"ttl={ttl}s persistence={persistence} "
             f"provider={getattr(self.args, 'credential_provider', 'password')}",
-            level="info",
         )
 
     async def _gc_loop(self) -> None:
@@ -611,7 +609,7 @@ class BED:
             await self.message_service.stop_listener()
         if self.server:
             await self.server.stop()
-        io.echo("BED stopped", level="info")
+        io.echo("BED stopped")
 
     async def restart(self) -> None:
         """Restart the daemon."""
@@ -696,7 +694,7 @@ def _reload_config_and_apply(
           detected but not applied; the operator is told a restart is
           required.
     """
-    io.echo("Received SIGHUP, reloading config", level="info")
+    io.echo("Received SIGHUP, reloading config")
     try:
         new_config = config.load_config(args.config_file)
     except (ValueError, OSError) as e:
@@ -715,7 +713,6 @@ def _reload_config_and_apply(
             setattr(args, cli_arg, int(new_val))
             io.echo(
                 f"Live reload: {cli_arg}={new_val} applied (AuthService)",
-                level="info",
             )
 
     # Live: autorestart / restart_delay / max_restarts — update the loop
@@ -727,7 +724,6 @@ def _reload_config_and_apply(
             if new_ar != autorestart_ref[0]:
                 io.echo(
                     f"Live reload: autorestart={new_ar} applied",
-                    level="info",
                 )
                 autorestart_ref[0] = new_ar
         if "restart_delay" in bed_cfg:
@@ -735,7 +731,6 @@ def _reload_config_and_apply(
             if new_rd != restart_delay_ref[0]:
                 io.echo(
                     f"Live reload: restart_delay={new_rd}s applied",
-                    level="info",
                 )
                 restart_delay_ref[0] = new_rd
         if "max_restarts" in bed_cfg:
@@ -743,7 +738,6 @@ def _reload_config_and_apply(
             if new_mr != max_restarts_ref[0]:
                 io.echo(
                     f"Live reload: max_restarts={new_mr} applied",
-                    level="info",
                 )
                 max_restarts_ref[0] = new_mr
 
@@ -802,7 +796,6 @@ async def main_async() -> None:
         io.echo(
             f"Loaded router module "
             f"{args.router.rsplit('.', 1)[0]} from {router_class.__module__}",
-            level="info",
         )
     except Exception:
         # bbsengine6.module.load() already emitted io.echo_traceback(...).
@@ -829,7 +822,7 @@ async def main_async() -> None:
 
     def signal_handler() -> None:
         nonlocal shutdown_requested
-        io.echo("Received shutdown signal", level="info")
+        io.echo("Received shutdown signal")
         shutdown_requested = True
         current = bed_holder[0]
         if current is not None:
