@@ -2,7 +2,7 @@
 
 import argparse
 import asyncio
-from typing import Any, List
+from typing import Any, Dict, List
 
 from bbsengine6 import io, member, database
 from bbsengine6.bank import BankService
@@ -35,6 +35,34 @@ def _resolve_moniker(args) -> str | None:
     if moniker is None:
         io.echo("Could not determine current user.", level="error")
     return moniker
+
+
+def _resolve_loginids(args, monikers: List[str]) -> Dict[str, str]:
+    """Map monikers to ``engine.__member.loginid`` for display.
+
+    Returns an empty dict if the pool cannot be built (e.g. the tool is
+    driven from tests with no real DB) or if a per-row lookup fails.
+    Callers fall back to the raw moniker when the dict has no entry
+    for the actor.
+    """
+    pool = None
+    try:
+        pool = database.getpool(args)
+    except Exception:
+        return {}
+    result: Dict[str, str] = {}
+    for m in monikers:
+        if not m or m in result:
+            continue
+        try:
+            rec = member.getbymoniker(args, m, fields="loginid", pool=pool)
+        except Exception:
+            continue
+        if isinstance(rec, dict):
+            val = rec.get("loginid")
+            if isinstance(val, str) and val:
+                result[m] = val
+    return result
 
 
 class _BedBankFacade:
@@ -249,10 +277,12 @@ def bank_pending(args, moniker: str, is_sysop: bool = False, **kwargs) -> bool:
     if not transfers:
         io.echo("No pending transfers.")
         return True
+    loginids = _resolve_loginids(args, [t.get("requestedby", "") for t in transfers])
     for t in transfers:
+        requested_by = t.get("requestedby", "")
         io.echo(
             f"  #{t['id']}  {t['from_moniker']} -> {t['to_moniker']}  "
-            f"amount={t['amount']}  by={t['requestedby']}  "
+            f"amount={t['amount']}  by={loginids.get(requested_by, requested_by)}  "
             f"at={t['requestedat']}"
         )
     return True
@@ -292,10 +322,13 @@ def bank_history(args, moniker: str, **kwargs) -> bool:
     if not txns:
         io.echo("No transactions.")
         return True
+    loginids = _resolve_loginids(args, [t.get("membermoniker", "") for t in txns])
     for t in txns:
+        actor = t.get("membermoniker", "")
         io.echo(
             f"  #{t['id']}  {t['transactiontype']}  amount={t['amount']}  "
-            f"{t['description']}  by={t['membermoniker']}  at={t['dateposted']}"
+            f"{t['description']}  by={loginids.get(actor, actor)}  "
+            f"at={t['dateposted']}"
         )
     return True
 

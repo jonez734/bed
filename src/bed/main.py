@@ -471,6 +471,11 @@ class BED:
                 # for the ``auth`` message, so the log line emitted
                 # here carries the populated loginid/moniker for
                 # every message, including the auth message itself.
+                # ``state.loginid`` is set by the credential provider
+                # from ``engine.__member.loginid``. When the lookup
+                # failed (DB outage, NULL column, no session yet) we
+                # leave the field empty rather than substitute an
+                # unrelated value.
                 ws_id = str(websocket.id)
                 state = session_registry.get_by_websocket(ws_id)
                 if state is not None:

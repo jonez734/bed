@@ -4,10 +4,13 @@ Covers:
 - buildargs: registers --databasename/--moniker/--sysop/--debug
 - _resolve_moniker: --moniker short-circuit, getcurrentmoniker happy path,
   getcurrentmoniker returning None, and the pool is passed in
+- _resolve_loginids: maps monikers to engine.__member.loginid via
+  member.getbymoniker, tolerates pool failure, dedupes input
 - bank_balance / bank_add / bank_remove / bank_transfer / bank_pending /
   bank_history / bank_approve / bank_reject / bank_list_all
   - each delegates to the right bbsengine6.bank.BankService method
   - each prints results via bbsengine6.io.echo
+  - bank_history and bank_pending render by=<loginid> (with moniker fallback)
 - bank_add / bank_remove / bank_transfer reject non-positive amounts
 - bank_balance, bank_history, bank_list_all, bank_pending tolerate empty data
 - main() short-circuits when _resolve_moniker returns None
@@ -164,6 +167,103 @@ def test_resolve_moniker_prints_error_when_lookup_fails():
     assert result is None
     echo.assert_called_once()
     assert "Could not determine current user" in echo.call_args[0][0]
+
+
+# ---------------------------------------------------------------------
+# _resolve_loginids
+
+
+def test_resolve_loginids_returns_mapping_for_known_monikers():
+    """_resolve_loginids queries member.getbymoniker for each unique moniker
+    and returns {moniker: loginid} when the row has a non-empty loginid."""
+    tool = _import_tool()
+    args = _make_args()
+    fake_pool = MagicMock(name="pool")
+
+    def fake_getbymoniker(_args, moniker, fields="*", **_kwargs):
+        return {
+            "alice": {"loginid": "alice_os"},
+            "bob": {"loginid": ""},
+            "carol": {"loginid": "carol_os"},
+        }.get(moniker)
+
+    with patch.object(tool.database, "getpool", return_value=fake_pool), \
+         patch.object(tool.member, "getbymoniker", side_effect=fake_getbymoniker) as gbm:
+        result = tool._resolve_loginids(args, ["alice", "bob", "carol"])
+
+    assert result == {"alice": "alice_os", "carol": "carol_os"}
+    assert "bob" not in result
+    assert sorted(c.args[1] for c in gbm.call_args_list) == [
+        "alice", "bob", "carol",
+    ]
+    assert all(c.kwargs.get("fields") == "loginid" for c in gbm.call_args_list)
+
+
+def test_resolve_loginids_dedupes_input():
+    """A repeated moniker must not trigger a second getbymoniker call."""
+    tool = _import_tool()
+    args = _make_args()
+    fake_pool = MagicMock(name="pool")
+
+    with patch.object(tool.database, "getpool", return_value=fake_pool), \
+         patch.object(
+             tool.member,
+             "getbymoniker",
+             return_value={"loginid": "alice_os"},
+         ) as gbm:
+        result = tool._resolve_loginids(args, ["alice", "alice", "alice"])
+
+    assert result == {"alice": "alice_os"}
+    gbm.assert_called_once_with(args, "alice", fields="loginid", pool=fake_pool)
+
+
+def test_resolve_loginids_skips_empty_monikers():
+    """Empty-string monikers must not hit the DB."""
+    tool = _import_tool()
+    args = _make_args()
+    fake_pool = MagicMock(name="pool")
+
+    with patch.object(tool.database, "getpool", return_value=fake_pool), \
+         patch.object(tool.member, "getbymoniker") as gbm:
+        result = tool._resolve_loginids(args, ["", "", None])
+
+    assert result == {}
+    gbm.assert_not_called()
+
+
+def test_resolve_loginids_handles_getbymoniker_failure():
+    """If member.getbymoniker raises, the helper returns an empty dict
+    so callers can degrade gracefully."""
+    tool = _import_tool()
+    args = _make_args()
+    fake_pool = MagicMock(name="pool")
+
+    with patch.object(tool.database, "getpool", return_value=fake_pool), \
+         patch.object(
+             tool.member,
+             "getbymoniker",
+             side_effect=RuntimeError("db down"),
+         ):
+        result = tool._resolve_loginids(args, ["alice"])
+
+    assert result == {}
+
+
+def test_resolve_loginids_handles_getpool_failure():
+    """When database.getpool raises (e.g. invalid DSN in tests) we
+    must still return an empty dict rather than crash the caller."""
+    tool = _import_tool()
+    args = _make_args()
+
+    with patch.object(
+        tool.database,
+        "getpool",
+        side_effect=ValueError("empty DSN"),
+    ), patch.object(tool.member, "getbymoniker") as gbm:
+        result = tool._resolve_loginids(args, ["alice"])
+
+    assert result == {}
+    gbm.assert_not_called()
 
 
 # ---------------------------------------------------------------------
@@ -375,6 +475,57 @@ def test_bank_pending_passes_sysop_flag():
     assert "a -> b" in rendered
 
 
+def test_bank_pending_renders_loginid_for_known_actor():
+    """When _resolve_loginids returns a loginid for the requester, that
+    value is what appears in the ``by=`` field, not the raw moniker."""
+    tool = _import_tool()
+    args = _make_args()
+    rows = [
+        {
+            "id": 1,
+            "from_moniker": "alice",
+            "to_moniker": "bob",
+            "amount": 10,
+            "requestedby": "alice",
+            "requestedat": "2026-08-04",
+        }
+    ]
+    bank = _make_bank_mock(get_pending_transfers=MagicMock(return_value=rows))
+    with patch.object(tool, "_bank_service", return_value=bank), \
+         patch.object(tool, "_resolve_loginids", return_value={"alice": "alice_os"}), \
+         patch.object(tool.io, "echo") as echo:
+        assert tool.bank_pending(args, "alice") is True
+    rendered = "\n".join(c.args[0] for c in echo.call_args_list)
+    assert "by=alice_os" in rendered
+    # The line ends in `by=<value>  at=<date>`, so the fallback marker
+    # would be `by=alice  at=`.
+    assert "by=alice  at=" not in rendered
+
+
+def test_bank_pending_falls_back_to_moniker_when_loginid_missing():
+    """If _resolve_loginids returns no entry for the requester, the
+    raw moniker is used as the ``by=`` value."""
+    tool = _import_tool()
+    args = _make_args()
+    rows = [
+        {
+            "id": 1,
+            "from_moniker": "alice",
+            "to_moniker": "bob",
+            "amount": 10,
+            "requestedby": "alice",
+            "requestedat": "2026-08-04",
+        }
+    ]
+    bank = _make_bank_mock(get_pending_transfers=MagicMock(return_value=rows))
+    with patch.object(tool, "_bank_service", return_value=bank), \
+         patch.object(tool, "_resolve_loginids", return_value={}), \
+         patch.object(tool.io, "echo") as echo:
+        assert tool.bank_pending(args, "alice") is True
+    rendered = "\n".join(c.args[0] for c in echo.call_args_list)
+    assert "by=alice" in rendered
+
+
 # ---------------------------------------------------------------------
 # bank_approve / bank_reject
 
@@ -469,6 +620,107 @@ def test_bank_history_renders_rows():
     assert "7" in rendered
     assert "credit" in rendered
     assert "50" in rendered
+
+
+def test_bank_history_renders_loginid_for_known_actor():
+    """When _resolve_loginids returns a loginid for the actor, that
+    value replaces the moniker in the ``by=`` field of every row."""
+    tool = _import_tool()
+    args = _make_args()
+    rows = [
+        {
+            "id": 7,
+            "transactiontype": "credit",
+            "amount": 50,
+            "description": "payday",
+            "membermoniker": "sysop",
+            "dateposted": "2026-08-04",
+        },
+        {
+            "id": 8,
+            "transactiontype": "debit",
+            "amount": 5,
+            "description": "snack",
+            "membermoniker": "alice",
+            "dateposted": "2026-08-04",
+        },
+    ]
+    bank = _make_bank_mock(get_history=MagicMock(return_value=rows))
+    with patch.object(tool, "_bank_service", return_value=bank), \
+         patch.object(
+             tool,
+             "_resolve_loginids",
+             return_value={"sysop": "jam", "alice": "alice_os"},
+         ), \
+         patch.object(tool.io, "echo") as echo:
+        assert tool.bank_history(args, "bob") is True
+    rendered = "\n".join(c.args[0] for c in echo.call_args_list)
+    assert "by=jam" in rendered
+    assert "by=alice_os" in rendered
+    # Fallback markers would appear as `by=<moniker>  at=<date>`.
+    assert "by=sysop  at=" not in rendered
+    assert "by=alice  at=" not in rendered
+
+
+def test_bank_history_falls_back_to_moniker_when_loginid_missing():
+    """If _resolve_loginids returns no entry for the actor, the
+    raw moniker is rendered as ``by=<moniker>``."""
+    tool = _import_tool()
+    args = _make_args()
+    rows = [
+        {
+            "id": 7,
+            "transactiontype": "credit",
+            "amount": 50,
+            "description": "payday",
+            "membermoniker": "sysop",
+            "dateposted": "2026-08-04",
+        }
+    ]
+    bank = _make_bank_mock(get_history=MagicMock(return_value=rows))
+    with patch.object(tool, "_bank_service", return_value=bank), \
+         patch.object(tool, "_resolve_loginids", return_value={}), \
+         patch.object(tool.io, "echo") as echo:
+        assert tool.bank_history(args, "alice") is True
+    rendered = "\n".join(c.args[0] for c in echo.call_args_list)
+    assert "by=sysop" in rendered
+
+
+def test_bank_history_partial_loginid_lookup_keeps_unknown_moniker():
+    """A row whose actor is missing from the lookup falls back to its
+    moniker; other rows still show their loginid."""
+    tool = _import_tool()
+    args = _make_args()
+    rows = [
+        {
+            "id": 7,
+            "transactiontype": "credit",
+            "amount": 50,
+            "description": "payday",
+            "membermoniker": "sysop",
+            "dateposted": "2026-08-04",
+        },
+        {
+            "id": 8,
+            "transactiontype": "debit",
+            "amount": 5,
+            "description": "snack",
+            "membermoniker": "ghost",
+            "dateposted": "2026-08-04",
+        },
+    ]
+    bank = _make_bank_mock(get_history=MagicMock(return_value=rows))
+    with patch.object(tool, "_bank_service", return_value=bank), \
+         patch.object(
+             tool,
+             "_resolve_loginids",
+             return_value={"sysop": "jam"},  # "ghost" missing
+         ), \
+         patch.object(tool.io, "echo") as echo:
+        assert tool.bank_history(args, "alice") is True
+    rendered = "\n".join(c.args[0] for c in echo.call_args_list)
+    assert "by=jam" in rendered
+    assert "by=ghost" in rendered
 
 
 # ---------------------------------------------------------------------
