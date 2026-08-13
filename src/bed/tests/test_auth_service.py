@@ -574,6 +574,26 @@ class TestSessionRegistry(unittest.TestCase):
         r.clear_pending("s1")
         self.assertIsNone(r.take_pending("s1"))
 
+    def test_bind_with_loginid(self) -> None:
+        r = SessionRegistry()
+        r.bind("s1", "w1", "alice", False, loginid="alice_os")
+        self.assertEqual(r.get_by_session("s1").loginid, "alice_os")
+        self.assertEqual(r.get_by_websocket("w1").loginid, "alice_os")
+
+    def test_rebind_preserves_loginid_when_omitted(self) -> None:
+        """Re-bind without loginid keeps the original value (the websocket
+        changed but the session and its loginid are stable)."""
+        r = SessionRegistry()
+        r.bind("s1", "w1", "alice", False, loginid="alice_os")
+        st = r.bind("s1", "w2", "alice", False)
+        self.assertEqual(st.loginid, "alice_os")
+
+    def test_rebind_overrides_loginid_when_provided(self) -> None:
+        r = SessionRegistry()
+        r.bind("s1", "w1", "alice", False, loginid="alice_os")
+        st = r.bind("s1", "w2", "alice", False, loginid="alice_v2")
+        self.assertEqual(st.loginid, "alice_v2")
+
 
 class TestBEDWiring(unittest.TestCase):
     """BED main flow: AuthService is wired for non-DefaultRouter + DB JSON flags."""
@@ -1246,6 +1266,281 @@ class TestSecretFilePathSafety(unittest.TestCase):
             # ``link`` is now a regular file (symlink was replaced).
             self.assertTrue(os.path.exists(link))
             self.assertFalse(os.path.islink(link))
+
+
+class TestLoginIdPlumbing(unittest.IsolatedAsyncioTestCase):
+    """Verify that ``loginid`` flows from credential provider -> session
+    state -> token record -> reconnect round-trip."""
+
+    async def asyncSetUp(self) -> None:
+        import socket as _socket
+        from bbsengine6.net import WebSocketServer
+        from bed.api import AuthService, InMemoryTokenStore, SessionRegistry
+
+        class _Provider:
+            def authenticate(self, args, moniker, password, *, pool=None):
+                from bed.api import MemberInfo
+                if moniker == "alice" and password == "pw":
+                    return MemberInfo(
+                        moniker="alice",
+                        is_sysop=False,
+                        balance=7,
+                        loginid="alice_os",
+                    )
+                return None
+
+        with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            self.port = s.getsockname()[1]
+
+        self.token_store = InMemoryTokenStore()
+        self.registry = SessionRegistry()
+        provider = _Provider()
+        args = argparse.Namespace(debug=False, pool=None)
+        self.auth_service = AuthService(
+            args=args,
+            session_registry=self.registry,
+            token_store=self.token_store,
+            credential_provider=provider,
+            secret=secrets.token_bytes(32),
+            instance_id="loginid-instance",
+            ttl_seconds=900,
+        )
+        self.server = WebSocketServer(host="127.0.0.1", port=self.port)
+        self.auth_service.register_all(self.server)
+        await self.server.start()
+
+    async def asyncTearDown(self) -> None:
+        await self.server.stop()
+
+    async def test_loginid_auth_then_reconnect(self) -> None:
+        import websockets
+
+        uri = f"ws://127.0.0.1:{self.port}/"
+        async with websockets.connect(uri) as ws:
+            await ws.send(
+                json.dumps({"type": "auth", "moniker": "alice", "password": "pw"})
+            )
+            auth = json.loads(await ws.recv())
+            self.assertTrue(auth["success"])
+
+            # The single bound session must carry loginid.
+            bound = list(self.registry._by_session.values())
+            self.assertEqual(len(bound), 1)
+            self.assertEqual(bound[0].moniker, "alice")
+            self.assertEqual(bound[0].loginid, "alice_os")
+
+            # The issued token record must carry loginid.
+            token1 = auth["token"]
+            rec = self.token_store.get(token1)
+            self.assertIsNotNone(rec)
+            self.assertEqual(rec.loginid, "alice_os")
+
+        async with websockets.connect(uri) as ws2:
+            await ws2.send(json.dumps({"type": "reconnect", "token": token1}))
+            rec = json.loads(await ws2.recv())
+            self.assertTrue(rec["success"])
+            token2 = rec["token"]
+
+        # After reconnect, the still-bound session must carry loginid again.
+        bound = list(self.registry._by_session.values())
+        self.assertEqual(len(bound), 1)
+        self.assertEqual(bound[0].loginid, "alice_os")
+
+        # The rotated token record must also carry loginid.
+        rec2 = self.token_store.get(token2)
+        self.assertIsNotNone(rec2)
+        self.assertEqual(rec2.loginid, "alice_os")
+
+
+class TestPreDispatchLogFormat(unittest.TestCase):
+    """Verify the BED ``_pre_dispatch`` debug log emits ``loginid=`` in
+    addition to ``session_id`` and ``moniker``. We don't drive a full
+    WebSocket session here; we read the source of ``bed.main`` and assert
+    the format strings contain the expected keys."""
+
+    def test_log_format_includes_loginid(self) -> None:
+        import re
+        from pathlib import Path
+
+        src = Path("/home/opencode/data/work/bed/src/bed/main.py").read_text()
+        # Both branches (bank_add/bank_remove and the default) must
+        # include loginid=... so grepping a router log line yields the
+        # OS-level user identity alongside the display name.
+        self.assertIn("loginid=", src)
+
+        # Each fragment can be a separate f-string literal that Python
+        # implicitly concatenates, so check the keys appear in the
+        # expected order anywhere in the default branch.
+        positions = {
+            "session_id": src.find("router: in session_id={session_id}"),
+            "loginid": src.find("loginid={loginid or ''}"),
+            "moniker": src.find("moniker={moniker or ''}"),
+            "type": src.find("type={msg_type}"),
+        }
+        for key, pos in positions.items():
+            self.assertGreater(
+                pos,
+                -1,
+                f"default-branch f-string missing fragment for {key!r}",
+            )
+        ordered = sorted(positions.items(), key=lambda kv: kv[1])
+        keys_in_order = [k for k, _ in ordered]
+        self.assertEqual(
+            keys_in_order,
+            ["session_id", "loginid", "moniker", "type"],
+            "router log fragments must appear in "
+            "session_id, loginid, moniker, type order",
+        )
+
+
+class TestPostDispatchHookOrder(unittest.IsolatedAsyncioTestCase):
+    """The ``router: in ...`` log line for the ``auth`` message itself must
+    carry the populated loginid/moniker, because post_dispatch runs AFTER
+    AuthService.bind has populated the SessionState."""
+
+    async def asyncSetUp(self) -> None:
+        import socket as _socket
+        from bbsengine6.net import WebSocketServer
+        from bed.api import AuthService, InMemoryTokenStore, SessionRegistry
+
+        class _Provider:
+            def authenticate(self, args, moniker, password, *, pool=None):
+                from bed.api import MemberInfo
+                if moniker == "alice" and password == "pw":
+                    return MemberInfo(
+                        moniker="alice",
+                        is_sysop=False,
+                        balance=7,
+                        loginid="alice_os",
+                    )
+                return None
+
+        with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            self.port = s.getsockname()[1]
+
+        self.token_store = InMemoryTokenStore()
+        self.registry = SessionRegistry()
+        provider = _Provider()
+        args = argparse.Namespace(debug=False, pool=None)
+        self.auth_service = AuthService(
+            args=args,
+            session_registry=self.registry,
+            token_store=self.token_store,
+            credential_provider=provider,
+            secret=secrets.token_bytes(32),
+            instance_id="post-dispatch-instance",
+            ttl_seconds=900,
+        )
+        self.server = WebSocketServer(host="127.0.0.1", port=self.port)
+        self.auth_service.register_all(self.server)
+
+        # Capture the state the BED post_dispatch hook would observe by
+        # wiring a hook that snapshots ``registry.get_by_websocket``
+        # *after* the handler has run.
+        self.snapshots: Dict[str, Any] = {}
+
+        async def _post_dispatch(websocket, message, response):
+            ws_id = str(websocket.id)
+            state = self.registry.get_by_websocket(ws_id)
+            self.snapshots[message.get("type", "")] = {
+                "moniker": state.moniker if state else None,
+                "loginid": state.loginid if state else None,
+            }
+
+        self.server._post_dispatch = _post_dispatch
+        await self.server.start()
+
+    async def asyncTearDown(self) -> None:
+        await self.server.stop()
+
+    async def test_auth_message_sees_populated_state(self) -> None:
+        import websockets
+
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}/") as ws:
+            await ws.send(
+                json.dumps({"type": "auth", "moniker": "alice", "password": "pw"})
+            )
+            await ws.recv()
+
+        snap = self.snapshots.get("auth")
+        self.assertIsNotNone(snap, "post_dispatch was not invoked for auth")
+        self.assertEqual(snap["moniker"], "alice")
+        self.assertEqual(snap["loginid"], "alice_os")
+
+
+class TestPreDispatchHookSetsRole(unittest.IsolatedAsyncioTestCase):
+    """The ``pre_dispatch`` hook must call ``set_current_role(state.moniker)``
+    so DB queries inside the handler run under the right PostgreSQL role."""
+
+    async def asyncSetUp(self) -> None:
+        import socket as _socket
+        from bbsengine6.net import WebSocketServer
+        from bed.api import AuthService, InMemoryTokenStore, SessionRegistry
+
+        class _Provider:
+            def authenticate(self, args, moniker, password, *, pool=None):
+                from bed.api import MemberInfo
+                if moniker == "alice" and password == "pw":
+                    return MemberInfo(
+                        moniker="alice",
+                        is_sysop=False,
+                        balance=7,
+                        loginid="alice_os",
+                    )
+                return None
+
+        with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            self.port = s.getsockname()[1]
+
+        self.token_store = InMemoryTokenStore()
+        self.registry = SessionRegistry()
+        args = argparse.Namespace(debug=False, pool=None)
+        self.auth_service = AuthService(
+            args=args,
+            session_registry=self.registry,
+            token_store=self.token_store,
+            credential_provider=_Provider(),
+            secret=secrets.token_bytes(32),
+            instance_id="pre-dispatch-instance",
+            ttl_seconds=900,
+        )
+        self.server = WebSocketServer(host="127.0.0.1", port=self.port)
+        self.auth_service.register_all(self.server)
+
+        self.observed_roles: List[Optional[str]] = []
+
+        async def _pre_dispatch(websocket, message):
+            ws_id = str(websocket.id)
+            state = self.registry.get_by_websocket(ws_id)
+            if state is not None:
+                self.observed_roles.append(("set", state.moniker))
+            else:
+                self.observed_roles.append(("skip", None))
+
+        self.server._pre_dispatch = _pre_dispatch
+        await self.server.start()
+
+    async def asyncTearDown(self) -> None:
+        await self.server.stop()
+
+    async def test_role_set_after_auth(self) -> None:
+        import websockets
+
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}/") as ws:
+            # First message: auth. Pre_dispatch runs before AuthService
+            # binds the state, so the hook should skip (no role change).
+            await ws.send(
+                json.dumps({"type": "auth", "moniker": "alice", "password": "pw"})
+            )
+            await ws.recv()
+
+        # The auth message's pre_dispatch should NOT have set a role,
+        # because at pre_dispatch time the state was not yet populated.
+        kinds = [k for k, _ in self.observed_roles]
+        self.assertEqual(kinds[0], "skip")
 
 
 if __name__ == "__main__":

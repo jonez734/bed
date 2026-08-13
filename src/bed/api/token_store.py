@@ -29,6 +29,7 @@ class TokenRecord:
     bed_instance_id: str
     websocket_id: str
     claims: Dict[str, Any] = field(default_factory=dict)
+    loginid: Optional[str] = None
 
 
 @dataclass
@@ -37,6 +38,7 @@ class MemberInfo:
     moniker: str
     is_sysop: bool = False
     balance: Optional[int] = None
+    loginid: Optional[str] = None
 
 
 class TokenStore(Protocol):
@@ -142,9 +144,10 @@ class DBTokenStore:
                     f"""
                     INSERT INTO {self.TABLE}
                         (token, moniker, session_id, issued_at, expires_at,
-                         is_sysop, bed_instance_id, websocket_id, claims)
+                         is_sysop, bed_instance_id, websocket_id, claims,
+                         loginid)
                     VALUES (%s, %s, %s, to_timestamp(%s), to_timestamp(%s),
-                            %s, %s, %s, %s::jsonb)
+                            %s, %s, %s, %s::jsonb, %s)
                     ON CONFLICT (token) DO UPDATE SET
                         moniker = EXCLUDED.moniker,
                         session_id = EXCLUDED.session_id,
@@ -153,7 +156,8 @@ class DBTokenStore:
                         is_sysop = EXCLUDED.is_sysop,
                         bed_instance_id = EXCLUDED.bed_instance_id,
                         websocket_id = EXCLUDED.websocket_id,
-                        claims = EXCLUDED.claims
+                        claims = EXCLUDED.claims,
+                        loginid = EXCLUDED.loginid
                     """,
                     (
                         record.token,
@@ -165,6 +169,7 @@ class DBTokenStore:
                         record.bed_instance_id,
                         record.websocket_id,
                         json.dumps(record.claims),
+                        record.loginid,
                     ),
                 )
 
@@ -179,7 +184,8 @@ class DBTokenStore:
                     SELECT token, moniker, session_id,
                            EXTRACT(EPOCH FROM issued_at)::double precision AS issued_at,
                            EXTRACT(EPOCH FROM expires_at)::double precision AS expires_at,
-                           is_sysop, bed_instance_id, websocket_id, claims
+                           is_sysop, bed_instance_id, websocket_id, claims,
+                           loginid
                     FROM {self.TABLE}
                     WHERE token = %s AND expires_at > now()
                     """,
@@ -206,6 +212,7 @@ class DBTokenStore:
             bed_instance_id=row["bed_instance_id"],
             websocket_id=row["websocket_id"],
             claims=claims,
+            loginid=row.get("loginid"),
         )
 
     def delete(self, token: str) -> bool:

@@ -172,6 +172,7 @@ class AuthService(BaseService):
             "is_sysop": bool(info.is_sysop),
             "bed_instance_id": self.instance_id,
             "websocket_id": websocket_id,
+            "loginid": info.loginid,
         }
         token = _encode_token(claims, self.secret)
         return TokenRecord(
@@ -184,6 +185,7 @@ class AuthService(BaseService):
             bed_instance_id=self.instance_id,
             websocket_id=websocket_id,
             claims=claims,
+            loginid=info.loginid,
         )
 
     def _persist(self, record: TokenRecord) -> None:
@@ -235,7 +237,12 @@ class AuthService(BaseService):
         session_id = str(uuid.uuid4())
         websocket_id = str(websocket.id)
         state = self.sessions.bind(
-            session_id, websocket_id, info.moniker, info.is_sysop, balance=info.balance
+            session_id,
+            websocket_id,
+            info.moniker,
+            info.is_sysop,
+            balance=info.balance,
+            loginid=info.loginid,
         )
         state.auth_service_token = None
         record = self._mint_record(info, session_id, websocket_id)
@@ -244,7 +251,7 @@ class AuthService(BaseService):
 
         io.echo(
             f"AuthService: issued token for moniker={info.moniker!r} "
-            f"session={session_id[:8]}…",
+            f"loginid={info.loginid!r} session={session_id[:8]}…",
         )
         return self._auth_result_envelope(record, info, fresh=True)
 
@@ -289,12 +296,14 @@ class AuthService(BaseService):
             moniker=store_record.moniker,
             is_sysop=store_record.is_sysop,
             balance=None,
+            loginid=store_record.loginid,
         )
         state = self.sessions.bind(
             store_record.session_id,
             new_websocket_id,
             store_record.moniker,
             store_record.is_sysop,
+            loginid=store_record.loginid,
         )
         rotated = self._mint_record(info, store_record.session_id, new_websocket_id)
         try:
@@ -308,6 +317,7 @@ class AuthService(BaseService):
         pending = self.sessions.take_pending(store_record.session_id)
         io.echo(
             f"AuthService: reconnected moniker={store_record.moniker!r} "
+            f"loginid={store_record.loginid!r} "
             f"session={store_record.session_id[:8]}… "
             f"pending={'yes' if pending else 'no'}",
         )
@@ -363,6 +373,7 @@ class AuthService(BaseService):
             moniker=store_record.moniker,
             is_sysop=store_record.is_sysop,
             balance=store_record.claims.get("balance"),
+            loginid=store_record.loginid,
         )
         rotated = self._mint_record(info, store_record.session_id, websocket_id)
         try:

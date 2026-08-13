@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS engine.__bed_token (
     is_sysop          boolean     NOT NULL DEFAULT false,
     bed_instance_id   text        NOT NULL,
     websocket_id      text        NOT NULL,
-    claims            jsonb       NOT NULL
+    claims            jsonb       NOT NULL,
+    loginid           text        NULL
 );
 
 CREATE INDEX IF NOT EXISTS __bed_token_expires_at_idx

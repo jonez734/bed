@@ -28,6 +28,7 @@ class SessionState:
     request_id_counter: int = 0
     pending_request: Optional[Dict[str, Any]] = None
     auth_service_token: Optional[str] = None
+    loginid: Optional[str] = None
 
 
 class SessionRegistry:
@@ -46,6 +47,7 @@ class SessionRegistry:
         is_sysop: bool,
         *,
         balance: Optional[int] = None,
+        loginid: Optional[str] = None,
     ) -> SessionState:
         with self._lock:
             old = self._by_websocket.pop(websocket_id, None)
@@ -60,6 +62,7 @@ class SessionRegistry:
                     moniker=moniker,
                     is_sysop=is_sysop,
                     balance=balance,
+                    loginid=loginid,
                 )
                 self._by_session[session_id] = state
             else:
@@ -68,6 +71,8 @@ class SessionRegistry:
                 state.is_sysop = is_sysop
                 if balance is not None:
                     state.balance = balance
+                if loginid is not None:
+                    state.loginid = loginid
             self._by_websocket[websocket_id] = state
             return state
 

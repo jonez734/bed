@@ -449,14 +449,37 @@ class BED:
             session_registry = self._session_registry
 
             async def _pre_dispatch(websocket: Any, message: Dict[str, Any]) -> None:
+                # Pre-dispatch runs BEFORE the service handler. Its only
+                # job is to install the right PostgreSQL role for the
+                # DB queries the handler is about to make. The
+                # SessionState may not be populated yet (e.g. for the
+                # ``auth`` message itself, which is what populates
+                # it); for those cases we leave the current role
+                # untouched.
                 ws_id = str(websocket.id)
                 state = session_registry.get_by_websocket(ws_id)
                 if state is not None:
                     set_current_role(state.moniker)
+
+            async def _post_dispatch(
+                websocket: Any,
+                message: Dict[str, Any],
+                response: Any,
+            ) -> None:
+                # Post-dispatch runs AFTER the service handler. By
+                # this point AuthService has bound the SessionState
+                # for the ``auth`` message, so the log line emitted
+                # here carries the populated loginid/moniker for
+                # every message, including the auth message itself.
+                ws_id = str(websocket.id)
+                state = session_registry.get_by_websocket(ws_id)
+                if state is not None:
                     moniker = state.moniker
+                    loginid = state.loginid
                     session_id = state.session_id
                 else:
                     moniker = None
+                    loginid = None
                     session_id = ws_id
                 msg_type = message.get("type") or ""
                 if msg_type in ("bank_add", "bank_remove"):
@@ -464,6 +487,7 @@ class BED:
                     description = message.get("description") or ""
                     io.echo(
                         f"router: in session_id={session_id} "
+                        f"loginid={loginid or ''} "
                         f"moniker={moniker or ''} type={msg_type} "
                         f"amount={amount} description={description}",
                         level="debug",
@@ -471,11 +495,13 @@ class BED:
                 else:
                     io.echo(
                         f"router: in session_id={session_id} "
+                        f"loginid={loginid or ''} "
                         f"moniker={moniker or ''} type={msg_type}",
                         level="debug",
                     )
 
             self.server._pre_dispatch = _pre_dispatch
+            self.server._post_dispatch = _post_dispatch
 
             await self.server.start()
         except Exception:

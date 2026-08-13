@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from typing import Any, Optional, Protocol
 
+from bbsengine6 import io
+
 from .token_store import MemberInfo
 
 
@@ -25,6 +27,35 @@ class CredentialProvider(Protocol):
         *,
         pool: Any = None,
     ) -> Optional[MemberInfo]: ...
+
+
+def _lookup_loginid(args: Any, moniker: str, *, pool: Any) -> Optional[str]:
+    """Resolve the OS-level ``loginid`` for a member.
+
+    Best-effort: never raises. Returns ``None`` if the row is missing,
+    the column is NULL, or the lookup fails for any reason. ``loginid``
+    is purely informational (used in server-side debug logs) so a
+    failure to resolve it must never block authentication. Any DB
+    failure is surfaced via ``io.echo_traceback`` so the operator can
+    see what went wrong in the logs.
+    """
+    from bbsengine6 import member
+
+    try:
+        rec = member.getbymoniker(
+            args, moniker, fields="loginid", pool=pool
+        )
+    except Exception:
+        io.echo_traceback(
+            f"bed.api.credential_provider._lookup_loginid.100: moniker={moniker!r}"
+        )
+        return None
+    if not isinstance(rec, dict):
+        return None
+    val = rec.get("loginid")
+    if isinstance(val, str) and val:
+        return val
+    return None
 
 
 class MonikerOnlyCredentialProvider:
@@ -65,7 +96,10 @@ class MonikerOnlyCredentialProvider:
             return None
 
         is_sysop = bool(member.issysop(args, moniker=moniker, pool=pool))
-        return MemberInfo(moniker=moniker, is_sysop=is_sysop, balance=None)
+        loginid = _lookup_loginid(args, moniker, pool=pool)
+        return MemberInfo(
+            moniker=moniker, is_sysop=is_sysop, balance=None, loginid=loginid
+        )
 
 
 class PasswordCredentialProvider:
@@ -107,7 +141,13 @@ class PasswordCredentialProvider:
             balance = member.getcredits(args, membermoniker=moniker, pool=pool)
         except Exception:
             balance = None
-        return MemberInfo(moniker=moniker, is_sysop=is_sysop, balance=balance)
+        loginid = _lookup_loginid(args, moniker, pool=pool)
+        return MemberInfo(
+            moniker=moniker,
+            is_sysop=is_sysop,
+            balance=balance,
+            loginid=loginid,
+        )
 
 
 def get_provider(name: str) -> CredentialProvider:
