@@ -5,11 +5,20 @@ from bbsengine6.common import safe_path
 from bbsengine6.database import buildargs as databasebuildargs
 
 
-def _default_secret_path() -> str:
-    """Default value for --bed-secret: ~/.config/bed/bed.secret, with ~
-    expanded by the shell at argparse-parse time (we keep the literal
-    default here and let os.path.expanduser handle it on use)."""
-    return os.path.expanduser("~/.config/bed/bed.secret")
+DEFAULT_BED_NAME = "bed"
+
+
+def _default_secret_path(name: str = DEFAULT_BED_NAME) -> str:
+    """Default value for --bed-secret: ``~/.config/bed/<name>.secret``.
+
+    With the default name ``"bed"`` this resolves to the historical
+    ``~/.config/bed/bed.secret`` path, so existing installations are
+    unaffected. Custom names (``--bed-name mybbs`` or
+    ``bed.name = "mybbs"`` in bed.json) yield ``~/.config/bed/mybbs.secret``,
+    letting multiple bed instances on one host keep their secrets side by
+    side. The ``~`` is expanded at parse time via ``os.path.expanduser``.
+    """
+    return os.path.expanduser(f"~/.config/bed/{name}.secret")
 
 
 def _config_path_type(value: str) -> str:
@@ -48,6 +57,20 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         help="Path to PID file",
     )
     parentparser.add_argument(
+        "--bed-name",
+        dest="bed_name",
+        default=DEFAULT_BED_NAME,
+        help=(
+            "Logical name for this bed instance. Used to derive the "
+            "default --bed-secret path (``~/.config/bed/<name>.secret``) "
+            "and surfaced by the ``ping`` reply alongside the version. "
+            "Pick a per-instance name when running multiple bed daemons "
+            "on the same host so their secret files do not collide. "
+            "Empty string is treated as the default ``bed``. "
+            "(default: bed)"
+        ),
+    )
+    parentparser.add_argument(
         "--router",
         default="bbsengine6.net.defaultrouter.DefaultRouter",
         help=(
@@ -61,12 +84,14 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
     parentparser.add_argument(
         "--bed-secret",
         dest="bed_secret",
-        default=_default_secret_path(),
+        default=None,
         help=(
             "Path to the HMAC secret + per-instance UUID used to sign "
             "bearer tokens. Auto-created mode 0600 on first run. "
             "bed refuses to start if the file is world/group readable. "
-            "(default: ~/.config/bed/bed.secret)"
+            "When omitted, the path is derived from --bed-name as "
+            "~/.config/bed/<name>.secret (so the default name 'bed' "
+            "yields ~/.config/bed/bed.secret, preserving existing installs)."
         ),
     )
     parentparser.add_argument(
