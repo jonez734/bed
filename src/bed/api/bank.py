@@ -26,23 +26,27 @@
 #   (auth, message, ...) should follow this template -- see the
 #   TODO comments in bed/api/auth.py and bed/api/message.py.
 #
-#   Handlers perform four gates in order:
+#   Handlers perform five gates in order:
 #     1. Session bound (else ``not_authenticated``).
-#     2. Session token valid (if present) -- decode + HMAC verify +
+#     2. Wire token valid (if present) -- decode + HMAC verify +
 #        store check + expiry + instance match (else ``token_invalid``
 #        / ``token_revoked`` / ``instance_mismatch`` /
-#        ``token_expired``). When the session was minted by the auth
-#        service, ``state.auth_service_token`` carries the current
-#        bearer token; we re-verify it on every bank op so a token
-#        revoked since the session was bound cannot drive ledger
-#        mutations. The decoded claims are stashed on ``message``
-#        so ``bbsengine6.bank.access()`` can prefer claim-derived
+#        ``token_expired``). The CLI sends the bearer token it read
+#        from ``--token-file`` on every wire call; when present it
+#        is preferred over the session-bound token because it is
+#        more recently captured and catches the case where the
+#        session-bound snapshot has been revoked since WS open. The
+#        decoded claims are stashed on ``message["claims"]`` so
+#        ``bbsengine6.bank.access()`` can prefer claim-derived
 #        ``moniker`` / ``is_sysop`` over the in-memory session.
-#     3. Wire-shape validation -- moniker present, amount int > 0,
+#     3. Session token valid (if wire token absent) -- same gates
+#        as #2 but reads ``state.auth_service_token``. Skipped when
+#        the wire token already populated ``message["claims"]``.
+#     4. Wire-shape validation -- moniker present, amount int > 0,
 #        transfer_id int > 0 (else ``missing_moniker`` /
 #        ``invalid_amount``). This stays in the handler because
 #        envelope codes are a wire-protocol concern.
-#     4. ``bbsengine6.bank.access()`` authorization (else ``forbidden``).
+#     5. ``bbsengine6.bank.access()`` authorization (else ``forbidden``).
 #   ``bank_list_all`` is sysop-only. ``bank_pending`` ignores the
 #   wire's ``is_sysop`` and uses ``state.is_sysop`` instead, so a
 #   non-sysop session cannot escalate by sending ``is_sysop: true``.
@@ -146,32 +150,22 @@ def _get_session_for(
     return state, None
 
 
-def _validate_session_token(
-    self_ref: "BankService", state: SessionState
+def _validate_token_against_store(
+    self_ref: "BankService", token: str
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
-    """Validate ``state.auth_service_token`` if it is set.
+    """Decode ``token`` and check it against the token store + instance.
 
-    Returns ``(claims, None)`` on success -- ``claims`` is the decoded
-    token claims dict, ready to be stashed on ``message["claims"]`` so
-    :func:`bbsengine6.bank.access` can prefer claim-derived
-    ``moniker`` / ``is_sysop`` over the in-memory session state.
+    Shared core for :func:`_validate_session_token` and
+    :func:`_validate_wire_token`. Returns the same ``(claims, None)``
+    / ``(None, error_envelope)`` tuple shape.
 
-    Returns ``(None, None)`` when the session has no token (e.g. it
-    was created outside the auth flow); the caller falls back to the
-    existing session-based authorization.
-
-    Returns ``(None, error_envelope)`` on any token failure: the
-    caller surfaces the envelope and stops processing. The envelope
-    codes mirror the auth service so clients can reuse their
-    reconnect logic: ``token_invalid`` for HMAC / shape failures,
-    ``token_revoked`` for store misses, ``instance_mismatch`` for
-    tokens minted by a different bed instance, ``token_expired`` for
-    stale tokens.
-
-    Kept as a module-level helper (not a method) so it composes
-    cleanly with the session / shape / access() pipeline.
+    A ``token`` of ``""`` / ``None`` returns ``(None, None)`` (no
+    token was supplied). An unset ``secret`` / ``token_store`` /
+    ``instance_id`` also returns ``(None, None)`` so legacy /
+    unit-test callers that constructed the service without token
+    wiring degrade gracefully to session-bound authorization.
     """
-    token = getattr(state, "auth_service_token", None)
+    token = (token or "").strip()
     if not token:
         return None, None
 
@@ -179,8 +173,6 @@ def _validate_session_token(
     token_store = getattr(self_ref, "token_store", None)
     instance_id = getattr(self_ref, "instance_id", None)
     if not secret or token_store is None or not instance_id:
-        # BankService was constructed without token-aware wiring
-        # (e.g. legacy callers / unit tests). Treat as "no token".
         return None, None
 
     try:
@@ -215,6 +207,58 @@ def _validate_session_token(
         )
 
     return claims, None
+
+
+def _validate_session_token(
+    self_ref: "BankService", state: SessionState
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """Validate ``state.auth_service_token`` if it is set.
+
+    Returns ``(claims, None)`` on success -- ``claims`` is the decoded
+    token claims dict, ready to be stashed on ``message["claims"]`` so
+    :func:`bbsengine6.bank.access` can prefer claim-derived
+    ``moniker`` / ``is_sysop`` over the in-memory session state.
+
+    Returns ``(None, None)`` when the session has no token (e.g. it
+    was created outside the auth flow); the caller falls back to the
+    existing session-based authorization.
+
+    Returns ``(None, error_envelope)`` on any token failure: the
+    caller surfaces the envelope and stops processing. The envelope
+    codes mirror the auth service so clients can reuse their
+    reconnect logic: ``token_invalid`` for HMAC / shape failures,
+    ``token_revoked`` for store misses, ``instance_mismatch`` for
+    tokens minted by a different bed instance, ``token_expired`` for
+    stale tokens.
+
+    Kept as a module-level helper (not a method) so it composes
+    cleanly with the session / shape / access() pipeline.
+    """
+    return _validate_token_against_store(
+        self_ref, getattr(state, "auth_service_token", None)
+    )
+
+
+def _validate_wire_token(
+    self_ref: "BankService", message: Dict[str, Any]
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """Validate ``message["token"]`` if it is present.
+
+    Companion to :func:`_validate_session_token`. The CLI sends the
+    bearer token it read from its ``--token-file`` on every wire
+    call; the server validates it independently of (and in
+    preference to) the WS-bound session token. This is the
+    defense-in-depth path: a token revoked since the WS opened
+    cannot drive ledger mutations even if the session-bound
+    snapshot is stale.
+
+    Returns ``(None, None)`` when ``message["token"]`` is empty or
+    absent so legacy callers (and tests that don't care about the
+    wire token) fall through to the session-bound path.
+    """
+    return _validate_token_against_store(
+        self_ref, message.get("token") or ""
+    )
 
 
 def _validate_shape(
@@ -354,30 +398,49 @@ class BankService(BaseService):
     def _check_access(
         self, websocket: Any, op: str, message: Dict[str, Any]
     ) -> Tuple[Optional[SessionState], Optional[Dict[str, Any]]]:
-        """Run the four access gates in order: session, token, shape, authz.
+        """Run the access gates in order: session, wire-token, session-token, shape, authz.
 
         Returns ``(state, None)`` on success or ``(state_or_None,
         error_envelope)`` on failure. The caller uses the returned
         envelope as the wire response and stops processing.
 
-        The token gate re-verifies ``state.auth_service_token`` (if
-        present) against the auth service's HMAC scheme. The decoded
-        claims are stashed on ``message["claims"]`` so
-        :func:`bbsengine6.bank.access` can prefer claim-derived
-        ``moniker`` / ``is_sysop`` over the in-memory session
-        attributes. When the service was constructed without
-        token-aware wiring (legacy / unit-test usage), the token
-        gate is a no-op and authorization falls back to the session.
+        Two token gates, ordered by preference:
+
+        1. ``_validate_wire_token`` reads ``message["token"]`` (the
+           bearer token the CLI sent on this call). When non-empty,
+           its claims are stashed on ``message["claims"]`` and the
+           session-bound gate is skipped -- the wire token is more
+           recently captured (read from the token file on the client
+           just before the WS send) and catches the case where the
+           session-bound snapshot is stale (e.g. revoked since
+           ``auth reconnect``). This is the defense-in-depth path.
+        2. ``_validate_session_token`` reads
+           ``state.auth_service_token`` (set by the auth flow at WS
+           bind time). Used only when the wire token is absent --
+           legacy callers and tests that don't supply a per-call
+           token still get session-bound authorization.
+
+        Both gates share
+        :func:`_validate_token_against_store`. When the service was
+        constructed without token-aware wiring (legacy / unit-test
+        usage), both gates are no-ops and authorization falls back
+        to the session attributes directly.
         """
         state, err = _get_session_for(self, websocket)
         if err is not None:
             return None, err
 
-        claims, err = _validate_session_token(self, state)
+        claims, err = _validate_wire_token(self, message)
         if err is not None:
             return state, err
         if claims is not None:
             message["claims"] = claims
+        else:
+            claims, err = _validate_session_token(self, state)
+            if err is not None:
+                return state, err
+            if claims is not None:
+                message["claims"] = claims
 
         err = _validate_shape(op, message)
         if err is not None:

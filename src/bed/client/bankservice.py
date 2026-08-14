@@ -10,6 +10,15 @@ operations are request/response only. The wrapper exists so callers
 can write ``await client.get_balance("alice")`` instead of building
 the dict + dispatching it through ``_request``.
 
+Per-call token injection: the optional ``token=`` constructor kwarg
+is the bearer token the CLI read from its ``--token-file`` (or
+``$XDG_RUNTIME_DIR/bed.token``). When non-empty, every wire message
+carries ``"token": <token>`` so the server can re-verify it against
+its token store on every call, independent of (and preferred over)
+the WS-bound session token. This is the "defense-in-depth" path
+described in :mod:`bed.api.bank` — a token revoked since the WS
+opened cannot drive ledger mutations.
+
 Returns ``{"ok": False, "code": "...", "message": "..."}`` dicts on
 soft failures (missing moniker, invalid amount, etc.) so the caller
 can branch on ``code`` rather than catching :class:`BedUnavailable`.
@@ -35,11 +44,33 @@ class BedBankServiceClient:
     ``get_history``) into the bank wire protocol. Soft failures
     (missing moniker, invalid amount, ledger error) come back as
     ``{"ok": False, "code": ..., "message": ...}`` dicts; transport
-    failures (no connection, timeout) raise :class:`BedUnavailable`.
+    failures (no connection, timeout) raise :class:`BedUnavailable``.
+
+    The optional ``token=`` constructor kwarg is injected on every
+    wire message so the server can re-verify it against the token
+    store independently of (and in preference to) the WS-bound
+    session token. Leave it empty (the default) for callers that
+    rely on session-bound authentication only — the server falls
+    back to ``state.auth_service_token`` when the wire payload has
+    no ``token`` field.
     """
 
-    def __init__(self, connection: BedConnection) -> None:
+    def __init__(self, connection: BedConnection, *, token: str = "") -> None:
         self._conn = connection
+        self._token = (token or "").strip()
+
+    def _payload(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Return ``message`` with the per-call ``token`` injected when set.
+
+        Builds a fresh dict so callers don't accidentally mutate a
+        shared literal. The token is only injected when non-empty so
+        legacy callers (and tests that don't care about the wire
+        token) keep the old payload shape verbatim.
+        """
+        out = dict(message)
+        if self._token:
+            out["token"] = self._token
+        return out
 
     async def get_balance(self, moniker: str) -> Dict[str, Any]:
         """Look up ``moniker``'s balance.
@@ -57,7 +88,7 @@ class BedBankServiceClient:
             }
         try:
             reply = await self._conn.send(
-                {"type": "bank_balance", "moniker": moniker}
+                self._payload({"type": "bank_balance", "moniker": moniker})
             )
         except BedUnavailable as e:
             return {"ok": False, "code": "bed_unavailable", "message": str(e)}
@@ -108,12 +139,14 @@ class BedBankServiceClient:
             }
         try:
             reply = await self._conn.send(
-                {
-                    "type": "bank_add",
-                    "moniker": moniker,
-                    "amount": amount,
-                    "description": description,
-                }
+                self._payload(
+                    {
+                        "type": "bank_add",
+                        "moniker": moniker,
+                        "amount": amount,
+                        "description": description,
+                    }
+                )
             )
         except BedUnavailable as e:
             return {"ok": False, "code": "bed_unavailable", "message": str(e)}
@@ -170,12 +203,14 @@ class BedBankServiceClient:
             }
         try:
             reply = await self._conn.send(
-                {
-                    "type": "bank_remove",
-                    "moniker": moniker,
-                    "amount": amount,
-                    "description": description,
-                }
+                self._payload(
+                    {
+                        "type": "bank_remove",
+                        "moniker": moniker,
+                        "amount": amount,
+                        "description": description,
+                    }
+                )
             )
         except BedUnavailable as e:
             return {"ok": False, "code": "bed_unavailable", "message": str(e)}
@@ -231,11 +266,13 @@ class BedBankServiceClient:
             }
         try:
             reply = await self._conn.send(
-                {
-                    "type": "bank_history",
-                    "moniker": moniker,
-                    "limit": limit,
-                }
+                self._payload(
+                    {
+                        "type": "bank_history",
+                        "moniker": moniker,
+                        "limit": limit,
+                    }
+                )
             )
         except BedUnavailable as e:
             return {
@@ -295,13 +332,15 @@ class BedBankServiceClient:
             }
         try:
             reply = await self._conn.send(
-                {
-                    "type": "bank_transfer_request",
-                    "from": from_moniker,
-                    "to": to_moniker,
-                    "amount": amount,
-                    "requested_by": requested_by,
-                }
+                self._payload(
+                    {
+                        "type": "bank_transfer_request",
+                        "from": from_moniker,
+                        "to": to_moniker,
+                        "amount": amount,
+                        "requested_by": requested_by,
+                    }
+                )
             )
         except BedUnavailable as e:
             return {"ok": False, "code": "bed_unavailable", "message": str(e)}
@@ -350,11 +389,13 @@ class BedBankServiceClient:
         responded_by = (responded_by or "").strip()
         try:
             reply = await self._conn.send(
-                {
-                    "type": "bank_transfer_approve",
-                    "transfer_id": transfer_id,
-                    "responded_by": responded_by,
-                }
+                self._payload(
+                    {
+                        "type": "bank_transfer_approve",
+                        "transfer_id": transfer_id,
+                        "responded_by": responded_by,
+                    }
+                )
             )
         except BedUnavailable as e:
             return {"ok": False, "code": "bed_unavailable", "message": str(e)}
@@ -400,11 +441,13 @@ class BedBankServiceClient:
         responded_by = (responded_by or "").strip()
         try:
             reply = await self._conn.send(
-                {
-                    "type": "bank_transfer_reject",
-                    "transfer_id": transfer_id,
-                    "responded_by": responded_by,
-                }
+                self._payload(
+                    {
+                        "type": "bank_transfer_reject",
+                        "transfer_id": transfer_id,
+                        "responded_by": responded_by,
+                    }
+                )
             )
         except BedUnavailable as e:
             return {"ok": False, "code": "bed_unavailable", "message": str(e)}
@@ -427,11 +470,13 @@ class BedBankServiceClient:
         moniker = (moniker or "").strip()
         try:
             reply = await self._conn.send(
-                {
-                    "type": "bank_pending",
-                    "moniker": moniker,
-                    "is_sysop": bool(is_sysop),
-                }
+                self._payload(
+                    {
+                        "type": "bank_pending",
+                        "moniker": moniker,
+                        "is_sysop": bool(is_sysop),
+                    }
+                )
             )
         except BedUnavailable as e:
             return {
@@ -462,7 +507,9 @@ class BedBankServiceClient:
         "message": "...", "accounts": []}`` on soft failure.
         """
         try:
-            reply = await self._conn.send({"type": "bank_list_all"})
+            reply = await self._conn.send(
+                self._payload({"type": "bank_list_all"})
+            )
         except BedUnavailable as e:
             return {
                 "ok": False,

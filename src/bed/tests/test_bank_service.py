@@ -2518,3 +2518,511 @@ def test_handle_balance_blocked_by_invalid_token():
     assert result["type"] == "error"
     assert result["code"] == "token_revoked"
     bank_mock.get_balance.assert_not_called()
+
+
+# ---------------------------------------------------------------------
+# bed.api.bank.BankService — wire-token gate
+#
+# The CLI sends the bearer token on every wire call so the server
+# can re-verify it against the token store on every op
+# (defense-in-depth, alongside the WS-bound session token). When a
+# wire token is present it is preferred over the session-bound token.
+#
+
+
+def test_wire_token_happy_path_stashes_claims():
+    """A valid wire token passes the gate, the claims are stashed on
+    the message, and access() is called."""
+    from bed.api.bank import BankService
+    from bed.api.token_store import InMemoryTokenStore
+
+    secret = secrets.token_bytes(32)
+    instance_id = "bank-token-test"
+    token_store = InMemoryTokenStore()
+    wire_token = _mint_token(
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        moniker="alice",
+    )
+    ws, sm = _make_session(moniker="alice")
+    service = BankService(
+        _make_args(),
+        sm,
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+    )
+    bank_mock = _make_bank_mock(balance=42)
+    msg: Dict[str, Any] = {"moniker": "alice", "token": wire_token}
+    with patch.object(service, "_get_bank", return_value=bank_mock), \
+         _patch_access_returning(True) as access_mock, \
+         patch("bed.api.bank.io.echo"):
+        state, err = service._check_access(ws, "balance", msg)
+    assert err is None
+    assert msg["claims"]["moniker"] == "alice"
+    assert msg["claims"]["is_sysop"] is False
+    assert access_mock.called
+
+
+def test_wire_token_preferred_over_session_bound_token():
+    """When the wire token and the session-bound token differ, the
+    wire token wins. Pins the user-chosen precedence."""
+    from bed.api.bank import BankService
+    from bed.api.token_store import InMemoryTokenStore
+
+    secret = secrets.token_bytes(32)
+    instance_id = "bank-token-test"
+    token_store = InMemoryTokenStore()
+    # Two distinct tokens for two distinct actors.
+    session_token = _mint_token(
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        moniker="alice",
+    )
+    wire_token = _mint_token(
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        moniker="bob",
+        session_id="s2",
+        websocket_id="ws-2",
+    )
+    ws, sm, _, _, _ = _make_token_aware_session(
+        moniker="alice",
+        is_sysop=False,
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        auth_service_token=session_token,
+    )
+    service = BankService(
+        _make_args(),
+        sm,
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+    )
+    bank_mock = _make_bank_mock()
+    msg: Dict[str, Any] = {
+        "moniker": "bob",
+        "token": wire_token,
+    }
+    with patch.object(service, "_get_bank", return_value=bank_mock), \
+         _patch_access_returning(True), \
+         patch("bed.api.bank.io.echo"):
+        state, err = service._check_access(ws, "balance", msg)
+    assert err is None
+    # The claims come from the wire token (bob), not the session-bound
+    # token (alice).
+    assert msg["claims"]["moniker"] == "bob"
+
+
+def test_wire_token_invalid_returns_token_invalid_envelope():
+    """A wire token whose signature doesn't verify (e.g. the CLI
+    cached a token issued under an older secret) is surfaced as
+    ``token_invalid``. The session-bound fallback is NOT tried."""
+    from bed.api.bank import BankService
+    from bed.api.token_store import InMemoryTokenStore
+
+    secret = secrets.token_bytes(32)
+    instance_id = "bank-token-test"
+    token_store = InMemoryTokenStore()
+    bad_token = _mint_token(
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        moniker="alice",
+    )
+    ws, sm, _, _, _ = _make_token_aware_session(
+        moniker="alice",
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        auth_service_token=bad_token,
+    )
+    service = BankService(
+        _make_args(),
+        sm,
+        secret=secrets.token_bytes(32),
+        token_store=token_store,
+        instance_id=instance_id,
+    )
+    state, err = service._check_access(
+        ws, "balance", {"moniker": "alice", "token": bad_token}
+    )
+    assert err is not None
+    assert err["code"] == "token_invalid"
+    assert err["recoverable"] is False
+
+
+def test_wire_token_revoked_returns_token_revoked_envelope():
+    """A wire token whose store record was deleted (e.g. another
+    path called ``auth_revoke`` between the CLI's last read and this
+    call) is surfaced as ``token_revoked`` even though the
+    session-bound token may still be valid -- defense-in-depth."""
+    from bed.api.bank import BankService
+    from bed.api.token_store import InMemoryTokenStore
+
+    secret = secrets.token_bytes(32)
+    instance_id = "bank-token-test"
+    token_store = InMemoryTokenStore()
+    wire_token = _mint_token(
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        moniker="alice",
+    )
+    session_token = _mint_token(
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        moniker="alice",
+        session_id="s2",
+        websocket_id="ws-2",
+    )
+    token_store.delete(wire_token)
+    ws, sm, _, _, _ = _make_token_aware_session(
+        moniker="alice",
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        auth_service_token=session_token,
+    )
+    service = BankService(
+        _make_args(),
+        sm,
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+    )
+    state, err = service._check_access(
+        ws, "balance", {"moniker": "alice", "token": wire_token}
+    )
+    assert err is not None
+    assert err["code"] == "token_revoked"
+    assert err["recoverable"] is False
+
+
+def test_wire_token_instance_mismatch_returns_bed_instance_mismatch():
+    """A wire token minted by a different bed instance is deleted
+    from the local store and surfaced as ``bed_instance_mismatch``."""
+    from bed.api.bank import BankService
+    from bed.api.token_store import InMemoryTokenStore
+
+    secret = secrets.token_bytes(32)
+    instance_id = "bank-token-test"
+    token_store = InMemoryTokenStore()
+    wire_token = _mint_token(
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        moniker="alice",
+        bed_instance_id="OTHER-INSTANCE",
+    )
+    ws, sm, _, _, _ = _make_token_aware_session(
+        moniker="alice",
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        auth_service_token=wire_token,
+    )
+    service = BankService(
+        _make_args(),
+        sm,
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+    )
+    state, err = service._check_access(
+        ws, "balance", {"moniker": "alice", "token": wire_token}
+    )
+    assert err is not None
+    assert err["code"] == "bed_instance_mismatch"
+    assert err["recoverable"] is False
+    assert token_store.get(wire_token) is None
+
+
+def test_wire_token_expired_returns_token_expired_envelope():
+    """A wire token whose ``expires_at`` is past (lazy-GC skipped)
+    is surfaced as ``token_expired`` and the store record is
+    removed."""
+    from bed.api.bank import BankService
+    from bed.api.token_store import TokenRecord
+
+    secret = secrets.token_bytes(32)
+    instance_id = "bank-token-test"
+    from bed.api.token_store import InMemoryTokenStore
+
+    wire_token = _mint_token(
+        secret=secret,
+        token_store=InMemoryTokenStore(),
+        instance_id=instance_id,
+        moniker="alice",
+        expires_at=1_000.0,
+    )
+
+    class _NonLazyStore:
+        def __init__(self, rec: TokenRecord) -> None:
+            self._rec = rec
+            self.delete_called = False
+
+        def get(self, _token: str) -> Optional[TokenRecord]:
+            return self._rec
+
+        def delete(self, _token: str) -> bool:
+            self.delete_called = True
+            return True
+
+    stale_record = TokenRecord(
+        token=wire_token,
+        moniker="alice",
+        session_id="s1",
+        issued_at=500.0,
+        expires_at=1_000.0,
+        is_sysop=False,
+        bed_instance_id=instance_id,
+        websocket_id="ws-1",
+    )
+    fake_store = _NonLazyStore(stale_record)
+    ws, sm = _make_session(moniker="alice")
+    service = BankService(
+        _make_args(),
+        sm,
+        secret=secret,
+        token_store=fake_store,  # type: ignore[arg-type]
+        instance_id=instance_id,
+    )
+    state, err = service._check_access(
+        ws, "balance", {"moniker": "alice", "token": wire_token}
+    )
+    assert err is not None
+    assert err["code"] == "token_expired"
+    assert err["recoverable"] is True
+    assert fake_store.delete_called is True
+
+
+def test_wire_token_absent_falls_back_to_session_bound_token():
+    """When the wire payload has no ``token`` field, the session-
+    bound token path is used (legacy + tests that don't send a
+    per-call token)."""
+    from bed.api.bank import BankService
+    from bed.api.token_store import InMemoryTokenStore
+
+    secret = secrets.token_bytes(32)
+    instance_id = "bank-token-test"
+    token_store = InMemoryTokenStore()
+    session_token = _mint_token(
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        moniker="alice",
+    )
+    ws, sm, _, _, _ = _make_token_aware_session(
+        moniker="alice",
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        auth_service_token=session_token,
+    )
+    service = BankService(
+        _make_args(),
+        sm,
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+    )
+    bank_mock = _make_bank_mock(balance=11)
+    msg: Dict[str, Any] = {"moniker": "alice"}
+    with patch.object(service, "_get_bank", return_value=bank_mock), \
+         _patch_access_returning(True), \
+         patch("bed.api.bank.io.echo"):
+        state, err = service._check_access(ws, "balance", msg)
+    assert err is None
+    # Claims came from the session-bound token.
+    assert msg["claims"]["moniker"] == "alice"
+
+
+def test_wire_token_empty_falls_back_to_session_bound_token():
+    """An explicitly empty ``token`` field is treated as "no wire
+    token" so the session-bound path takes over."""
+    from bed.api.bank import BankService
+    from bed.api.token_store import InMemoryTokenStore
+
+    secret = secrets.token_bytes(32)
+    instance_id = "bank-token-test"
+    token_store = InMemoryTokenStore()
+    session_token = _mint_token(
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        moniker="alice",
+    )
+    ws, sm, _, _, _ = _make_token_aware_session(
+        moniker="alice",
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        auth_service_token=session_token,
+    )
+    service = BankService(
+        _make_args(),
+        sm,
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+    )
+    bank_mock = _make_bank_mock(balance=12)
+    msg: Dict[str, Any] = {"moniker": "alice", "token": ""}
+    with patch.object(service, "_get_bank", return_value=bank_mock), \
+         _patch_access_returning(True), \
+         patch("bed.api.bank.io.echo"):
+        state, err = service._check_access(ws, "balance", msg)
+    assert err is None
+    assert msg["claims"]["moniker"] == "alice"
+
+
+def test_wire_token_unwired_falls_back_to_session_attrs():
+    """When the service was constructed without token wiring
+    (legacy / unit-test usage), both gates are no-ops and
+    authorization falls back to the in-memory session attributes."""
+    from bed.api.bank import BankService
+
+    ws, sm = _make_session(moniker="alice")
+    service = BankService(_make_args(), sm)
+    bank_mock = _make_bank_mock(balance=42)
+    msg: Dict[str, Any] = {"moniker": "alice", "token": "ignored"}
+    with patch.object(service, "_get_bank", return_value=bank_mock), \
+         _patch_access_returning(True) as access_mock, \
+         patch("bed.api.bank.io.echo"):
+        state, err = service._check_access(ws, "balance", msg)
+    assert err is None
+    # No claims were stashed -- the legacy path doesn't compute them.
+    assert "claims" not in msg
+    assert access_mock.called
+
+
+# ---------------------------------------------------------------------
+# bed.client.bankservice.BedBankServiceClient — per-call token
+# injection
+#
+
+
+def test_client_injects_token_on_get_balance_when_set():
+    """When the client was constructed with ``token=...``, every
+    wire message carries ``"token": <token>``."""
+    from bed.client.bankservice import BedBankServiceClient
+
+    conn = MagicMock()
+    conn.send = AsyncMock(
+        return_value={"type": "bank_balance", "balance": 100}
+    )
+    client = BedBankServiceClient(conn, token="the-token")
+
+    async def runner():
+        return await client.get_balance("alice")
+
+    asyncio.run(runner())
+    sent = conn.send.await_args.args[0]
+    assert sent["type"] == "bank_balance"
+    assert sent["moniker"] == "alice"
+    assert sent["token"] == "the-token"
+
+
+def test_client_omits_token_field_when_token_empty():
+    """An empty token (the default) leaves the wire payload
+    identical to the legacy shape."""
+    from bed.client.bankservice import BedBankServiceClient
+
+    conn = MagicMock()
+    conn.send = AsyncMock(
+        return_value={"type": "bank_balance", "balance": 100}
+    )
+    client = BedBankServiceClient(conn)
+
+    async def runner():
+        return await client.get_balance("alice")
+
+    asyncio.run(runner())
+    sent = conn.send.await_args.args[0]
+    assert sent == {"type": "bank_balance", "moniker": "alice"}
+
+
+def test_client_strips_whitespace_token_to_empty():
+    """A whitespace-only token is treated as no token (matches the
+    server-side ``(token or "").strip()`` semantics)."""
+    from bed.client.bankservice import BedBankServiceClient
+
+    conn = MagicMock()
+    conn.send = AsyncMock(
+        return_value={"type": "bank_balance", "balance": 100}
+    )
+    client = BedBankServiceClient(conn, token="   ")
+
+    async def runner():
+        return await client.get_balance("alice")
+
+    asyncio.run(runner())
+    sent = conn.send.await_args.args[0]
+    assert "token" not in sent
+
+
+def test_client_injects_token_on_add_funds():
+    """Every wire message goes through ``_payload`` -- sanity-check
+    on a different verb."""
+    from bed.client.bankservice import BedBankServiceClient
+
+    conn = MagicMock()
+    conn.send = AsyncMock(
+        return_value={"type": "bank_add", "new_balance": 150}
+    )
+    client = BedBankServiceClient(conn, token="tok-add")
+
+    async def runner():
+        return await client.add_funds("alice", 50, "credit")
+
+    asyncio.run(runner())
+    sent = conn.send.await_args.args[0]
+    assert sent["type"] == "bank_add"
+    assert sent["moniker"] == "alice"
+    assert sent["amount"] == 50
+    assert sent["description"] == "credit"
+    assert sent["token"] == "tok-add"
+
+
+def test_client_injects_token_on_transfer():
+    from bed.client.bankservice import BedBankServiceClient
+
+    conn = MagicMock()
+    conn.send = AsyncMock(
+        return_value={"type": "bank_transfer_request", "transfer_id": 7}
+    )
+    client = BedBankServiceClient(conn, token="tok-xfer")
+
+    async def runner():
+        return await client.transfer("alice", "bob", 10, "alice")
+
+    asyncio.run(runner())
+    sent = conn.send.await_args.args[0]
+    assert sent["type"] == "bank_transfer_request"
+    assert sent["from"] == "alice"
+    assert sent["to"] == "bob"
+    assert sent["amount"] == 10
+    assert sent["requested_by"] == "alice"
+    assert sent["token"] == "tok-xfer"
+
+
+def test_client_injects_token_on_list_all():
+    from bed.client.bankservice import BedBankServiceClient
+
+    conn = MagicMock()
+    conn.send = AsyncMock(return_value={"type": "bank_list_all"})
+    client = BedBankServiceClient(conn, token="tok-list")
+
+    async def runner():
+        return await client.list_all()
+
+    asyncio.run(runner())
+    sent = conn.send.await_args.args[0]
+    assert sent == {"type": "bank_list_all", "token": "tok-list"}
