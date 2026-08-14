@@ -19,7 +19,6 @@ interactive prompt.
 import argparse
 import asyncio
 import os
-import stat
 import sys
 from typing import Any, Optional
 
@@ -28,6 +27,7 @@ from bbsengine6.util import inputpassword
 
 from bed.client.authservice import BedAuthServiceClient
 from bed.tools import _routing
+from bed.tools import _token
 
 
 _DIRECT_UNSUPPORTED_MSG = (
@@ -58,17 +58,7 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         default=None,
         help="Existing bearer token (overrides --token-file)",
     )
-    common.add_argument(
-        "--token-file",
-        dest="token_file",
-        default=None,
-        help=(
-            "Path to the token file. Defaults to $XDG_RUNTIME_DIR/bed.token "
-            "(or /tmp/bed-<uid>/bed.token if XDG_RUNTIME_DIR is unset). "
-            "login writes the issued token here; reconnect/refresh "
-            "overwrite it with the rotated token; revoke truncates it."
-        ),
-    )
+    _token.build_token_file_arg(common)
     sub.add_parser("login", parents=[common], help="Issue a fresh bearer token")
     sub.add_parser(
         "reconnect",
@@ -88,69 +78,15 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
 
 
 def _default_token_path() -> str:
-    """Return the default token-file path.
-
-    Honours ``$XDG_RUNTIME_DIR`` (per-session scoping) when set and
-    writable; falls back to ``/tmp/bed-<uid>/bed.token`` so the
-    private directory can be created mode 0700 owned by the current
-    user. The parent directory is created on demand.
-    """
-    import tempfile
-
-    runtime = os.environ.get("XDG_RUNTIME_DIR", "").strip()
-    if runtime:
-        path = os.path.join(runtime, "bed.token")
-        _ensure_parent_dir(path, mode=0o700)
-        return path
-    fallback = os.path.join(
-        tempfile.gettempdir(), f"bed-{os.getuid()}", "bed.token"
-    )
-    _ensure_parent_dir(fallback, mode=0o700)
-    return fallback
+    return _token.default_token_path()
 
 
 def _ensure_parent_dir(path: str, *, mode: int) -> None:
-    """Create the parent directory of ``path`` with ``mode`` if missing.
-
-    Never raises for an already-correctly-permissioned existing dir;
-    raises :class:`PermissionError` if the dir exists but cannot be
-    made ``mode`` (so the caller can render a clear error instead of
-    a confusing ``OSError`` from a later ``open()``).
-    """
-    parent = os.path.dirname(path) or "."
-    try:
-        st = os.stat(parent)
-    except FileNotFoundError:
-        os.makedirs(parent, mode=mode, exist_ok=True)
-        try:
-            os.chmod(parent, mode)
-        except OSError:
-            pass
-        return
-    if not stat.S_ISDIR(st.st_mode):
-        raise PermissionError(f"{parent} is not a directory")
-    perms = stat.S_IMODE(st.st_mode)
-    if perms & 0o077:
-        raise PermissionError(
-            f"{parent} has overly-permissive mode {oct(perms)}; "
-            f"expected {oct(mode)} or stricter"
-        )
+    _token._ensure_parent_dir(path, mode=mode)
 
 
 def _check_token_file_perms(path: str) -> None:
-    """Refuse to read/write a token file whose perms are too loose."""
-    try:
-        st = os.stat(path)
-    except FileNotFoundError:
-        return
-    if not stat.S_ISREG(st.st_mode):
-        raise PermissionError(f"{path} is not a regular file")
-    perms = stat.S_IMODE(st.st_mode)
-    if perms & 0o077:
-        raise PermissionError(
-            f"{path} has overly-permissive mode {oct(perms)}; "
-            f"refusing to use"
-        )
+    _token.check_token_file_perms(path)
 
 
 def _write_token_file(path: str, token: str) -> None:
@@ -167,16 +103,12 @@ def _write_token_file(path: str, token: str) -> None:
 
 
 def _read_token_file(path: str) -> str:
-    """Return the token stored in ``path`` (``""`` if missing/empty)."""
-    try:
-        _check_token_file_perms(path)
-    except FileNotFoundError:
-        return ""
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read().strip()
-    except FileNotFoundError:
-        return ""
+    """Return the token stored in ``path`` (``""`` if missing/empty).
+
+    Thin wrapper around :func:`bed.tools._token.read_token_file`;
+    kept as a module-private alias so existing callers don't change.
+    """
+    return _token.read_token_file(path)
 
 
 def _truncate_token_file(path: str) -> None:
@@ -190,25 +122,19 @@ def _truncate_token_file(path: str) -> None:
 def _resolve_token(args) -> str:
     """Return the token to use for reconnect/refresh/revoke.
 
-    Precedence: ``--token`` (explicit flag) > ``--token-file`` (read
-    from disk) > ``""`` (caller will render a missing_token error).
+    Thin wrapper around :func:`bed.tools._token.resolve_token`;
+    kept as a module-private alias so existing callers don't change.
     """
-    tok = getattr(args, "token", None)
-    if tok:
-        return tok
-    path = getattr(args, "token_file", None)
-    if path:
-        return _read_token_file(path)
-    return ""
+    return _token.resolve_token(args)
 
 
 def _ensure_token_file_arg(args) -> None:
     """Populate ``args.token_file`` with the default path if absent.
 
-    Done in-place so subcommands can pass ``args`` straight through.
+    Thin wrapper around :func:`bed.tools._token.ensure_token_file_arg`;
+    kept as a module-private alias so existing callers don't change.
     """
-    if getattr(args, "token_file", None) is None:
-        args.token_file = _default_token_path()
+    _token.ensure_token_file_arg(args)
 
 
 def _auth_service(args: Any) -> BedAuthServiceClient:
