@@ -23,6 +23,7 @@ from .api import (
     InMemoryTokenStore,
     DBTokenStore,
     MessageService,
+    PingService,
     SessionRegistry,
     get_provider,
     load_or_create_secret,
@@ -50,6 +51,7 @@ def _get_bed_defaults() -> dict:
         "databaseport": parser.get_default("databaseport"),
         "databaseuser": parser.get_default("databaseuser"),
         "databasepassword": parser.get_default("databasepassword"),
+        "bed_name": parser.get_default("bed_name"),
         "bed_secret": parser.get_default("bed_secret"),
         "token_ttl": parser.get_default("token_ttl"),
         "token_persistence": parser.get_default("token_persistence"),
@@ -265,6 +267,10 @@ DATABASE_FIELDS = {
     "databasepassword": ("password", str, False),
 }
 
+BED_NAME_FIELDS = {
+    "bed_name": ("name", str, False),
+}
+
 AUTH_FIELDS = {
     "bed_secret": ("bed_secret_path", str, True),
     "token_ttl": ("token_ttl", int, False),
@@ -277,6 +283,27 @@ def _apply_bind_config(args: argparse.Namespace, cfg: dict) -> None:
     """Apply bind.host/bind.port from a loaded config when the CLI did not
     explicitly set them (i.e. args still equal argparse defaults)."""
     _apply_config_section(args, cfg, "bind", BIND_FIELDS)
+
+
+def _apply_bed_name_config(args: argparse.Namespace, cfg: dict) -> None:
+    """Apply bed.name from a loaded config when the CLI did not explicitly
+    set --bed-name.
+
+    Empty / missing ``name`` falls back to the argparse default (``"bed"``)
+    so a misconfigured JSON entry does not produce a literal empty string
+    in the secret-path derivation. The default "bed" preserves the
+    historical ``~/.config/bed/bed.secret`` path for existing installs.
+    """
+    _apply_config_section(args, cfg, "bed", BED_NAME_FIELDS)
+    defaults = _get_bed_defaults()
+    if (
+        args.bed_name == defaults["bed_name"]
+        or not isinstance(args.bed_name, str)
+        or not args.bed_name.strip()
+    ):
+        args.bed_name = defaults["bed_name"]
+    else:
+        args.bed_name = args.bed_name.strip()
 
 
 def _apply_database_config(args: argparse.Namespace, cfg: dict) -> None:
@@ -360,6 +387,9 @@ class BED:
     ):
         self.args = args
         self.MessageRouterClass = MessageRouterClass
+        self.name: str = (
+            getattr(args, "bed_name", None) or lib.DEFAULT_BED_NAME
+        )
         self.server: Optional[WebSocketServer] = None
         self.router: Any = None
         self.auth_service: Optional[AuthService] = None
@@ -367,6 +397,7 @@ class BED:
         self.message_service: Optional[MessageService] = None
         self._message_listener_task: Optional[asyncio.Task] = None
         self.bank_service: Optional[BankService] = None
+        self._ping_service: Optional[PingService] = None
         self._session_registry: Optional[SessionRegistry] = None
         self._gc_task: Optional[asyncio.Task] = None
         self._running = False
@@ -466,6 +497,18 @@ class BED:
                     db_args, self._session_registry, **bank_kwargs
                 )
                 self.bank_service.register_all(self.server)
+
+            # PingService is registered LAST so its ``["ping"]`` entry
+            # overwrites whatever the router (or bbsengine6's built-in
+            # DefaultRouter) registered first. bbsengine6's
+            # register_service emits a WARNING on the overwrite, so the
+            # swap is visible in the log; the swap is intentional:
+            # every bed instance surfaces its own ``name`` + ``version``
+            # on the wire regardless of which router is loaded.
+            self._ping_service = PingService(
+                db_args, self._session_registry, name=self.name
+            )
+            self._ping_service.register_all(self.server)
 
             session_registry = self._session_registry
 
@@ -589,6 +632,11 @@ class BED:
             io.echo("BED MessageService: LISTEN engine_message_recipient")
         if self.bank_service is not None:
             io.echo("BED BankService: bank_balance/add/remove/history")
+        if self._ping_service is not None:
+            from bed._version import __version__
+            io.echo(
+                f"BED PingService: name={self.name} version={__version__}"
+            )
         io.echo(f"Registered services: {self.server.list_services()}")
 
         try:
@@ -630,11 +678,14 @@ class BED:
         NOT registered against the server here — ``start()`` registers
         services against the freshly-constructed ``WebSocketServer``.
         """
-        secret_path = (
-            safe_path(self.args.bed_secret, resolve_symlinks=False)
-            if getattr(self.args, "bed_secret", None)
-            else safe_path("~/.config/bed/bed.secret", resolve_symlinks=False)
-        )
+        explicit_secret = getattr(self.args, "bed_secret", None)
+        if explicit_secret:
+            secret_path = safe_path(explicit_secret, resolve_symlinks=False)
+        else:
+            name = getattr(self.args, "bed_name", lib.DEFAULT_BED_NAME) or lib.DEFAULT_BED_NAME
+            secret_path = safe_path(
+                lib._default_secret_path(name), resolve_symlinks=False
+            )
         explicit_id = getattr(self.args, "bed_instance_id", None)
         try:
             secret_bytes, instance_id = load_or_create_secret(
@@ -838,6 +889,9 @@ def _reload_config_and_apply(
         _diff_config_section(args, new_config, "bind", BIND_FIELDS)
     )
     structural_diffs.extend(
+        _diff_config_section(args, new_config, "bed", BED_NAME_FIELDS)
+    )
+    structural_diffs.extend(
         _diff_config_section(args, new_config, "database", DATABASE_FIELDS)
     )
     for cli_arg, new_val in _diff_config_section(
@@ -875,6 +929,7 @@ async def main_async() -> None:
         )
         sys.exit(1)
     _apply_bind_config(args, loaded_config)
+    _apply_bed_name_config(args, loaded_config)
     _apply_database_config(args, loaded_config)
     _apply_auth_config(args, loaded_config)
 

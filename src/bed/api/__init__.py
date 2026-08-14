@@ -27,6 +27,7 @@ from .errors import (
 )
 from .handler import BaseService, SessionManager
 from .message import NOTIFY_CHANNEL, MessageService
+from .ping import PingService
 from .secret import (
     InsecureSecretError,
     SecretFormatError,
@@ -55,6 +56,7 @@ __all__ = [
     "MonikerOnlyCredentialProvider",
     "NOTIFY_CHANNEL",
     "PasswordCredentialProvider",
+    "PingService",
     "SecretFormatError",
     "SessionManager",
     "SessionRegistry",
