@@ -10,6 +10,10 @@ Server side covers the bed.api.bank.BankService handler:
 - authentication gate (not_authenticated for unbound websockets)
 - ownership gate (forbidden when session.moniker != message target)
 - sysop bypass and bank_list_all sysop-only
+- token-aware authorization (re-verifying
+  ``state.auth_service_token`` on every bank op and routing the
+  claim-derived ``moniker`` / ``is_sysop`` into
+  ``bbsengine6.bank.access()``)
 
 Client side covers bed.client.bankservice.BedBankServiceClient:
 - get_balance / add_funds / remove_funds / get_history envelopes
@@ -19,6 +23,7 @@ Client side covers bed.client.bankservice.BedBankServiceClient:
 from __future__ import annotations
 
 import asyncio
+import secrets
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2008,3 +2013,508 @@ def test_handle_message_returns_none_for_unknown_type():
         service.handle_message(None, ws, "/", {"type": "totally_unknown"})
     )
     assert result is None
+
+
+# ---------------------------------------------------------------------
+# bed.api.bank.BankService — token-aware authorization
+#
+# The bank service can be constructed without secret/token_store/
+# instance_id (legacy callers, unit tests that don't care about
+# tokens); in that mode the token gate is a no-op and authorization
+# falls back to the in-memory session state. When the constructor
+# receives the auth service's secret + token store + instance id,
+# every bank op re-verifies ``state.auth_service_token`` against the
+# same HMAC scheme AuthService uses, and the decoded claims are
+# stashed on ``message["claims"]`` so bbsengine6.bank.access() can
+# prefer claim-derived ``moniker`` / ``is_sysop`` over the session.
+
+
+def _mint_token(
+    *,
+    secret: bytes,
+    token_store: Any,
+    instance_id: str,
+    moniker: str = "alice",
+    session_id: str = "s1",
+    websocket_id: str = "ws-1",
+    is_sysop: bool = False,
+    expires_at: Optional[float] = None,
+    bed_instance_id: Optional[str] = None,
+) -> str:
+    """Mint a valid bearer token and put it into ``token_store``.
+
+    Mirrors AuthService._mint_record so we can drive the bank
+    service's token gate from a unit test without booting a real
+    auth flow. ``expires_at`` defaults to ~100 years in the future so
+    the test doesn't fight the wall clock; pass an explicit value to
+    exercise the expiry path.
+    """
+    import time as _time
+
+    from bed.api.auth import _encode_token
+    from bed.api.token_store import TokenRecord
+
+    now = _time.time()
+    exp = float(expires_at) if expires_at is not None else now + (86400 * 365 * 100)
+    claims = {
+        "version": 1,
+        "moniker": moniker,
+        "issued_at": now,
+        "expires_at": exp,
+        "session_id": session_id,
+        "is_sysop": bool(is_sysop),
+        "bed_instance_id": bed_instance_id or instance_id,
+        "websocket_id": websocket_id,
+        "loginid": f"{moniker}_os",
+    }
+    token = _encode_token(claims, secret)
+    token_store.put(
+        TokenRecord(
+            token=token,
+            moniker=moniker,
+            session_id=session_id,
+            issued_at=now,
+            expires_at=exp,
+            is_sysop=bool(is_sysop),
+            bed_instance_id=claims["bed_instance_id"],
+            websocket_id=websocket_id,
+            claims=claims,
+            loginid=claims["loginid"],
+        )
+    )
+    return token
+
+
+def _make_token_aware_session(
+    *,
+    ws_id: str = "ws-1",
+    moniker: str = "alice",
+    is_sysop: bool = False,
+    auth_service_token: Optional[str] = None,
+    secret: Optional[bytes] = None,
+    token_store: Optional[Any] = None,
+    instance_id: str = "bank-token-test",
+):
+    """Build (websocket, session_manager, secret, token_store,
+    instance_id) for a token-aware BankService test.
+
+    ``auth_service_token`` is set on the bound SessionState so the
+    token gate has something to verify. If left None, the session is
+    bound without a token and the gate is a no-op (legacy mode).
+
+    Pass ``secret`` / ``token_store`` / ``instance_id`` to share
+    wiring across the mint step (e.g. when you need to mint a token
+    against the same secret the BankService will verify against).
+    Defaults build a fresh 32-byte secret + empty in-memory store +
+    ``"bank-token-test"`` instance id.
+    """
+    from bed.api.session import SessionRegistry
+    from bed.api.token_store import InMemoryTokenStore
+
+    secret_bytes = secret if secret is not None else secrets.token_bytes(32)
+    store = token_store if token_store is not None else InMemoryTokenStore()
+    reg = SessionRegistry()
+    reg.bind(
+        "s1",
+        ws_id,
+        moniker,
+        is_sysop,
+        loginid=f"{moniker}_os",
+    )
+    state = reg.get_by_websocket(ws_id)
+    state.auth_service_token = auth_service_token
+    return _make_websocket(ws_id), reg, secret_bytes, store, instance_id
+
+
+def test_check_access_skips_token_gate_when_no_token_wired():
+    """BankService without secret/token_store/instance_id falls back
+    to session-only authorization. Used by legacy callers and by the
+    --token-persistence=none path."""
+    from bed.api.bank import BankService
+
+    ws, sm = _make_session(moniker="alice")
+    service = BankService(_make_args(), sm)
+    bank_mock = _make_bank_mock(balance=42)
+    with patch.object(service, "_get_bank", return_value=bank_mock), \
+         _patch_access_returning(True) as access_mock, \
+         patch("bed.api.bank.io.echo"):
+        state, err = service._check_access(
+            ws, "balance", {"moniker": "alice"}
+        )
+    assert err is None
+    assert access_mock.called
+
+
+def test_check_access_skips_token_gate_when_session_has_no_token():
+    """When the service IS token-aware but the session was bound
+    outside the auth flow (state.auth_service_token is None), the
+    gate is a no-op. Defensive: callers shouldn't crash if a session
+    exists without a token."""
+    from bed.api.bank import BankService
+    from bed.api.token_store import InMemoryTokenStore
+
+    ws, sm = _make_session(moniker="alice")
+    service = BankService(
+        _make_args(),
+        sm,
+        secret=secrets.token_bytes(32),
+        token_store=InMemoryTokenStore(),
+        instance_id="bank-token-test",
+    )
+    bank_mock = _make_bank_mock(balance=42)
+    with patch.object(service, "_get_bank", return_value=bank_mock), \
+         _patch_access_returning(True) as access_mock, \
+         patch("bed.api.bank.io.echo"):
+        state, err = service._check_access(
+            ws, "balance", {"moniker": "alice"}
+        )
+    assert err is None
+    assert access_mock.called
+
+
+def test_check_access_validates_session_token_on_each_op():
+    """A valid session token passes the gate, the claims are
+    stashed on the message, and access() is called."""
+    from bed.api.bank import BankService
+    from bed.api.token_store import InMemoryTokenStore
+
+    secret = secrets.token_bytes(32)
+    instance_id = "bank-token-test"
+    token_store = InMemoryTokenStore()
+    token = _mint_token(
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        moniker="alice",
+    )
+    ws, sm, _, _, _ = _make_token_aware_session(
+        moniker="alice",
+        is_sysop=False,
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        auth_service_token=token,
+    )
+    service = BankService(
+        _make_args(),
+        sm,
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+    )
+    bank_mock = _make_bank_mock(balance=42)
+    msg: Dict[str, Any] = {"moniker": "alice"}
+    with patch.object(service, "_get_bank", return_value=bank_mock), \
+         _patch_access_returning(True) as access_mock, \
+         patch("bed.api.bank.io.echo"):
+        state, err = service._check_access(ws, "balance", msg)
+    assert err is None
+    assert msg["claims"]["moniker"] == "alice"
+    assert msg["claims"]["is_sysop"] is False
+    assert access_mock.called
+
+
+def test_check_access_rejects_expired_session_token():
+    """A token whose ``expires_at`` is past is surfaced as
+    ``token_expired`` and deleted from the store. The lazy-GC in
+    InMemoryTokenStore would normally hide this branch (its ``get``
+    already drops the record and returns None -> the test would hit
+    the ``token_revoked`` path instead), so we drive the gate with a
+    mock store that returns the record past expiry -- mirroring what
+    the DB backend can do if its ``WHERE expires_at > now()`` is
+    ever bypassed.
+    """
+    from bed.api.bank import BankService
+    from bed.api.token_store import TokenRecord
+
+    secret = secrets.token_bytes(32)
+    instance_id = "bank-token-test"
+    from bed.api.token_store import InMemoryTokenStore
+
+    token = _mint_token(
+        secret=secret,
+        token_store=InMemoryTokenStore(),
+        instance_id=instance_id,
+        moniker="alice",
+        expires_at=1_000.0,  # way in the past
+    )
+    ws, sm, _, _, _ = _make_token_aware_session(
+        moniker="alice",
+        secret=secret,
+        token_store=InMemoryTokenStore(),
+        instance_id=instance_id,
+        auth_service_token=token,
+    )
+
+    class _NonLazyStore:
+        """Stub store that returns a record even when it's expired.
+
+        Mirrors what a DB backend might surface if its query missed
+        the ``WHERE expires_at > now()`` predicate; the BankService's
+        expiry gate must still catch it.
+        """
+        def __init__(self, rec: TokenRecord) -> None:
+            self._rec = rec
+            self.delete_called = False
+
+        def get(self, _token: str) -> Optional[TokenRecord]:
+            return self._rec
+
+        def delete(self, _token: str) -> bool:
+            self.delete_called = True
+            return True
+
+    stale_record = TokenRecord(
+        token=token,
+        moniker="alice",
+        session_id="s1",
+        issued_at=500.0,
+        expires_at=1_000.0,  # expired
+        is_sysop=False,
+        bed_instance_id=instance_id,
+        websocket_id="ws-1",
+    )
+    fake_store = _NonLazyStore(stale_record)
+
+    service = BankService(
+        _make_args(),
+        sm,
+        secret=secret,
+        token_store=fake_store,  # type: ignore[arg-type]
+        instance_id=instance_id,
+    )
+    state, err = service._check_access(
+        ws, "balance", {"moniker": "alice"}
+    )
+    assert err is not None
+    assert err["type"] == "error"
+    assert err["code"] == "token_expired"
+    assert err["recoverable"] is True
+    assert fake_store.delete_called is True
+
+
+def test_check_access_rejects_revoked_session_token():
+    """A token that was deleted from the store (e.g. another path
+    called auth_revoke) is surfaced as token_revoked."""
+    from bed.api.bank import BankService
+    from bed.api.token_store import InMemoryTokenStore
+
+    secret = secrets.token_bytes(32)
+    instance_id = "bank-token-test"
+    token_store = InMemoryTokenStore()
+    token = _mint_token(
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        moniker="alice",
+    )
+    token_store.delete(token)
+    ws, sm, _, _, _ = _make_token_aware_session(
+        moniker="alice",
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        auth_service_token=token,
+    )
+
+    service = BankService(
+        _make_args(),
+        sm,
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+    )
+    state, err = service._check_access(
+        ws, "balance", {"moniker": "alice"}
+    )
+    assert err is not None
+    assert err["code"] == "token_revoked"
+    assert err["recoverable"] is False
+
+
+def test_check_access_rejects_instance_mismatched_token():
+    """A token minted by a different bed instance is deleted from
+    the local store and surfaced as instance_mismatch."""
+    from bed.api.bank import BankService
+    from bed.api.token_store import InMemoryTokenStore
+
+    secret = secrets.token_bytes(32)
+    instance_id = "bank-token-test"
+    token_store = InMemoryTokenStore()
+    token = _mint_token(
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        moniker="alice",
+        bed_instance_id="OTHER-INSTANCE",
+    )
+    ws, sm, _, _, _ = _make_token_aware_session(
+        moniker="alice",
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        auth_service_token=token,
+    )
+    service = BankService(
+        _make_args(),
+        sm,
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+    )
+    state, err = service._check_access(
+        ws, "balance", {"moniker": "alice"}
+    )
+    assert err is not None
+    assert err["code"] == "bed_instance_mismatch"
+    assert err["recoverable"] is False
+    assert token_store.get(token) is None
+
+
+def test_check_access_rejects_tampered_session_token():
+    """A token whose signature doesn't verify (e.g. secret rotated
+    after the session was bound) is surfaced as token_invalid."""
+    from bed.api.bank import BankService
+    from bed.api.token_store import InMemoryTokenStore
+
+    secret = secrets.token_bytes(32)
+    instance_id = "bank-token-test"
+    token_store = InMemoryTokenStore()
+    token = _mint_token(
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        moniker="alice",
+    )
+    ws, sm, _, _, _ = _make_token_aware_session(
+        moniker="alice",
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        auth_service_token=token,
+    )
+    # Rotate the secret so the existing token fails HMAC.
+    service = BankService(
+        _make_args(),
+        sm,
+        secret=secrets.token_bytes(32),  # new secret
+        token_store=token_store,
+        instance_id=instance_id,
+    )
+    state, err = service._check_access(
+        ws, "balance", {"moniker": "alice"}
+    )
+    assert err is not None
+    assert err["code"] == "token_invalid"
+    assert err["recoverable"] is False
+
+
+def test_check_access_claim_sysop_bypasses_ownership_gate():
+    """When the session was minted by auth with is_sysop=True but the
+    session-state is_sysop was somehow demoted, the token's claim
+    still grants sysop access. Pins that bbsengine6.bank.access()
+    now prefers claim-derived is_sysop over session.is_sysop."""
+    from bbsengine6.bank import access as _bank_access
+
+    args = _make_args()
+    # No need to drive the handler -- this test pins the policy
+    # directly: a list_all request from a session whose claim says
+    # is_sysop=True must be allowed even though session.is_sysop=False.
+    state = MagicMock()
+    state.moniker = "root"
+    state.is_sysop = False  # demoted in session state
+    msg = {"claims": {
+        "moniker": "root",
+        "is_sysop": True,  # but claims still say sysop
+        "session_id": "s1",
+    }}
+    assert _bank_access(args, "list_all", session=state, message=msg) is True
+
+
+def test_handle_balance_runs_with_valid_token():
+    """End-to-end: with a valid session token, the bank_balance
+    handler runs the underlying ledger call and returns the balance."""
+    from bed.api.bank import BankService
+    from bed.api.token_store import InMemoryTokenStore
+
+    secret = secrets.token_bytes(32)
+    instance_id = "bank-token-test"
+    token_store = InMemoryTokenStore()
+    token = _mint_token(
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        moniker="alice",
+    )
+    ws, sm, _, _, _ = _make_token_aware_session(
+        moniker="alice",
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        auth_service_token=token,
+    )
+
+    service = BankService(
+        _make_args(),
+        sm,
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+    )
+    bank_mock = _make_bank_mock(balance=99)
+    with patch.object(service, "_get_bank", return_value=bank_mock), \
+         _patch_access_returning(True), \
+         patch("bed.api.bank.io.echo"):
+        result = asyncio.run(
+            service._handle_balance(
+                ws, {"type": "bank_balance", "moniker": "alice"}
+            )
+        )
+    assert result["type"] == "bank_balance"
+    assert result["balance"] == 99
+    bank_mock.get_balance.assert_called_once_with("alice")
+
+
+def test_handle_balance_blocked_by_invalid_token():
+    """End-to-end: with a session token whose store entry has been
+    wiped, the bank_balance handler short-circuits with
+    token_revoked and never reaches the ledger."""
+    from bed.api.bank import BankService
+    from bed.api.token_store import InMemoryTokenStore
+
+    secret = secrets.token_bytes(32)
+    instance_id = "bank-token-test"
+    token_store = InMemoryTokenStore()
+    token = _mint_token(
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        moniker="alice",
+    )
+    token_store.delete(token)
+    ws, sm, _, _, _ = _make_token_aware_session(
+        moniker="alice",
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+        auth_service_token=token,
+    )
+
+    service = BankService(
+        _make_args(),
+        sm,
+        secret=secret,
+        token_store=token_store,
+        instance_id=instance_id,
+    )
+    bank_mock = _make_bank_mock()
+    with patch.object(service, "_get_bank", return_value=bank_mock), \
+         patch("bed.api.bank.io.echo"):
+        result = asyncio.run(
+            service._handle_balance(
+                ws, {"type": "bank_balance", "moniker": "alice"}
+            )
+        )
+    assert result["type"] == "error"
+    assert result["code"] == "token_revoked"
+    bank_mock.get_balance.assert_not_called()

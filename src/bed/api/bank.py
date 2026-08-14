@@ -26,13 +26,23 @@
 #   (auth, message, ...) should follow this template -- see the
 #   TODO comments in bed/api/auth.py and bed/api/message.py.
 #
-#   Handlers perform three gates in order:
+#   Handlers perform four gates in order:
 #     1. Session bound (else ``not_authenticated``).
-#     2. Wire-shape validation -- moniker present, amount int > 0,
+#     2. Session token valid (if present) -- decode + HMAC verify +
+#        store check + expiry + instance match (else ``token_invalid``
+#        / ``token_revoked`` / ``instance_mismatch`` /
+#        ``token_expired``). When the session was minted by the auth
+#        service, ``state.auth_service_token`` carries the current
+#        bearer token; we re-verify it on every bank op so a token
+#        revoked since the session was bound cannot drive ledger
+#        mutations. The decoded claims are stashed on ``message``
+#        so ``bbsengine6.bank.access()`` can prefer claim-derived
+#        ``moniker`` / ``is_sysop`` over the in-memory session.
+#     3. Wire-shape validation -- moniker present, amount int > 0,
 #        transfer_id int > 0 (else ``missing_moniker`` /
 #        ``invalid_amount``). This stays in the handler because
 #        envelope codes are a wire-protocol concern.
-#     3. ``bbsengine6.bank.access()`` authorization (else ``forbidden``).
+#     4. ``bbsengine6.bank.access()`` authorization (else ``forbidden``).
 #   ``bank_list_all`` is sysop-only. ``bank_pending`` ignores the
 #   wire's ``is_sysop`` and uses ``state.is_sysop`` instead, so a
 #   non-sysop session cannot escalate by sending ``is_sysop: true``.
@@ -47,14 +57,19 @@ from bbsengine6 import io
 from bbsengine6.bank import BankService as _BBSBankService
 from bbsengine6.bank import access as _bank_access
 
+from .auth import TokenError, _decode_token
 from .errors import (
     CODE_DATABASE_ERROR,
+    CODE_INSTANCE_MISMATCH,
+    CODE_TOKEN_EXPIRED,
+    CODE_TOKEN_REVOKED,
     error_envelope,
     forbidden,
     not_authenticated,
 )
 from .handler import BaseService
 from .session import SessionState
+from .token_store import TokenStore
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +144,77 @@ def _get_session_for(
     if state is None:
         return None, not_authenticated()
     return state, None
+
+
+def _validate_session_token(
+    self_ref: "BankService", state: SessionState
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """Validate ``state.auth_service_token`` if it is set.
+
+    Returns ``(claims, None)`` on success -- ``claims`` is the decoded
+    token claims dict, ready to be stashed on ``message["claims"]`` so
+    :func:`bbsengine6.bank.access` can prefer claim-derived
+    ``moniker`` / ``is_sysop`` over the in-memory session state.
+
+    Returns ``(None, None)`` when the session has no token (e.g. it
+    was created outside the auth flow); the caller falls back to the
+    existing session-based authorization.
+
+    Returns ``(None, error_envelope)`` on any token failure: the
+    caller surfaces the envelope and stops processing. The envelope
+    codes mirror the auth service so clients can reuse their
+    reconnect logic: ``token_invalid`` for HMAC / shape failures,
+    ``token_revoked`` for store misses, ``instance_mismatch`` for
+    tokens minted by a different bed instance, ``token_expired`` for
+    stale tokens.
+
+    Kept as a module-level helper (not a method) so it composes
+    cleanly with the session / shape / access() pipeline.
+    """
+    token = getattr(state, "auth_service_token", None)
+    if not token:
+        return None, None
+
+    secret = getattr(self_ref, "secret", None)
+    token_store = getattr(self_ref, "token_store", None)
+    instance_id = getattr(self_ref, "instance_id", None)
+    if not secret or token_store is None or not instance_id:
+        # BankService was constructed without token-aware wiring
+        # (e.g. legacy callers / unit tests). Treat as "no token".
+        return None, None
+
+    try:
+        claims = _decode_token(token, secret)
+    except TokenError as e:
+        return None, error_envelope(e.code, str(e), recoverable=False)
+
+    store_record = token_store.get(token)
+    if store_record is None:
+        return None, error_envelope(
+            CODE_TOKEN_REVOKED,
+            "Token is no longer valid",
+            recoverable=False,
+        )
+    if store_record.bed_instance_id != instance_id:
+        token_store.delete(token)
+        return None, error_envelope(
+            CODE_INSTANCE_MISMATCH,
+            "Token was issued by a different bed instance",
+            recoverable=False,
+        )
+
+    now_fn = getattr(self_ref, "_now", None)
+    now = float(now_fn()) if callable(now_fn) else None
+    expires_at = store_record.expires_at
+    if now is not None and expires_at <= now:
+        token_store.delete(token)
+        return None, error_envelope(
+            CODE_TOKEN_EXPIRED,
+            "Token has expired",
+            recoverable=True,
+        )
+
+    return claims, None
 
 
 def _validate_shape(
@@ -216,9 +302,32 @@ class BankService(BaseService):
 
     HANDLED_TYPES = tuple(_TYPE_TO_OP.keys())
 
-    def __init__(self, args: Any, session_manager: Any) -> None:
+    def __init__(
+        self,
+        args: Any,
+        session_manager: Any,
+        *,
+        secret: Optional[bytes] = None,
+        token_store: Optional[TokenStore] = None,
+        instance_id: Optional[str] = None,
+        clock: Optional[Any] = None,
+    ) -> None:
+        """Construct a BankService.
+
+        ``secret``, ``token_store``, and ``instance_id`` are the
+        token-aware wiring that lets :meth:`_check_access` re-verify
+        ``state.auth_service_token`` on every bank op. They are all
+        optional; if any is missing, the service falls back to
+        session-based authorization without token re-verification.
+        ``clock`` is the same injectable time source used by
+        :class:`AuthService` for deterministic expiry tests.
+        """
         super().__init__(args, session_manager)
         self._bank: Optional[Any] = None
+        self.secret = bytes(secret) if secret else None
+        self.token_store = token_store
+        self.instance_id = str(instance_id) if instance_id else None
+        self._clock = clock
 
     def _get_bank(self) -> Any:
         """Lazily construct the underlying bbsengine6 BankService.
@@ -234,18 +343,41 @@ class BankService(BaseService):
             self._bank = _BBSBankService(self.args)
         return self._bank
 
+    def _now(self) -> float:
+        """Return the current UNIX timestamp, honoring ``clock`` if set."""
+        if self._clock is not None:
+            return float(self._clock())
+        import time as _time
+
+        return _time.time()
+
     def _check_access(
         self, websocket: Any, op: str, message: Dict[str, Any]
     ) -> Tuple[Optional[SessionState], Optional[Dict[str, Any]]]:
-        """Run the three access gates in order: session, shape, authz.
+        """Run the four access gates in order: session, token, shape, authz.
 
-        Returns ``(state, None)`` on success or ``(state_or_None, error_envelope)``
-        on failure. The caller uses the returned envelope as the wire
-        response and stops processing.
+        Returns ``(state, None)`` on success or ``(state_or_None,
+        error_envelope)`` on failure. The caller uses the returned
+        envelope as the wire response and stops processing.
+
+        The token gate re-verifies ``state.auth_service_token`` (if
+        present) against the auth service's HMAC scheme. The decoded
+        claims are stashed on ``message["claims"]`` so
+        :func:`bbsengine6.bank.access` can prefer claim-derived
+        ``moniker`` / ``is_sysop`` over the in-memory session
+        attributes. When the service was constructed without
+        token-aware wiring (legacy / unit-test usage), the token
+        gate is a no-op and authorization falls back to the session.
         """
         state, err = _get_session_for(self, websocket)
         if err is not None:
             return None, err
+
+        claims, err = _validate_session_token(self, state)
+        if err is not None:
+            return state, err
+        if claims is not None:
+            message["claims"] = claims
 
         err = _validate_shape(op, message)
         if err is not None:

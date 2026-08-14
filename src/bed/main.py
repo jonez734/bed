@@ -441,8 +441,29 @@ class BED:
                 )
 
             if not getattr(self.args, "no_bank_service", False):
+                # When auth is enabled, hand BankService the same
+                # HMAC secret / token store / instance id the auth
+                # service uses, so it can re-verify
+                # ``state.auth_service_token`` on every bank op and
+                # route the claim-derived ``moniker`` / ``is_sysop``
+                # into ``bbsengine6.bank.access()``. When auth is
+                # disabled, none of those are available and the bank
+                # service falls back to session-only authorization
+                # (legacy / --token-persistence=none mode).
+                bank_kwargs: Dict[str, Any] = {}
+                if (
+                    self.auth_service is not None
+                    and self.token_store is not None
+                ):
+                    bank_kwargs = {
+                        "secret": getattr(self.auth_service, "secret", None),
+                        "token_store": self.token_store,
+                        "instance_id": getattr(
+                            self.auth_service, "instance_id", None
+                        ),
+                    }
                 self.bank_service = BankService(
-                    db_args, self._session_registry
+                    db_args, self._session_registry, **bank_kwargs
                 )
                 self.bank_service.register_all(self.server)
 
