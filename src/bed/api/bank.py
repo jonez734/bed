@@ -150,6 +150,96 @@ def _get_session_for(
     return state, None
 
 
+def _get_or_bind_session_for(
+    self_ref: "BankService",
+    websocket: Any,
+    message: Dict[str, Any],
+) -> Tuple[Optional[SessionState], Optional[Dict[str, Any]]]:
+    """Return the session for ``websocket``, lazily binding from a
+    valid wire token when no session is bound yet.
+
+    The CLI's ``bank`` tool runs each bank wire call under a fresh
+    ``asyncio.run`` (one per subcommand) which closes its event
+    loop and forces :class:`BedConnection` to open a new WebSocket
+    on the next call. Each new WebSocket is a fresh ``websocket.id``
+    in the server's eyes, so without this fallback the session
+    registered by the prior ``auth reconnect`` is no longer
+    reachable and every bank op returns ``not_authenticated``.
+
+    The fallback mirrors the ``auth reconnect`` handshake: when a
+    valid wire token is present, its ``session_id`` / ``moniker`` /
+    ``is_sysop`` / ``loginid`` claims are used to either re-bind an
+    existing :class:`SessionState` (its WS mapping is updated) or
+    synthesize a fresh one if the server's session registry has
+    lost the entry (e.g. after a process restart). The wire token
+    becomes the new ``state.auth_service_token`` so subsequent
+    defense-in-depth checks see a consistent snapshot. The
+    validated claims are stashed on ``message["claims"]`` so the
+    downstream :func:`bbsengine6.bank.access` call can prefer
+    claim-derived ``moniker`` / ``is_sysop`` over the in-memory
+    session attributes.
+
+    Returns the same ``(state, err)`` tuple shape as
+    :func:`_get_session_for`. ``err`` is set on:
+
+    * No bound session AND no wire token: ``not_authenticated``
+      (a caller that never sent ``auth`` / ``reconnect`` AND
+      never sent a token -- the legacy unauthenticated case).
+    * Bound session absent, wire token present but invalid:
+      the envelope from :func:`_validate_token_against_store`
+      (``token_invalid`` / ``token_revoked`` / ``instance_mismatch``
+      / ``token_expired``).
+    """
+    state, err = _get_session_for(self_ref, websocket)
+    if state is not None:
+        return state, None
+
+    wire_token = (message.get("token") or "").strip()
+    if not wire_token:
+        return None, not_authenticated()
+
+    claims, token_err = _validate_wire_token(self_ref, message)
+    if token_err is not None:
+        return None, token_err
+    if claims is None:
+        return None, not_authenticated()
+
+    session_id = (claims.get("session_id") or "").strip()
+    if not session_id:
+        return None, not_authenticated()
+
+    try:
+        ws_id = str(websocket.id)
+    except Exception:
+        return None, not_authenticated()
+
+    existing = self_ref.sessions.get_by_session(session_id)
+    moniker = (claims.get("moniker") or "").strip()
+    is_sysop = bool(claims.get("is_sysop", False))
+    loginid = claims.get("loginid")
+
+    if existing is not None:
+        state = self_ref.sessions.bind(
+            session_id,
+            ws_id,
+            existing.moniker or moniker,
+            bool(existing.is_sysop) or is_sysop,
+            loginid=existing.loginid or loginid,
+        )
+    else:
+        state = self_ref.sessions.bind(
+            session_id,
+            ws_id,
+            moniker,
+            is_sysop,
+            loginid=loginid,
+        )
+
+    state.auth_service_token = wire_token
+    message["claims"] = claims
+    return state, None
+
+
 def _validate_token_against_store(
     self_ref: "BankService", token: str
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
@@ -404,6 +494,16 @@ class BankService(BaseService):
         error_envelope)`` on failure. The caller uses the returned
         envelope as the wire response and stops processing.
 
+        Session resolution: :func:`_get_or_bind_session_for` looks
+        up the WS-bound session first. When none is bound (the CLI
+        just opened a fresh WebSocket after an ``asyncio.run`` cycle
+        closed the previous loop) it falls back to validating the
+        wire token and lazily binding the session from the token's
+        claims -- mirroring the ``auth reconnect`` handshake. This
+        keeps the per-call token path (``defense-in-depth``) and the
+        WS-bound session in sync without requiring the CLI to drive
+        a single persistent event loop.
+
         Two token gates, ordered by preference:
 
         1. ``_validate_wire_token`` reads ``message["token"]`` (the
@@ -416,9 +516,10 @@ class BankService(BaseService):
            ``auth reconnect``). This is the defense-in-depth path.
         2. ``_validate_session_token`` reads
            ``state.auth_service_token`` (set by the auth flow at WS
-           bind time). Used only when the wire token is absent --
-           legacy callers and tests that don't supply a per-call
-           token still get session-bound authorization.
+           bind time, or by the lazy-bind fallback above). Used
+           only when the wire token is absent -- legacy callers
+           and tests that don't supply a per-call token still get
+           session-bound authorization.
 
         Both gates share
         :func:`_validate_token_against_store`. When the service was
@@ -426,21 +527,22 @@ class BankService(BaseService):
         usage), both gates are no-ops and authorization falls back
         to the session attributes directly.
         """
-        state, err = _get_session_for(self, websocket)
+        state, err = _get_or_bind_session_for(self, websocket, message)
         if err is not None:
             return None, err
 
-        claims, err = _validate_wire_token(self, message)
-        if err is not None:
-            return state, err
-        if claims is not None:
-            message["claims"] = claims
-        else:
-            claims, err = _validate_session_token(self, state)
+        if "claims" not in message:
+            claims, err = _validate_wire_token(self, message)
             if err is not None:
                 return state, err
             if claims is not None:
                 message["claims"] = claims
+            else:
+                claims, err = _validate_session_token(self, state)
+                if err is not None:
+                    return state, err
+                if claims is not None:
+                    message["claims"] = claims
 
         err = _validate_shape(op, message)
         if err is not None:
