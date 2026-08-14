@@ -1,9 +1,10 @@
 """Tests for bed.tools.bank (the standalone ``bank`` CLI script).
 
 Covers:
-- buildargs: registers --databasename/--moniker/--sysop/--debug
-- _resolve_moniker: --moniker short-circuit, getcurrentmoniker happy path,
-  getcurrentmoniker returning None, and the pool is passed in
+- buildargs: registers --databasename/--moniker/--sysop/--debug/--token-file
+- _resolve_moniker: --moniker short-circuit, claim-derived
+  ``_session_moniker``, getcurrentmoniker happy path, getcurrentmoniker
+  returning None, and the pool is passed in
 - _resolve_loginids: maps monikers to engine.__member.loginid via
   member.getbymoniker, tolerates pool failure, dedupes input
 - bank_balance / bank_add / bank_remove / bank_transfer / bank_pending /
@@ -15,13 +16,21 @@ Covers:
 - bank_balance, bank_history, bank_list_all, bank_pending tolerate empty data
 - main() short-circuits when _resolve_moniker returns None
 - main() catches KeyboardInterrupt / EOFError cleanly
+- TokenFileAuth: --token-file registration, _authenticate_ws
+  (happy path, missing file, soft-failure codes, rotated-token
+  write-back), _resolve_call_token (with caching), facade forwards
+  the resolved token to BedBankServiceClient, direct mode skips
+  authentication, main_with_args bed-mode flow
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 from typing import Any, Dict, List
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 
 
@@ -1409,3 +1418,466 @@ def test_make_session_is_sysop_reflects_args_sysop_flag():
     args_b = _make_args(sysop=False)
     assert tool._make_session(args_a).is_sysop is True
     assert tool._make_session(args_b).is_sysop is False
+
+
+def test_make_session_prefers_session_moniker_from_token_claims():
+    """``_make_session`` uses the moniker passed to it (the caller
+    resolves the actor moniker) and combines ``args._session_is_sysop``
+    with the explicit ``--sysop`` flag for ``.is_sysop``."""
+    tool = _import_tool()
+    args = _make_args(moniker="bob")
+    args._session_is_sysop = True
+    s = tool._make_session(args, moniker="alice")
+    assert s.moniker == "alice"
+    assert s.is_sysop is True
+
+
+def test_make_session_args_sysop_flag_overrides_session_is_sysop():
+    """The explicit ``--sysop`` flag still wins over the claim-derived
+    is_sysop (the operator outranks the session)."""
+    tool = _import_tool()
+    args = _make_args(sysop=True)
+    args._session_moniker = "alice"
+    args._session_is_sysop = False
+    s = tool._make_session(args)
+    assert s.is_sysop is True
+
+
+# ---------------------------------------------------------------------
+# TokenFileAuth -- --token-file plumbing, _authenticate_ws, and the
+# per-call token forwarded through _BedBankFacade to
+# BedBankServiceClient.
+
+
+def _make_args_with_token(
+    *,
+    token_file: str | None = None,
+    moniker: str | None = None,
+    direct: bool = False,
+    **overrides: Any,
+) -> argparse.Namespace:
+    args = _make_args(
+        token_file=token_file, moniker=moniker, direct=direct, **overrides
+    )
+    args._backend = "bed" if not direct else "direct"
+    return args
+
+
+def _write_token(path, content: str) -> "os.PathLike":
+    """Write a token file in mode 0600 so the perm check passes.
+
+    ``tmp_path`` files default to mode 0644 which trips
+    :func:`bed.tools._token.check_token_file_perms`. The bank tool
+    itself writes mode 0600 (see :func:`_authenticate_ws`), so the
+    test fixture should mirror production perms.
+    """
+    path.write_text(content)
+    path.chmod(0o600)
+    return path
+
+
+def test_buildargs_registers_token_file_flag_as_optional():
+    """``--token-file`` registers with default=None."""
+    tool = _import_tool()
+    parser = argparse.ArgumentParser()
+    tool.buildargs(parser)
+    a = parser.parse_args([])
+    assert hasattr(a, "token_file")
+    assert a.token_file is None
+
+
+def test_buildargs_parses_explicit_token_file():
+    tool = _import_tool()
+    parser = argparse.ArgumentParser()
+    tool.buildargs(parser)
+    a = parser.parse_args(["--token-file", "/tmp/my.token"])
+    assert a.token_file == "/tmp/my.token"
+
+
+def test_resolve_call_token_reads_explicit_token_file(tmp_path):
+    """When ``--token-file`` is set and the file holds a token, the
+    call-token helper returns its contents."""
+    tool = _import_tool()
+    token_path = _write_token(tmp_path / "tok", "secret\n")
+    args = _make_args(token_file=str(token_path))
+    assert tool._resolve_call_token(args) == "secret"
+
+
+def test_resolve_call_token_returns_empty_when_token_file_missing(
+    tmp_path, monkeypatch
+):
+    """When neither ``--token-file`` nor the default path has a
+    token, the call-token helper returns ``""`` so the client falls
+    back to the WS-bound session token."""
+    tool = _import_tool()
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    args = _make_args(token_file=str(tmp_path / "missing"))
+    assert tool._resolve_call_token(args) == ""
+
+
+def test_resolve_call_token_caches_value_on_first_call(tmp_path):
+    """The first call caches ``args._resolved_token`` so subsequent
+    calls do not re-read the file."""
+    tool = _import_tool()
+    token_path = _write_token(tmp_path / "tok", "first\n")
+    args = _make_args(token_file=str(token_path))
+    assert tool._resolve_call_token(args) == "first"
+    args._resolved_token = "cached"
+    assert tool._resolve_call_token(args) == "cached"
+
+
+def test_authenticate_ws_missing_token_file_renders_hint(tmp_path, monkeypatch):
+    """No token file and no default path -> one-line hint pointing
+    the operator at ``bed auth login``."""
+    tool = _import_tool()
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    args = _make_args(token_file=str(tmp_path / "missing"))
+    args._backend = "bed"
+    with patch.object(tool.io, "echo") as echo:
+        ok = tool._authenticate_ws(args)
+    assert ok is False
+    msgs = [str(c.args[0]) for c in echo.call_args_list]
+    assert any("no bearer token found" in m for m in msgs)
+    assert any("bed auth login" in m for m in msgs)
+
+
+def test_authenticate_ws_present_token_file_calls_reconnect(
+    tmp_path, monkeypatch
+):
+    """A present, valid token file triggers a single
+    ``BedAuthServiceClient.reconnect(token=...)`` call."""
+    tool = _import_tool()
+    from bed.client import authservice as authservice_mod
+
+    token_path = _write_token(tmp_path / "tok", "the-token\n")
+    args = _make_args(token_file=str(token_path))
+    args._backend = "bed"
+
+    reconnect_mock = AsyncMock(
+        return_value={
+            "ok": True,
+            "moniker": "alice",
+            "is_sysop": False,
+            "session_id": "s1",
+            "token": "the-token",
+            "expires_at": "2030-01-01T00:00:00Z",
+            "replayed": None,
+        }
+    )
+    fake_client = MagicMock()
+    fake_client.reconnect = reconnect_mock
+    with patch.object(
+        authservice_mod, "BedAuthServiceClient", return_value=fake_client
+    ):
+        ok = tool._authenticate_ws(args)
+    assert ok is True
+    reconnect_mock.assert_awaited_once_with("the-token")
+    assert args._session_moniker == "alice"
+    assert args._session_is_sysop is False
+    assert args._resolved_token == "the-token"
+
+
+def test_authenticate_ws_stashes_session_attrs_from_reconnect_reply(
+    tmp_path
+):
+    """``is_sysop=True`` from the reply populates
+    ``args._session_is_sysop`` so ``_make_session`` uses it."""
+    tool = _import_tool()
+    from bed.client import authservice as authservice_mod
+
+    token_path = _write_token(tmp_path / "tok", "admin-tok\n")
+    args = _make_args(token_file=str(token_path))
+    args._backend = "bed"
+
+    reconnect_mock = AsyncMock(
+        return_value={
+            "ok": True,
+            "moniker": "admin",
+            "is_sysop": True,
+            "session_id": "s2",
+            "token": "admin-tok",
+            "expires_at": "2030-01-01T00:00:00Z",
+            "replayed": None,
+        }
+    )
+    fake_client = MagicMock()
+    fake_client.reconnect = reconnect_mock
+    with patch.object(
+        authservice_mod, "BedAuthServiceClient", return_value=fake_client
+    ):
+        tool._authenticate_ws(args)
+    assert args._session_moniker == "admin"
+    assert args._session_is_sysop is True
+
+
+def test_authenticate_ws_writes_rotated_token_back_to_file(tmp_path):
+    """If the server returns a new token on reconnect, the bank tool
+    writes it back to the file so subsequent runs pick it up."""
+    tool = _import_tool()
+    from bed.client import authservice as authservice_mod
+
+    token_path = _write_token(tmp_path / "tok", "old-token\n")
+    args = _make_args(token_file=str(token_path))
+    args._backend = "bed"
+
+    reconnect_mock = AsyncMock(
+        return_value={
+            "ok": True,
+            "moniker": "alice",
+            "is_sysop": False,
+            "session_id": "s3",
+            "token": "new-token",
+            "expires_at": "2030-01-01T00:00:00Z",
+            "replayed": None,
+        }
+    )
+    fake_client = MagicMock()
+    fake_client.reconnect = reconnect_mock
+    with patch.object(
+        authservice_mod, "BedAuthServiceClient", return_value=fake_client
+    ):
+        ok = tool._authenticate_ws(args)
+    assert ok is True
+    assert token_path.read_text().strip() == "new-token"
+    assert args._resolved_token == "new-token"
+
+
+def test_authenticate_ws_no_rotation_leaves_file_intact(tmp_path):
+    """If the server returns the same token, the file is not rewritten."""
+    tool = _import_tool()
+    from bed.client import authservice as authservice_mod
+
+    token_path = _write_token(tmp_path / "tok", "same-token\n")
+    args = _make_args(token_file=str(token_path))
+    args._backend = "bed"
+
+    mtime_before = token_path.stat().st_mtime_ns
+    reconnect_mock = AsyncMock(
+        return_value={
+            "ok": True,
+            "moniker": "alice",
+            "is_sysop": False,
+            "session_id": "s4",
+            "token": "same-token",
+            "expires_at": "2030-01-01T00:00:00Z",
+            "replayed": None,
+        }
+    )
+    fake_client = MagicMock()
+    fake_client.reconnect = reconnect_mock
+    with patch.object(
+        authservice_mod, "BedAuthServiceClient", return_value=fake_client
+    ):
+        tool._authenticate_ws(args)
+    assert token_path.stat().st_mtime_ns == mtime_before
+    assert args._resolved_token == "same-token"
+
+
+@pytest.mark.parametrize(
+    "code,label",
+    [
+        ("token_revoked", "token_revoked"),
+        ("token_expired", "token_expired"),
+        ("token_invalid", "token_invalid"),
+        ("bed_instance_mismatch", "bed_instance_mismatch"),
+        ("not_authenticated", "not_authenticated"),
+    ],
+)
+def test_authenticate_ws_reconnect_soft_failure_renders_hint(
+    tmp_path, code, label
+):
+    """Each auth-failure code prints the standard 'no bearer token'
+    hint (which the operator interprets as 're-authenticate') plus
+    the server's code in parens."""
+    tool = _import_tool()
+    from bed.client import authservice as authservice_mod
+
+    token_path = _write_token(tmp_path / "tok", "any-token\n")
+    args = _make_args(token_file=str(token_path))
+    args._backend = "bed"
+
+    reconnect_mock = AsyncMock(
+        return_value={"ok": False, "code": code, "message": f"{label} boom"}
+    )
+    fake_client = MagicMock()
+    fake_client.reconnect = reconnect_mock
+    with patch.object(
+        authservice_mod, "BedAuthServiceClient", return_value=fake_client
+    ), patch.object(tool.io, "echo") as echo:
+        ok = tool._authenticate_ws(args)
+    assert ok is False
+    msgs = [str(c.args[0]) for c in echo.call_args_list]
+    assert any("no bearer token found" in m for m in msgs)
+    assert any("bed auth login" in m for m in msgs)
+    assert any(label in m for m in msgs)
+
+
+def test_authenticate_ws_reconnect_bad_credentials_passthrough(tmp_path):
+    """An unexpected code (e.g. bad_credentials) renders as a plain
+    ``code: message`` line -- it is not a 're-authenticate' hint."""
+    tool = _import_tool()
+    from bed.client import authservice as authservice_mod
+
+    token_path = _write_token(tmp_path / "tok", "any-token\n")
+    args = _make_args(token_file=str(token_path))
+    args._backend = "bed"
+
+    reconnect_mock = AsyncMock(
+        return_value={
+            "ok": False, "code": "bad_credentials", "message": "nope"
+        }
+    )
+    fake_client = MagicMock()
+    fake_client.reconnect = reconnect_mock
+    with patch.object(
+        authservice_mod, "BedAuthServiceClient", return_value=fake_client
+    ), patch.object(tool.io, "echo") as echo:
+        ok = tool._authenticate_ws(args)
+    assert ok is False
+    msgs = [str(c.args[0]) for c in echo.call_args_list]
+    assert any("bad_credentials: nope" in m for m in msgs)
+    assert not any("no bearer token found" in m for m in msgs)
+
+
+def test_main_with_args_bed_mode_calls_authenticate_ws(tmp_path):
+    """In bed mode, ``main_with_args`` invokes ``_authenticate_ws``
+    before ``_resolve_moniker`` so claim-derived values are
+    available to the local ``_check_access``."""
+    tool = _import_tool()
+    token_path = _write_token(tmp_path / "tok", "present\n")
+    args = _make_args(token_file=str(token_path), moniker="alice")
+    args.direct = False
+    args._backend = "bed"
+    with patch.object(tool._routing, "select_backend", return_value="bed"), \
+         patch.object(
+             tool, "_authenticate_ws", return_value=True
+         ) as authn, \
+         patch.object(tool, "_resolve_moniker", return_value="alice"), \
+         patch.object(tool.io, "inputchoice", return_value="Q"):
+        tool.main_with_args(args)
+    authn.assert_called_once_with(args)
+
+
+def test_main_with_args_bed_mode_aborts_when_authenticate_ws_fails(
+    tmp_path
+):
+    """A failed ``_authenticate_ws`` short-circuits ``main_with_args``
+    -- ``_resolve_moniker`` and ``menu`` are not called."""
+    tool = _import_tool()
+    token_path = tmp_path / "missing"
+    args = _make_args(token_file=str(token_path), moniker="alice")
+    args.direct = False
+    args._backend = "bed"
+    with patch.object(tool._routing, "select_backend", return_value="bed"), \
+         patch.object(tool, "_authenticate_ws", return_value=False), \
+         patch.object(tool, "_resolve_moniker") as rm, \
+         patch.object(tool.io, "inputchoice") as ic:
+        tool.main_with_args(args)
+    rm.assert_not_called()
+    ic.assert_not_called()
+
+
+def test_main_with_args_direct_mode_skips_authenticate_ws():
+    """``--direct`` bypasses ``_authenticate_ws`` entirely."""
+    tool = _import_tool()
+    args = _make_args(direct=True, moniker="alice")
+    with patch.object(tool._routing, "select_backend", return_value="direct"), \
+         patch.object(
+             tool, "_authenticate_ws"
+         ) as authn, \
+         patch.object(tool, "_resolve_moniker", return_value="alice"), \
+         patch.object(tool.io, "inputchoice", return_value="Q"):
+        tool.main_with_args(args)
+    authn.assert_not_called()
+
+
+def test_resolve_moniker_uses_session_moniker_from_token_claims():
+    """When ``args._session_moniker`` is populated by
+    ``_authenticate_ws``, ``_resolve_moniker`` prefers it over the
+    local DB lookup."""
+    tool = _import_tool()
+    args = _make_args()
+    args._session_moniker = "alice"
+    with patch.object(tool, "database") as db, \
+         patch.object(tool, "member") as mm:
+        moniker = tool._resolve_moniker(args)
+    assert moniker == "alice"
+    db.getpool.assert_not_called()
+    mm.getcurrentmoniker.assert_not_called()
+
+
+def test_resolve_moniker_falls_back_to_local_db_when_no_session():
+    """Without ``args._session_moniker``, ``_resolve_moniker`` falls
+    back to ``member.getcurrentmoniker``."""
+    tool = _import_tool()
+    args = _make_args()
+    pool = MagicMock()
+    with patch.object(tool.database, "getpool", return_value=pool), \
+         patch.object(
+             tool.member, "getcurrentmoniker", return_value="local-user"
+         ):
+        assert tool._resolve_moniker(args) == "local-user"
+
+
+def test_resolve_moniker_explicit_moniker_beats_session_moniker():
+    """The explicit ``--moniker`` flag wins over the claim-derived
+    session moniker (operator override)."""
+    tool = _import_tool()
+    args = _make_args(moniker="operator-target")
+    args._session_moniker = "alice"
+    assert tool._resolve_moniker(args) == "operator-target"
+
+
+def test_resolve_moniker_returns_none_emits_error():
+    """If nothing resolves the moniker, ``_resolve_moniker`` prints
+    an actionable error and returns None."""
+    tool = _import_tool()
+    args = _make_args()
+    pool = MagicMock()
+    with patch.object(tool.database, "getpool", return_value=pool), \
+         patch.object(tool.member, "getcurrentmoniker", return_value=None), \
+         patch.object(tool.io, "echo") as echo:
+        moniker = tool._resolve_moniker(args)
+    assert moniker is None
+    msgs = [str(c.args[0]) for c in echo.call_args_list]
+    assert any("Could not determine current user" in m for m in msgs)
+
+
+def test_facade_forwards_resolved_token_to_bankservice_client(tmp_path):
+    """``_BedBankFacade`` constructs ``BedBankServiceClient`` with
+    ``token=`` set to ``_resolve_call_token(args)`` so every wire
+    call carries the per-call token."""
+    tool = _import_tool()
+    from bed.client import singleton as singleton_mod
+    from bed.client.bankservice import BedBankServiceClient
+
+    token_path = _write_token(tmp_path / "tok", "wire-tok\n")
+    args = _make_args(token_file=str(token_path))
+    args._resolved_token = "wire-tok"
+    args._backend = "bed"
+    fake_conn = MagicMock()
+    with patch.object(
+        tool, "_resolve_call_token", return_value="wire-tok"
+    ), patch.object(
+        singleton_mod, "get_bed_connection", return_value=fake_conn
+    ):
+        facade = tool._BedBankFacade(args)
+    assert isinstance(facade._client, BedBankServiceClient)
+    assert facade._client._token == "wire-tok"
+
+
+def test_facade_passes_empty_token_when_unresolved(tmp_path):
+    """When ``_resolve_call_token`` returns ``""``, the facade builds
+    the client with ``token=""`` so legacy session-bound paths are
+    preserved (e.g. direct mode, tests)."""
+    tool = _import_tool()
+    from bed.client import singleton as singleton_mod
+
+    args = _make_args(token_file=str(tmp_path / "missing"))
+    args._backend = "bed"
+    with patch.object(tool, "_resolve_call_token", return_value=""), \
+         patch.object(
+             singleton_mod, "get_bed_connection", return_value=MagicMock()
+         ):
+        facade = tool._BedBankFacade(args)
+    assert facade._client._token == ""
