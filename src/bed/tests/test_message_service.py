@@ -192,13 +192,18 @@ def test_list_pending_returns_db_messages():
         {"id": 2, "content": "world", "urgency": "URGENT"},
     ]
 
+    sm = _make_session_manager()
+    sm.get_by_websocket.return_value = MagicMock(
+        moniker="alice", is_sysop=True
+    )
     with patch.object(
         message_module, "get_pending_messages", return_value=fake_messages
     ) as m:
-        service = MessageService(_make_args(), _make_session_manager())
+        service = MessageService(_make_args(), sm)
         result = asyncio.run(
             service._handle_list_pending(
-                {"type": "message_list_pending", "moniker": "alice"}
+                MagicMock(),
+                {"type": "message_list_pending", "moniker": "alice"},
             )
         )
 
@@ -211,10 +216,15 @@ def test_list_pending_returns_db_messages():
 def test_list_pending_rejects_empty_moniker():
     from bed.api.message import MessageService
 
-    service = MessageService(_make_args(), _make_session_manager())
+    sm = _make_session_manager()
+    sm.get_by_websocket.return_value = MagicMock(
+        moniker="alice", is_sysop=True
+    )
+    service = MessageService(_make_args(), sm)
     result = asyncio.run(
         service._handle_list_pending(
-            {"type": "message_list_pending", "moniker": ""}
+            MagicMock(),
+            {"type": "message_list_pending", "moniker": ""},
         )
     )
 
@@ -421,5 +431,331 @@ class TestDispatchNotificationFuzz:
         # the subscriber.
         assert len(captured) == 1
         assert captured[0]["recipient_moniker"] == "alice"
+
+
+# ---------------------------------------------------------------------
+# Phase 4 hardening: handlers delegate to bbsengine6.message.access().
+#
+# Every _handle_* method runs three gates in order:
+#   1. Session bound (else not_authenticated envelope).
+#   2. Wire-shape validation -- moniker present (else missing_moniker).
+#   3. bbsengine6.message.access(args, op, session=state, message=msg)
+#      (else forbidden envelope).
+#
+# These tests patch _message_access at the bed.api.message module
+# boundary (the import site that MessageService uses), so they verify
+# the gate order without depending on bbsengine6.message.access.
+
+
+class _FakeState:
+    """Minimal SessionState stand-in (only attributes access() reads)."""
+
+    def __init__(self, moniker: str, *, is_sysop: bool = False):
+        self.moniker = moniker
+        self.is_sysop = is_sysop
+
+
+def _patched_access(moniker_match=True, *, allow=True):
+    """Return a fake access() that records calls and yields ``allow``.
+
+    When ``moniker_match`` is True, the fake records every call; when
+    False, it raises AssertionError if the handler invokes it (which
+    means an earlier gate should have blocked the call)."""
+    calls = []
+
+    def _fake(args, op, /, **kwargs):
+        calls.append(
+            {
+                "op": op,
+                "session_moniker": getattr(kwargs.get("session"), "moniker", None),
+                "message": kwargs.get("message"),
+            }
+        )
+        return allow
+
+    return _fake, calls
+
+
+# ---------- _handle_subscribe access-gate tests ----------
+
+
+def test_subscribe_denies_when_no_session_bound():
+    """Unbound websocket -> not_authenticated envelope, no _subscribed change."""
+    from bed.api import message as message_module
+    from bed.api.message import MessageService
+    from bed.api.session import SessionRegistry
+
+    fake, calls = _patched_access()
+    service = MessageService(_make_args(), SessionRegistry())
+    ws = MagicMock()
+    ws.id = "ws-no-session"
+    msg = {"type": "message_subscribe", "moniker": "alice"}
+
+    with patch.object(message_module, "_message_access", fake):
+        result = asyncio.run(service._handle_subscribe(ws, msg))
+
+    assert result["type"] == "message_subscribe_result"
+    assert result["ok"] is False
+    assert result["code"] == "not_authenticated"
+    assert "alice" not in service._subscribed
+    assert calls == []  # access() must not be reached
+
+
+def test_subscribe_denies_when_shape_invalid():
+    """Missing moniker -> missing_moniker envelope, no access() call."""
+    from bed.api import message as message_module
+    from bed.api.message import MessageService
+
+    fake, calls = _patched_access()
+    sm = _make_session_manager()
+    sm.get_by_websocket.return_value = _FakeState("alice")
+    service = MessageService(_make_args(), sm)
+    ws = MagicMock()
+    ws.id = "ws-1"
+    msg = {"type": "message_subscribe", "moniker": "  "}
+
+    with patch.object(message_module, "_message_access", fake):
+        result = asyncio.run(service._handle_subscribe(ws, msg))
+
+    assert result["ok"] is False
+    assert result["code"] == "missing_moniker"
+    assert "alice" not in service._subscribed
+    assert calls == []
+
+
+def test_subscribe_denies_when_access_returns_false():
+    """access() denies -> forbidden envelope, no _subscribed change."""
+    from bed.api import message as message_module
+    from bed.api.message import MessageService
+
+    fake, calls = _patched_access(allow=False)
+    sm = _make_session_manager()
+    sm.get_by_websocket.return_value = _FakeState("alice")
+    service = MessageService(_make_args(), sm)
+    ws = MagicMock()
+    ws.id = "ws-2"
+    msg = {"type": "message_subscribe", "moniker": "bob"}
+
+    with patch.object(message_module, "_message_access", fake):
+        result = asyncio.run(service._handle_subscribe(ws, msg))
+
+    assert result["ok"] is False
+    assert result["code"] == "forbidden"
+    assert "bob" not in service._subscribed
+    assert len(calls) == 1
+    assert calls[0]["op"] == "subscribe"
+    assert calls[0]["session_moniker"] == "alice"
+    assert calls[0]["message"]["moniker"] == "bob"
+
+
+def test_subscribe_allows_and_binds_when_access_returns_true():
+    """access() allows -> binds websocket under moniker."""
+    from bed.api import message as message_module
+    from bed.api.message import MessageService
+
+    fake, calls = _patched_access(allow=True)
+    sm = _make_session_manager()
+    sm.get_by_websocket.return_value = _FakeState("alice")
+    service = MessageService(_make_args(), sm)
+    ws = MagicMock()
+    ws.id = "ws-3"
+    msg = {"type": "message_subscribe", "moniker": "alice"}
+
+    with patch.object(message_module, "_message_access", fake):
+        result = asyncio.run(service._handle_subscribe(ws, msg))
+
+    assert result["ok"] is True
+    assert result["moniker"] == "alice"
+    assert service._subscribed["alice"] is ws
+    assert len(calls) == 1
+    assert calls[0]["op"] == "subscribe"
+
+
+# ---------- _handle_unsubscribe access-gate tests ----------
+
+
+def test_unsubscribe_denies_when_no_session_bound():
+    from bed.api import message as message_module
+    from bed.api.message import MessageService
+    from bed.api.session import SessionRegistry
+
+    fake, calls = _patched_access()
+    service = MessageService(_make_args(), SessionRegistry())
+    ws = MagicMock()
+    ws.id = "ws-no-session"
+    msg = {"type": "message_unsubscribe", "moniker": "alice"}
+
+    with patch.object(message_module, "_message_access", fake):
+        result = asyncio.run(service._handle_unsubscribe(ws, msg))
+
+    assert result["type"] == "message_unsubscribe_result"
+    assert result["ok"] is False
+    assert result["code"] == "not_authenticated"
+    assert calls == []
+
+
+def test_unsubscribe_denies_when_access_returns_false():
+    from bed.api import message as message_module
+    from bed.api.message import MessageService
+
+    fake, calls = _patched_access(allow=False)
+    sm = _make_session_manager()
+    sm.get_by_websocket.return_value = _FakeState("alice")
+    service = MessageService(_make_args(), sm)
+    ws = MagicMock()
+    ws.id = "ws-4"
+    msg = {"type": "message_unsubscribe", "moniker": "bob"}
+
+    with patch.object(message_module, "_message_access", fake):
+        result = asyncio.run(service._handle_unsubscribe(ws, msg))
+
+    assert result["ok"] is False
+    assert result["code"] == "forbidden"
+    assert len(calls) == 1
+    assert calls[0]["op"] == "unsubscribe"
+
+
+def test_unsubscribe_allows_and_unbinds_when_access_returns_true():
+    from bed.api import message as message_module
+    from bed.api.message import MessageService
+
+    fake, calls = _patched_access(allow=True)
+    sm = _make_session_manager()
+    sm.get_by_websocket.return_value = _FakeState("alice")
+    service = MessageService(_make_args(), sm)
+    ws = MagicMock()
+    ws.id = "ws-5"
+    service._subscribed["alice"] = ws
+    msg = {"type": "message_unsubscribe", "moniker": "alice"}
+
+    with patch.object(message_module, "_message_access", fake):
+        result = asyncio.run(service._handle_unsubscribe(ws, msg))
+
+    assert result["ok"] is True
+    assert "alice" not in service._subscribed
+    assert len(calls) == 1
+    assert calls[0]["op"] == "unsubscribe"
+
+
+# ---------- _handle_list_pending access-gate tests ----------
+
+
+def test_list_pending_denies_when_no_session_bound():
+    """Unbound websocket -> not_authenticated; get_pending_messages
+    must NOT be called."""
+    from bed.api import message as message_module
+    from bed.api.message import MessageService
+    from bed.api.session import SessionRegistry
+
+    fake, calls = _patched_access()
+    service = MessageService(_make_args(), SessionRegistry())
+    msg = {"type": "message_list_pending", "moniker": "alice"}
+
+    with patch.object(
+        message_module, "get_pending_messages"
+    ) as gp, patch.object(message_module, "_message_access", fake):
+        result = asyncio.run(service._handle_list_pending(MagicMock(), msg))
+
+    assert result["type"] == "message_list_pending_result"
+    assert result["ok"] is False
+    assert result["code"] == "not_authenticated"
+    assert result["messages"] == []
+    gp.assert_not_called()
+    assert calls == []
+
+
+def test_list_pending_denies_when_shape_invalid():
+    from bed.api import message as message_module
+    from bed.api.message import MessageService
+
+    fake, calls = _patched_access()
+    sm = _make_session_manager()
+    sm.get_by_websocket.return_value = _FakeState("alice")
+    service = MessageService(_make_args(), sm)
+    msg = {"type": "message_list_pending", "moniker": ""}
+
+    with patch.object(
+        message_module, "get_pending_messages"
+    ) as gp, patch.object(message_module, "_message_access", fake):
+        result = asyncio.run(service._handle_list_pending(MagicMock(), msg))
+
+    assert result["ok"] is False
+    assert result["code"] == "missing_moniker"
+    assert result["messages"] == []
+    gp.assert_not_called()
+    assert calls == []
+
+
+def test_list_pending_denies_when_access_returns_false():
+    """access() denies -> forbidden; get_pending_messages must NOT run."""
+    from bed.api import message as message_module
+    from bed.api.message import MessageService
+
+    fake, calls = _patched_access(allow=False)
+    sm = _make_session_manager()
+    sm.get_by_websocket.return_value = _FakeState("alice")
+    service = MessageService(_make_args(), sm)
+    ws = MagicMock()
+    ws.id = "ws-6"
+    msg = {"type": "message_list_pending", "moniker": "bob"}
+
+    with patch.object(
+        message_module, "get_pending_messages"
+    ) as gp, patch.object(message_module, "_message_access", fake):
+        result = asyncio.run(service._handle_list_pending(ws, msg))
+
+    assert result["ok"] is False
+    assert result["code"] == "forbidden"
+    assert result["messages"] == []
+    gp.assert_not_called()
+    assert len(calls) == 1
+    assert calls[0]["op"] == "list_pending"
+
+
+def test_list_pending_returns_messages_when_access_returns_true():
+    from bed.api import message as message_module
+    from bed.api.message import MessageService
+
+    fake, calls = _patched_access(allow=True)
+    sm = _make_session_manager()
+    sm.get_by_websocket.return_value = _FakeState("alice")
+    service = MessageService(_make_args(), sm)
+    ws = MagicMock()
+    ws.id = "ws-7"
+    msg = {"type": "message_list_pending", "moniker": "alice"}
+
+    fake_messages = [{"id": 1, "content": "hello"}]
+    with patch.object(
+        message_module, "get_pending_messages", return_value=fake_messages
+    ) as gp, patch.object(message_module, "_message_access", fake):
+        result = asyncio.run(service._handle_list_pending(ws, msg))
+
+    assert result["ok"] is True
+    assert result["moniker"] == "alice"
+    assert result["messages"] == fake_messages
+    gp.assert_called_once_with("alice", limit=100)
+    assert len(calls) == 1
+    assert calls[0]["op"] == "list_pending"
+
+
+# ---------- dispatch ----------
+
+
+def test_handle_message_dispatches_by_op():
+    """handle_message() routes through _OP_TO_HANDLER; unknown type returns None."""
+    from bed.api.message import MessageService
+
+    service = MessageService(_make_args(), _make_session_manager())
+    server = _make_server()
+    service.register_all(server)
+    ws = MagicMock()
+
+    # An unknown message type returns None (caller falls through to next service).
+    result = asyncio.run(
+        service.handle_message(
+            server, ws, "/", {"type": "no_such_message"}
+        )
+    )
+    assert result is None
 
 
