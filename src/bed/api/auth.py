@@ -1,15 +1,23 @@
 # bed/api/auth.py
 # AuthService: short-lived signed bearer tokens for bed.
 #
-# TODO: define ``bbsengine6.auth.access(args, op, **kwargs)`` and route
-# auth / reconnect / auth_refresh / auth_revoke decisions through it,
-# following the bbsengine6.bank.access() pattern in bed/api/bank.py.
-# Suggested op vocabulary: "login", "reconnect", "refresh", "revoke".
-# Today the session-bound gate (e.g. ``auth_refresh`` requires the
-# original socket) lives inline in each ``_handle_auth_*`` method --
-# moving it into a module-level access() function would let the
-# bbsengine6 auth package own the authorization policy instead of
-# bed/api/auth.py hard-coding it.
+# Authentication / authorization:
+#   Every handler delegates its per-op policy decision to
+#   ``bbsengine6.auth.access(args, op, session=live_state, message=msg)``.
+#   The bbsengine6.auth package owns the op vocabulary ("login",
+#   "reconnect", "refresh", "revoke") and the per-op policy; this module
+#   is the bed-side consumer, parallel to bed/api/bank.py for bank.
+#
+#   Handlers perform two gates in order:
+#     1. Wire-shape validation -- token decode + signature verify
+#        + expiry + instance match + store presence (returns the
+#        existing per-op error codes: token_invalid, token_expired,
+#        instance_mismatch, token_revoked). This stays in the handler
+#        because it touches bed's HMAC scheme.
+#     2. ``bbsengine6.auth.access()`` policy decision (else forbidden
+#        for reconnect/revoke; else not_authenticated for refresh so
+#        the client can recover via reconnect). ``login`` always
+#        returns True -- the credential provider decides.
 
 from __future__ import annotations
 
@@ -22,10 +30,12 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from bbsengine6 import io
+from bbsengine6.auth import access as _auth_access
 
 from .credential_provider import CredentialProvider
 from .errors import (
     CODE_BAD_CREDENTIALS,
+    CODE_FORBIDDEN,
     CODE_INSTANCE_MISMATCH,
     CODE_MISSING_CREDENTIALS,
     CODE_NOT_AUTHENTICATED,
@@ -33,10 +43,11 @@ from .errors import (
     CODE_TOKEN_INVALID,
     CODE_TOKEN_REVOKED,
     error_envelope,
+    forbidden,
     scrub_token,
 )
 from .handler import BaseService
-from .session import SessionRegistry
+from .session import SessionRegistry, SessionState
 from .token_store import MemberInfo, TokenRecord, TokenStore
 
 
@@ -116,6 +127,37 @@ def _decode_token(token: str, secret: bytes) -> Dict[str, Any]:
     return claims
 
 
+# Map from WS ``type`` field to the domain verb understood by
+# ``bbsengine6.auth.access``. The auth module owns the verb vocabulary;
+# this dict is the only place bed-side code needs to maintain the
+# translation.
+_TYPE_TO_OP: Dict[str, str] = {
+    "auth": "login",
+    "reconnect": "reconnect",
+    "auth_refresh": "refresh",
+    "auth_revoke": "revoke",
+}
+
+
+def _deny_envelope(op: str) -> Dict[str, Any]:
+    """Translate an ``access()=False`` decision into the wire-protocol envelope.
+
+    The choice of code preserves existing client semantics:
+      - ``refresh`` denial -> ``not_authenticated`` (recoverable, client
+        may try reconnect with its last good token).
+      - ``reconnect`` / ``revoke`` denial -> ``forbidden`` (the request
+        is structurally wrong for this session/token).
+    ``login`` never denies in the current policy.
+    """
+    if op == "refresh":
+        return error_envelope(
+            CODE_NOT_AUTHENTICATED,
+            "auth_refresh requires the original socket; use reconnect",
+            recoverable=True,
+        )
+    return forbidden("Operation not permitted for this token")
+
+
 class AuthService(BaseService):
     """Issue, validate, refresh, revoke bearer tokens; rebind on reconnect.
 
@@ -163,6 +205,24 @@ class AuthService(BaseService):
         if self._clock is not None:
             return float(self._clock())
         return _now_ts()
+
+    def _authorize(
+        self,
+        op: str,
+        claims: Dict[str, Any],
+        live_state: Optional[SessionState],
+    ) -> Optional[Dict[str, Any]]:
+        """Delegate the per-op policy decision to ``bbsengine6.auth.access``.
+
+        Returns ``None`` on allow, or an error envelope on deny.
+        ``live_state`` is the SessionState currently bound to the
+        websocket (or ``None`` if unbound). ``claims`` is the decoded
+        token claims dict (or ``{}`` if the op doesn't need a token).
+        """
+        msg = {"claims": claims or {}}
+        if _auth_access(self.args, op, session=live_state, message=msg):
+            return None
+        return _deny_envelope(op)
 
     def _mint_record(
         self,
@@ -212,15 +272,11 @@ class AuthService(BaseService):
         self, server: Any, websocket: Any, path: str, message: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         msg_type = message.get("type")
-        if msg_type == "auth":
-            return await self._handle_auth(websocket, message)
-        if msg_type == "reconnect":
-            return await self._handle_reconnect(websocket, message)
-        if msg_type == "auth_refresh":
-            return await self._handle_auth_refresh(websocket, message)
-        if msg_type == "auth_revoke":
-            return await self._handle_auth_revoke(websocket, message)
-        return None
+        op = _TYPE_TO_OP.get(msg_type)
+        if op is None:
+            return None
+        handler = _OP_TO_HANDLER[op]
+        return await handler(self, websocket, message)
 
     async def _handle_auth(
         self, websocket: Any, message: Dict[str, Any]
@@ -233,6 +289,10 @@ class AuthService(BaseService):
                 "moniker and password are required",
                 recoverable=False,
             )
+
+        err = self._authorize("login", {}, None)
+        if err is not None:
+            return err
 
         info = self.credential_provider.authenticate(
             self.args, moniker, password, pool=getattr(self.args, "pool", None)
@@ -302,6 +362,11 @@ class AuthService(BaseService):
                 recoverable=True,
             )
 
+        live_state = self.sessions.get_by_websocket(new_websocket_id)
+        err = self._authorize("reconnect", claims, live_state)
+        if err is not None:
+            return err
+
         info = MemberInfo(
             moniker=store_record.moniker,
             is_sysop=store_record.is_sysop,
@@ -345,7 +410,7 @@ class AuthService(BaseService):
             )
         websocket_id = str(websocket.id)
         try:
-            _claims = _decode_token(token, self.secret)
+            claims = _decode_token(token, self.secret)
         except TokenError as e:
             return error_envelope(e.code, str(e), recoverable=False)
 
@@ -372,16 +437,9 @@ class AuthService(BaseService):
             )
 
         live_state = self.sessions.get_by_websocket(websocket_id)
-        # TODO: once bbsengine6.auth.access() lands, replace this inline
-        # session-bound gate with a call to
-        # ``bbsengine6.auth.access(args, "refresh", session=live_state,
-        # message={"token": token})``.
-        if live_state is None or live_state.session_id != store_record.session_id:
-            return error_envelope(
-                CODE_NOT_AUTHENTICATED,
-                "auth_refresh requires the original socket; use reconnect",
-                recoverable=True,
-            )
+        err = self._authorize("refresh", claims, live_state)
+        if err is not None:
+            return err
 
         info = MemberInfo(
             moniker=store_record.moniker,
@@ -408,12 +466,20 @@ class AuthService(BaseService):
                 CODE_TOKEN_INVALID, "token required", recoverable=False
             )
         try:
-            _claims = _decode_token(token, self.secret)
+            claims = _decode_token(token, self.secret)
         except TokenError as e:
             return {
                 "type": "auth_revoke_result",
                 "success": False,
                 "code": e.code,
+                "recoverable": False,
+            }
+        err = self._authorize("revoke", claims, None)
+        if err is not None:
+            return {
+                "type": "auth_revoke_result",
+                "success": False,
+                "code": CODE_FORBIDDEN,
                 "recoverable": False,
             }
         deleted = self.token_store.delete(token)
@@ -463,3 +529,13 @@ class AuthService(BaseService):
         if pending is not None:
             env["replayed_request_id"] = pending.get("request_id")
         return env
+
+
+# Op -> handler dispatch. Keeps handle_message() a flat dict lookup and
+# makes it obvious at import time that every op has exactly one handler.
+_OP_TO_HANDLER = {
+    "login": AuthService._handle_auth,
+    "reconnect": AuthService._handle_reconnect,
+    "refresh": AuthService._handle_auth_refresh,
+    "revoke": AuthService._handle_auth_revoke,
+}

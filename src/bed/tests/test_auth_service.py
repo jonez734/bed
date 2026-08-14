@@ -37,6 +37,7 @@ from bed.api import (
 from bed.api.auth import _decode_token, _encode_token
 from bed.api.errors import (
     CODE_BAD_CREDENTIALS,
+    CODE_FORBIDDEN,
     CODE_INSTANCE_MISMATCH,
     CODE_NOT_AUTHENTICATED,
     CODE_TOKEN_EXPIRED,
@@ -1545,6 +1546,278 @@ class TestPreDispatchHookSetsRole(unittest.IsolatedAsyncioTestCase):
         # because at pre_dispatch time the state was not yet populated.
         kinds = [k for k, _ in self.observed_roles]
         self.assertEqual(kinds[0], "skip")
+
+
+# ---------------------------------------------------------------------
+# bbsengine6.auth.access() delegation
+#
+# bed.api.auth.AuthService delegates every per-op policy decision to the
+# module-level access() function defined in bbsengine6.auth. These
+# tests pin that delegation contract: every _handle_auth_* method calls
+# access() with the expected op and message shape; when access() returns
+# False, the handler returns the per-op envelope (forbidden for
+# reconnect/revoke; not_authenticated for refresh so the client can
+# recover via reconnect). The full op-by-op matrix is covered by
+# bbsengine6/py/tests/test_auth_access.py. Here we only need to pin
+# that the bed handler actually invokes it.
+
+
+def _patch_auth_access_returning(value):
+    """Patch ``bed.api.auth._auth_access`` to return ``value``.
+
+    Returns the patch object so the test can assert call_args.
+    """
+    from bed.api import auth as auth_mod
+
+    return patch.object(auth_mod, "_auth_access", return_value=value)
+
+
+class TestAuthAccessDelegation(unittest.IsolatedAsyncioTestCase):
+    """Pin the delegation contract: every handler calls _auth_access
+    with the right op and translates False into the right envelope."""
+
+    async def test_handle_auth_delegates_to_bbsengine6_auth_access(self) -> None:
+        """_handle_auth calls bbsengine6.auth.access with op='login'."""
+        provider = _AlwaysAllowProvider()
+        service = _build_service(credential_provider=provider)
+        ws = _FakeWebSocket()
+        with _patch_auth_access_returning(True) as access_mock, \
+             patch("bed.api.auth.io.echo"):
+            result = await service._handle_auth(
+                ws, {"type": "auth", "moniker": "alice", "password": "pw"}
+            )
+        self.assertEqual(result["type"], "auth_result")
+        access_mock.assert_called_once()
+        args, op = access_mock.call_args[0]
+        self.assertEqual(op, "login")
+        self.assertIn("claims", access_mock.call_args.kwargs.get("message", {}))
+
+    async def test_handle_reconnect_delegates_to_bbsengine6_auth_access(self) -> None:
+        """_handle_reconnect calls bbsengine6.auth.access with op='reconnect'
+        AFTER the wire-shape gates have passed; on False it returns a
+        forbidden envelope (and never mints/persists a rotated token)."""
+        store = InMemoryTokenStore()
+        service = _build_service(token_store=store)
+        ws1 = _FakeWebSocket()
+        auth = await service._handle_auth(
+            ws1, {"type": "auth", "moniker": "alice", "password": "pw"}
+        )
+        old_token = auth["token"]
+
+        ws2 = _FakeWebSocket()
+        with _patch_auth_access_returning(False), \
+             patch("bed.api.auth.io.echo"):
+            result = await service._handle_reconnect(
+                ws2, {"type": "reconnect", "token": old_token}
+            )
+        self.assertEqual(result["type"], "error")
+        self.assertEqual(result["code"], CODE_FORBIDDEN)
+        self.assertFalse(result["recoverable"])
+        # The old token must still be in the store -- we did not rotate.
+        self.assertIsNotNone(store.get(old_token))
+
+    async def test_handle_reconnect_allowed_when_access_returns_true(self) -> None:
+        """_handle_reconnect proceeds to bind + mint + persist when
+        access() returns True."""
+        store = InMemoryTokenStore()
+        service = _build_service(token_store=store)
+        ws1 = _FakeWebSocket()
+        auth = await service._handle_auth(
+            ws1, {"type": "auth", "moniker": "alice", "password": "pw"}
+        )
+        old_token = auth["token"]
+
+        ws2 = _FakeWebSocket()
+        with _patch_auth_access_returning(True) as access_mock, \
+             patch("bed.api.auth.io.echo"):
+            result = await service._handle_reconnect(
+                ws2, {"type": "reconnect", "token": old_token}
+            )
+        self.assertEqual(result["type"], "reconnect_result")
+        self.assertTrue(result["success"])
+        self.assertEqual(access_mock.call_args[0][1], "reconnect")
+        # session kwarg is None because ws2 is unbound.
+        self.assertIsNone(access_mock.call_args.kwargs.get("session"))
+
+    async def test_handle_auth_refresh_delegates_to_bbsengine6_auth_access(self) -> None:
+        """_handle_auth_refresh calls bbsengine6.auth.access with op='refresh';
+        on False it returns not_authenticated (recoverable=True so the
+        client can try reconnect with its last good token)."""
+        store = InMemoryTokenStore()
+        service = _build_service(token_store=store)
+        ws = _FakeWebSocket()
+        auth = await service._handle_auth(
+            ws, {"type": "auth", "moniker": "alice", "password": "pw"}
+        )
+        old_token = auth["token"]
+
+        other_ws = _FakeWebSocket()
+        with _patch_auth_access_returning(False), \
+             patch("bed.api.auth.io.echo"):
+            result = await service._handle_auth_refresh(
+                other_ws, {"type": "auth_refresh", "token": old_token}
+            )
+        self.assertEqual(result["type"], "error")
+        self.assertEqual(result["code"], CODE_NOT_AUTHENTICATED)
+        self.assertTrue(result["recoverable"])
+        # No rotation should have happened.
+        self.assertIsNotNone(store.get(old_token))
+
+    async def test_handle_auth_refresh_allowed_when_access_returns_true(self) -> None:
+        """_handle_auth_refresh proceeds to mint/persist when access()
+        returns True, and the session kwarg is the LIVE websocket's
+        SessionState (not None)."""
+        store = InMemoryTokenStore()
+        service = _build_service(token_store=store)
+        ws = _FakeWebSocket()
+        auth = await service._handle_auth(
+            ws, {"type": "auth", "moniker": "alice", "password": "pw"}
+        )
+        old_token = auth["token"]
+
+        with _patch_auth_access_returning(True) as access_mock, \
+             patch("bed.api.auth.io.echo"):
+            result = await service._handle_auth_refresh(
+                ws, {"type": "auth_refresh", "token": old_token}
+            )
+        self.assertEqual(result["type"], "auth_result")
+        self.assertEqual(access_mock.call_args[0][1], "refresh")
+        # session kwarg is the live state bound to the websocket.
+        live = access_mock.call_args.kwargs.get("session")
+        self.assertIsNotNone(live)
+        self.assertEqual(live.moniker, "alice")
+
+    async def test_handle_auth_revoke_delegates_to_bbsengine6_auth_access(self) -> None:
+        """_handle_auth_revoke calls bbsengine6.auth.access with op='revoke';
+        on False it returns an auth_revoke_result with code='forbidden'."""
+        store = InMemoryTokenStore()
+        service = _build_service(token_store=store)
+        ws = _FakeWebSocket()
+        auth = await service._handle_auth(
+            ws, {"type": "auth", "moniker": "alice", "password": "pw"}
+        )
+        token = auth["token"]
+
+        with _patch_auth_access_returning(False), \
+             patch("bed.api.auth.io.echo"):
+            result = await service._handle_auth_revoke(
+                ws, {"type": "auth_revoke", "token": token}
+            )
+        self.assertEqual(result["type"], "auth_revoke_result")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["code"], "forbidden")
+        self.assertFalse(result["recoverable"])
+
+    async def test_handle_auth_revoke_allowed_when_access_returns_true(self) -> None:
+        """_handle_auth_revoke proceeds to delete from store when access()
+        returns True."""
+        store = InMemoryTokenStore()
+        service = _build_service(token_store=store)
+        ws = _FakeWebSocket()
+        auth = await service._handle_auth(
+            ws, {"type": "auth", "moniker": "alice", "password": "pw"}
+        )
+        token = auth["token"]
+
+        with _patch_auth_access_returning(True) as access_mock, \
+             patch("bed.api.auth.io.echo"):
+            result = await service._handle_auth_revoke(
+                ws, {"type": "auth_revoke", "token": token}
+            )
+        self.assertEqual(result["type"], "auth_revoke_result")
+        self.assertTrue(result["success"])
+        self.assertEqual(access_mock.call_args[0][1], "revoke")
+        self.assertIsNone(store.get(token))
+
+    async def test_handle_message_passes_correct_op_to_access(self) -> None:
+        """handle_message dispatches to the right _handle_auth_* method
+        based on the wire type, and the op passed to access() is the
+        corresponding domain verb.
+
+        For ops that need a token, we issue one first so the
+        wire-shape gate (decode + store + expiry + instance) passes
+        and access() is actually invoked. The unit test for the access()
+        decision matrix lives in bbsengine6/py/tests/test_auth_access.py;
+        here we only pin the dispatch contract.
+
+        Each token-based case uses a fresh service+websocket pair so
+        token rotation in one case cannot affect the next.
+        """
+        cases = [
+            ("auth", "login", {"moniker": "alice", "password": "pw"}, None),
+            ("reconnect", "reconnect", None, True),
+            ("auth_refresh", "refresh", None, True),
+            ("auth_revoke", "revoke", None, True),
+        ]
+        for wire_type, expected_op, payload, needs_token in cases:
+            with self.subTest(wire_type=wire_type):
+                service = _build_service(token_store=InMemoryTokenStore())
+                ws = _FakeWebSocket()
+                if needs_token:
+                    auth = await service._handle_auth(
+                        ws,
+                        {"type": "auth", "moniker": "alice", "password": "pw"},
+                    )
+                    msg = {"type": wire_type, "token": auth["token"]}
+                else:
+                    msg = {"type": wire_type, **(payload or {})}
+                with _patch_auth_access_returning(True) as access_mock, \
+                     patch("bed.api.auth.io.echo"):
+                    result = await service.handle_message(None, ws, "/", msg)
+                self.assertEqual(access_mock.call_args[0][1], expected_op)
+                # Result is either a successful envelope or an error
+                # envelope. Either way, it is NOT None (the handler
+                # does not silently drop messages).
+                self.assertIsNotNone(result)
+
+    async def test_handle_message_returns_none_for_unknown_type(self) -> None:
+        """If wire type is not in _TYPE_TO_OP, handle_message returns
+        None -- the auth service does not own unknown message types."""
+        service = _build_service()
+        ws = _FakeWebSocket()
+        result = await service.handle_message(
+            None, ws, "/", {"type": "totally_unknown"}
+        )
+        self.assertIsNone(result)
+
+
+class TestAuthTypeToOpMapping(unittest.TestCase):
+    """Static pinning of the ``_TYPE_TO_OP`` and ``_OP_TO_HANDLER`` maps.
+
+    These two dicts must stay in sync. If a new op is added without
+    updating both maps, handle_message returns None and the dispatch
+    test in TestAuthAccessDelegation catches it.
+    """
+
+    def test_type_to_op_is_complete(self) -> None:
+        from bed.api import auth as auth_mod
+
+        self.assertEqual(
+            auth_mod._TYPE_TO_OP,
+            {
+                "auth": "login",
+                "reconnect": "reconnect",
+                "auth_refresh": "refresh",
+                "auth_revoke": "revoke",
+            },
+        )
+
+    def test_op_to_handler_covers_every_op(self) -> None:
+        from bed.api import auth as auth_mod
+
+        for op in auth_mod._TYPE_TO_OP.values():
+            self.assertIn(op, auth_mod._OP_TO_HANDLER)
+
+    def test_handled_types_match_type_to_op_keys(self) -> None:
+        from bed.api import auth as auth_mod
+
+        # AuthService.HANDLED_TYPES is the public set of message types
+        # the service registers with the server; it must match the keys
+        # of _TYPE_TO_OP (every registered type has an op mapping).
+        self.assertEqual(
+            set(auth_mod.AuthService.HANDLED_TYPES),
+            set(auth_mod._TYPE_TO_OP.keys()),
+        )
 
 
 if __name__ == "__main__":
