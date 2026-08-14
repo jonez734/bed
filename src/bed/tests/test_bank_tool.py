@@ -465,7 +465,13 @@ def test_bank_pending_passes_sysop_flag():
             ]
         )
     )
+    # Skip the real DB-backed loginid lookup. The mocked rows don't
+    # exercise that code path; without this patch
+    # ``_resolve_loginids`` calls ``database.getpool`` which blocks
+    # for ``psycopg_pool``'s default 5-second timeout before
+    # raising -- turning these fast unit tests into 5s hangs.
     with patch.object(tool, "_bank_service", return_value=bank), \
+         patch.object(tool, "_resolve_loginids", return_value={}), \
          patch.object(tool.io, "echo") as echo:
         assert tool.bank_pending(args, "alice", is_sysop=True) is True
     bank.get_pending_transfers.assert_called_once_with("alice", is_sysop=True)
@@ -613,7 +619,13 @@ def test_bank_history_renders_rows():
         }
     ]
     bank = _make_bank_mock(get_history=MagicMock(return_value=rows))
+    # Skip the real DB-backed loginid lookup. See
+    # ``test_bank_pending_passes_sysop_flag`` for the rationale --
+    # ``_resolve_loginids`` would otherwise block on
+    # ``psycopg_pool``'s 5-second timeout trying to reach a
+    # non-existent PostgreSQL instance.
     with patch.object(tool, "_bank_service", return_value=bank), \
+         patch.object(tool, "_resolve_loginids", return_value={}), \
          patch.object(tool.io, "echo") as echo:
         assert tool.bank_history(args, "alice") is True
     rendered = "\n".join(c.args[0] for c in echo.call_args_list)
@@ -1119,9 +1131,15 @@ def test_bank_pending_in_bed_mode_uses_facade():
             "requestedat": "2026-08-04",
         }
     ]
+    # Skip the real DB-backed loginid lookup. See
+    # ``test_bank_pending_passes_sysop_flag`` for the rationale --
+    # ``_resolve_loginids`` would otherwise block on
+    # ``psycopg_pool``'s 5-second timeout trying to reach a
+    # non-existent PostgreSQL instance.
     with patch.object(
         facade, "get_pending_transfers", return_value=rows,
     ) as pending_mock, \
+         patch.object(tool, "_resolve_loginids", return_value={}), \
          patch.object(tool.io, "echo"):
         with patch.object(tool, "_bank_service", return_value=facade):
             assert tool.bank_pending(args, "alice", is_sysop=True) is True

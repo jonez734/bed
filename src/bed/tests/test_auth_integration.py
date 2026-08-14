@@ -31,99 +31,30 @@ without depending on a real daemon.
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import json
-import os
 import secrets
-import socket as _socket
 import sys
 import unittest
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from unittest.mock import MagicMock
 
 
 sys.path.insert(0, "/home/opencode/data/work/bed/src")
 
 
-# ---------------------------------------------------------------------
-# Helpers
-
-
-class _Provider:
-    """Stub credential provider used by the in-process server.
-
-    Accepts ``("alice", "pw")`` as a normal member and ``("root",
-    "rootpw")`` as a sysop. Any other input returns ``None`` (which
-    AuthService translates to ``bad_credentials``).
-    """
-
-    def authenticate(self, args, moniker, password, *, pool=None):
-        from bed.api.token_store import MemberInfo
-
-        if moniker == "alice" and password == "pw":
-            return MemberInfo(
-                moniker="alice",
-                is_sysop=False,
-                balance=7,
-                loginid="alice_os",
-            )
-        if moniker == "root" and password == "rootpw":
-            return MemberInfo(
-                moniker="root",
-                is_sysop=True,
-                balance=0,
-                loginid="root_os",
-            )
-        return None
-
-
-def _auth_args() -> argparse.Namespace:
-    return argparse.Namespace(debug=False, pool=None)
-
-
-async def _start_bed_with_auth(
-    *,
-    instance_id: str = "auth-integration-test",
-    secret: Optional[bytes] = None,
-    ttl_seconds: int = 900,
-    clock=None,
-) -> Any:
-    """Spin up a WebSocketServer with ``AuthService`` registered.
-
-    Returns ``(server, port, registry, auth_service)``. The server is
-    bound to ``127.0.0.1`` on an ephemeral port.
-    """
-    from bbsengine6.net import WebSocketServer
-    from bed.api import AuthService, InMemoryTokenStore
-    from bed.api.session import SessionRegistry
-
-    registry = SessionRegistry()
-    auth_service = AuthService(
-        args=_auth_args(),
-        session_registry=registry,
-        token_store=InMemoryTokenStore(),
-        credential_provider=_Provider(),
-        secret=secret if secret is not None else secrets.token_bytes(32),
-        instance_id=instance_id,
-        ttl_seconds=ttl_seconds,
-        clock=clock,
-    )
-
-    with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-
-    server = WebSocketServer(host="127.0.0.1", port=port)
-    auth_service.register_all(server)
-    await server.start()
-    return server, port, registry, auth_service
-
-
-async def _send_and_recv(ws, payload, *, timeout: float = 2.0) -> Dict[str, Any]:
-    await ws.send(json.dumps(payload))
-    raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
-    return json.loads(raw)
+# Shared helpers live in the sibling module so pytest's package
+# import mode (test dir has ``__init__.py``) can resolve them from
+# both this wire-level test file and ``test_auth_tool_integration``.
+from bed.tests._auth_helpers import (  # noqa: E402
+    LIVE_HOST,
+    LIVE_PORT,
+    StubCredentialProvider as _Provider,
+    _auth_args,
+    _live_daemon_reachable,
+    _send_and_recv,
+    _start_bed_with_auth,
+)
 
 
 # ---------------------------------------------------------------------
@@ -778,20 +709,6 @@ class TestAuthClientWrapperIntegration(unittest.IsolatedAsyncioTestCase):
 
 # ---------------------------------------------------------------------
 # Optional live-daemon tests (skipped when bed is unreachable)
-
-
-LIVE_HOST = "127.0.0.1"
-LIVE_PORT = 8765
-
-
-def _live_daemon_reachable() -> bool:
-    import socket
-
-    try:
-        with socket.create_connection((LIVE_HOST, LIVE_PORT), timeout=0.5):
-            return True
-    except OSError:
-        return False
 
 
 @unittest.skipUnless(

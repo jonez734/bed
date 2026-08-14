@@ -308,20 +308,49 @@ cd bed
 PYTHONPATH=src:../bbsengine6/py/src pytest src/bed/tests
 ```
 
-Six modules, ~4,148 LOC:
+Nine modules plus a shared helper module and a pytest `conftest`:
 
-- **`test_auth_service.py`** (~1,252 lines) — bearer token
-  encode/decode, AuthService, fuzz for decode / secret / dispatch.
+- **`test_auth_service.py`** (~1,824 lines) — bearer token
+  encode/decode, AuthService unit + dispatch fuzz, loginid plumbing,
+  pre/post-dispatch hooks, `bbsengine6.auth.access` delegation.
+- **`test_auth_integration.py`** (~750 lines) — wire-level
+  end-to-end against a real in-process `WebSocketServer`+`AuthService`
+  (login, reconnect, refresh, revoke), `BedAuthServiceClient` envelope
+  logic against a loopback transport, optional live-daemon test.
+- **`test_auth_tool.py`** (~843 lines) — `bed.tools.auth` CLI surface
+  with `_auth_service` mocked (buildargs, token-file plumbing,
+  precedence, --direct guard, main_with_args dispatch).
+- **`test_auth_tool_integration.py`** (~700 lines, new) — full
+  CLI end-to-end through real `BedAuthServiceClient` and real
+  token file: `auth_login` / `auth_reconnect` / `auth_refresh` /
+  `auth_revoke` driven through `BedServerContext` (a daemon-threaded
+  in-process bed server) plus `main_with_args` dispatch through
+  `select_backend` / `probe_bed`. Marked `@pytest.mark.integration`.
+- **`test_bank_service.py`** (~1,800 lines) — bed-native BankService
+  + BedBankServiceClient.
+- **`test_bank_integration.py`** (~1,580 lines) — wire-level bank
+  operations + optional live-daemon test.
+- **`test_bank_tool.py`** (~1,300 lines) — `bed.tools.bank` CLI
+  surface with `_bank_service` mocked.
 - **`test_bed.py`** (~1,223 lines) — BED server lifecycle, config
   parsing, pidfile, mocked DB.
-- **`test_bank_service.py`** (~710 lines) — bed-native BankService
-  + BedBankServiceClient.
-- **`test_message_service.py`** (~425 lines) — MessageService
+- **`test_message_service.py`** (~700 lines) — MessageService
   registration / dispatch / list_pending.
 - **`test_startup.py`** (~332 lines) — role creation, idempotency,
   main flow.
-- **`test_client.py`** (~206 lines) — Phase 3 asyncio hardening
+- **`test_client.py`** (~225 lines) — Phase 3 asyncio hardening
   (running_loop, weakref cache, push handlers).
+- **`test_tools_routing.py`** (~131 lines) — `bed.tools._routing`
+  (--bed-* flags, select_backend, BedNotReachable).
+- **`_auth_helpers.py`** — shared helpers for the auth integration
+  tests (StubCredentialProvider, _start_bed_with_auth,
+  BedServerContext, _send_and_recv, LIVE_HOST/PORT,
+  _live_daemon_reachable). Sibling of `conftest.py` because pytest's
+  package import mode (test dir has `__init__.py`) does not make
+  `conftest` importable from test files.
+- **`conftest.py`** — pytest fixtures (`stub_credential_provider`,
+  `live_daemon_reachable`, `live_host`, `live_port`) used by
+  any pytest test that opts in.
 
 ## License
 
