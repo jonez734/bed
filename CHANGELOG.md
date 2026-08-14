@@ -12,6 +12,87 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: add `bed.name` instance identity + identity-aware `ping`
+
+A bed instance now has a `name` (default `"bed"`, override via
+`--bed-name` or `bed.name` in bed.json) that flows through three
+places:
+
+- **Default secret filename**: `_default_secret_path(name)` returns
+  `~/.config/bed/<name>.secret`. With the default `name = "bed"` this
+  resolves to the historical `~/.config/bed/bed.secret` path, so
+  existing installs are unaffected. Custom names (e.g. `mybbs`)
+  yield `~/.config/bed/mybbs.secret`, letting multiple bed daemons
+  share one host without colliding on the HMAC secret file. An
+  explicit `--bed-secret` still wins.
+- **`ping` reply**: a new `bed.api.ping.PingService` registers
+  `["ping"]` and returns `{"type": "pong", "name": <bed_name>,
+  "version": <bed.__version__>, "timestamp": <echoed>}`. Clients
+  can probe a bed's identity with no `auth` round-trip.
+- **`PingService` always wins**: `BED.start()` registers
+  `PingService` LAST, after the router's own `register_all`. The
+  router's `["ping"]` registration is overwritten; bbsengine6's
+  `WebSocketServer.register_service` emits a WARNING on the
+  overwrite (see `py/src/bbsengine6/net/transport.py:register_service`)
+  so the swap is visible in the log. The swap is intentional: every
+  bed instance surfaces its own `name` + `version` regardless of
+  which router is loaded.
+
+The `_apply_bed_name_config` helper applies `bed.name` from the
+JSON config when the CLI did not set `--bed-name`. Empty / missing
+/ whitespace-only names fall back to the default `"bed"` so the
+secret-path derivation stays sane.
+
+SIGHUP reload treats `bed_name` as a structural change (warns
+"restart required") because changing it would move the secret file.
+
+New tests:
+- `bed/tests/test_ping_service.py` — handle_message shape,
+  registration order, end-to-end `ping` over a real WebSocket with
+  the router's plain `pong` overwritten by `PingService`'s enriched
+  one.
+- `bed/tests/test_bed.py::TestBEDParseArgs` — default `bed_name`,
+  `--bed-name` override, `_default_secret_path` substitution.
+- `bed/tests/test_bed.py::TestConfigFlag` — `bed.name` config
+  override, empty / whitespace fallback, CLI-vs-config precedence.
+- `bed/tests/test_bed.py::TestSighupReload::test_sighup_warns_on_structural_changes`
+  — extended to assert `bed_name=` shows up in the "restart
+  required" warning.
+
+### bed bank: render bottombar with version, moniker+balance, host:port
+
+The `bed bank` CLI now paints a status bar while the menu loop is
+running. Left side reads `bed.bank (<version>)`; right side is two
+fragments registered through `bbsengine6.bottombar`:
+
+- a live `<moniker>: <balance>` fragment that refreshes after every
+  successful `bank_balance` / `bank_add` / `bank_remove` and re-queries
+  the bank service after `bank_transfer_*` / `bank_approve` /
+  `bank_reject` (where the new balance is unknown until the next
+  render), and
+- a `<host>:<port>` fragment that flips to `direct` when the CLI is
+  run with `--direct`.
+
+On `menu()` entry the tool calls `bbsengine6.io.screen.init()` once
+per process (mirroring the `_screen_initialized` flag pattern in
+`bbsengine6.ed.common.ui`) so the scroll region — top/bottom margins
+— is set up before any `setbottombar()` call lands; without it the
+bottom row would scroll off the visible area when the user types
+past the bottom of the screen. On exit the `finally` block emits an
+`io.echo()` carrying the `{savecursor}{curpos:{height},0}{el}{reset}
+{restorecursor}` escape sequence (the same cleanup sequence used by
+`empyre/__main__.py`) so the bottom row is erased and the cursor is
+restored to where it was when `menu()` was entered.
+
+Fragments are registered on `menu()` entry and unregistered in a
+`finally` block so the registry stays clean across `KeyboardInterrupt`
+and `EOFError`. New tests in `test_bank_tool.py`
+(`TestBankBottombarFragments`, `TestBankBalanceCacheWiring`,
+`TestBankMenuBottombarLifecycle`) cover both fragment callables, the
+balance cache + dirty-flag flow on every `bank_*` op, the
+register/unregister/setbottombar lifecycle, and the once-per-process
+screen-init + cleanup-echo behavior.
+
 ### bed: fix inverted install dependency (`sudo -u zoid6`, shared venv)
 
 `bed/Makefile` was running `sudo -u zoid6 …` and installing into
