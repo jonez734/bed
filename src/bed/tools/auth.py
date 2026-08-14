@@ -225,6 +225,45 @@ def _render_soft_failure(reply: dict) -> None:
     io.echo(f"{code}: {message}".rstrip(), level="error")
 
 
+_TOKEN_RESPONSE_REQUIRED_FIELDS = ("token", "session_id", "expires_at")
+
+
+def _check_token_response(reply: dict) -> list[str]:
+    """Return the names of required fields missing from a token-bearing reply.
+
+    Every token-bearing reply (``login``, ``reconnect``, ``refresh``)
+    carries the same three fields: ``token``, ``session_id``,
+    ``expires_at``. If the server replies with ``ok=True`` but any of
+    these is empty, the response is malformed and the CLI must refuse
+    to write the token file -- otherwise the next ``auth reconnect``
+    would fail with a misleading ``missing_token`` error against an
+    empty file.
+    """
+    return [
+        name
+        for name in _TOKEN_RESPONSE_REQUIRED_FIELDS
+        if not reply.get(name, "")
+    ]
+
+
+def _reject_malformed_token_response(reply: dict) -> bool:
+    """Emit the malformed-token-response error if ``reply`` is incomplete.
+
+    Returns True if ``reply`` was rejected (caller should return False).
+    Returns False if ``reply`` carries all required fields.
+    """
+    missing = _check_token_response(reply)
+    if not missing:
+        return False
+    io.echo(
+        "server returned a malformed auth_result (missing: "
+        + ", ".join(missing)
+        + "); refusing to write token file",
+        level="error",
+    )
+    return True
+
+
 def auth_login(args) -> bool:
     _ensure_token_file_arg(args)
     moniker = (getattr(args, "moniker", None) or "").strip()
@@ -244,11 +283,15 @@ def auth_login(args) -> bool:
     if not reply.get("ok"):
         _render_soft_failure(reply)
         return False
+    if _reject_malformed_token_response(reply):
+        return False
     token = reply.get("token", "")
+    session_id = reply.get("session_id", "")
+    expires_at = reply.get("expires_at", "")
     io.echo(
         f"issued token for moniker={reply.get('moniker', moniker)!r} "
-        f"session_id={reply.get('session_id', '')[:8] or '<none>'}… "
-        f"expires_at={reply.get('expires_at', '')} "
+        f"session_id={session_id[:8]}… "
+        f"expires_at={expires_at} "
         f"is_sysop={bool(reply.get('is_sysop', False))}"
     )
     try:
@@ -270,6 +313,8 @@ def auth_reconnect(args) -> bool:
     reply = asyncio.run(svc.reconnect(token))
     if not reply.get("ok"):
         _render_soft_failure(reply)
+        return False
+    if _reject_malformed_token_response(reply):
         return False
     new_token = reply.get("token", "")
     io.echo(
@@ -298,6 +343,8 @@ def auth_refresh(args) -> bool:
     reply = asyncio.run(svc.refresh(token))
     if not reply.get("ok"):
         _render_soft_failure(reply)
+        return False
+    if _reject_malformed_token_response(reply):
         return False
     new_token = reply.get("token", "")
     io.echo(

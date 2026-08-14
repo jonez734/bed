@@ -355,6 +355,102 @@ def test_ensure_token_file_arg_does_not_overwrite_explicit(tmp_path):
 
 
 # ---------------------------------------------------------------------
+# _check_token_response / _reject_malformed_token_response
+
+
+def test_check_token_response_empty_reply_lists_all_three():
+    tool = _import_tool()
+    assert tool._check_token_response({}) == ["token", "session_id", "expires_at"]
+
+
+def test_check_token_response_explicit_none_lists_all_three():
+    tool = _import_tool()
+    reply = {"token": None, "session_id": None, "expires_at": None}
+    assert tool._check_token_response(reply) == ["token", "session_id", "expires_at"]
+
+
+def test_check_token_response_only_token_missing():
+    tool = _import_tool()
+    reply = {"token": "", "session_id": "sess-1", "expires_at": "2030-01-01T00:00:00Z"}
+    assert tool._check_token_response(reply) == ["token"]
+
+
+def test_check_token_response_only_session_id_missing():
+    tool = _import_tool()
+    reply = {"token": "tok-1", "session_id": "", "expires_at": "2030-01-01T00:00:00Z"}
+    assert tool._check_token_response(reply) == ["session_id"]
+
+
+def test_check_token_response_only_expires_at_missing():
+    tool = _import_tool()
+    reply = {"token": "tok-1", "session_id": "sess-1", "expires_at": ""}
+    assert tool._check_token_response(reply) == ["expires_at"]
+
+
+def test_check_token_response_well_formed_returns_empty_list():
+    tool = _import_tool()
+    reply = {
+        "ok": True,
+        "token": "tok-1",
+        "session_id": "sess-1",
+        "expires_at": "2030-01-01T00:00:00Z",
+        "moniker": "alice",
+    }
+    assert tool._check_token_response(reply) == []
+
+
+def test_reject_malformed_token_response_well_formed_returns_false():
+    tool = _import_tool()
+    reply = {
+        "ok": True,
+        "token": "tok-1",
+        "session_id": "sess-1",
+        "expires_at": "2030-01-01T00:00:00Z",
+    }
+    with patch.object(tool.io, "echo") as echo:
+        rejected = tool._reject_malformed_token_response(reply)
+    assert rejected is False
+    echo.assert_not_called()
+
+
+def test_reject_malformed_token_response_empty_fields_emits_error():
+    tool = _import_tool()
+    reply = {
+        "ok": True,
+        "token": "",
+        "session_id": "",
+        "expires_at": "",
+        "moniker": "alice",
+    }
+    with patch.object(tool.io, "echo") as echo:
+        rejected = tool._reject_malformed_token_response(reply)
+    assert rejected is True
+    rendered = "\n".join(c.args[0] for c in echo.call_args_list)
+    assert "malformed auth_result" in rendered
+    assert "token" in rendered
+    assert "session_id" in rendered
+    assert "expires_at" in rendered
+
+
+def test_reject_malformed_token_response_partial_lists_only_missing():
+    tool = _import_tool()
+    reply = {
+        "ok": True,
+        "token": "",
+        "session_id": "sess-1",
+        "expires_at": "2030-01-01T00:00:00Z",
+    }
+    with patch.object(tool.io, "echo") as echo:
+        rejected = tool._reject_malformed_token_response(reply)
+    assert rejected is True
+    rendered = "\n".join(c.args[0] for c in echo.call_args_list)
+    assert "malformed auth_result" in rendered
+    assert "token" in rendered
+    assert "session_id" not in rendered
+    assert "expires_at" not in rendered
+
+
+# ---------------------------------------------------------------------
 # auth_login
 
 
@@ -487,6 +583,68 @@ def test_auth_login_propagates_bed_unavailable(tmp_path):
     assert "ws down" in rendered
 
 
+def test_auth_login_rejects_malformed_auth_result_with_empty_fields(tmp_path):
+    """Server replied ok=True but with empty token/session_id/expires_at.
+
+    Regression for the --token-file bug: without validation, an empty
+    token gets written to disk and the next ``auth reconnect`` then
+    fails with a misleading ``missing_token`` error.
+    """
+    tool = _import_tool()
+    path = str(tmp_path / "tok")
+    args = _make_args(moniker="alice", password="pw", token_file=path)
+    client = _make_client_mock(login={
+        "ok": True,
+        "moniker": "alice",
+        "is_sysop": False,
+        "session_id": "",
+        "token": "",
+        "expires_at": "",
+        "balance": 0,
+    })
+    with patch.object(tool, "_auth_service", return_value=client), \
+         patch.object(tool.io, "echo") as echo, \
+         patch.object(tool, "inputpassword", return_value="pw"), \
+         patch.object(tool.io, "inputstring", return_value="alice"):
+        ok = tool.auth_login(args)
+
+    assert ok is False
+    client.login.assert_awaited_once_with("alice", "pw")
+    assert not os.path.exists(path), "empty-token file must not be written"
+    rendered = "\n".join(c.args[0] for c in echo.call_args_list)
+    assert "malformed auth_result" in rendered
+    assert "token" in rendered
+    assert "session_id" in rendered
+    assert "expires_at" in rendered
+
+
+def test_auth_login_rejects_malformed_auth_result_with_only_token_empty(tmp_path):
+    """Same regression, but only ``token`` is empty (partial response)."""
+    tool = _import_tool()
+    path = str(tmp_path / "tok")
+    args = _make_args(moniker="alice", password="pw", token_file=path)
+    client = _make_client_mock(login={
+        "ok": True,
+        "moniker": "alice",
+        "is_sysop": False,
+        "session_id": "sess-1",
+        "token": "",
+        "expires_at": "2030-01-01T00:00:00Z",
+    })
+    with patch.object(tool, "_auth_service", return_value=client), \
+         patch.object(tool.io, "echo") as echo, \
+         patch.object(tool, "inputpassword", return_value="pw"), \
+         patch.object(tool.io, "inputstring", return_value="alice"):
+        ok = tool.auth_login(args)
+
+    assert ok is False
+    assert not os.path.exists(path)
+    rendered = "\n".join(c.args[0] for c in echo.call_args_list)
+    assert "malformed auth_result" in rendered
+    assert "token" in rendered
+    assert "session_id" not in rendered  # only the missing field is named
+
+
 # ---------------------------------------------------------------------
 # auth_reconnect
 
@@ -588,6 +746,79 @@ def test_auth_reconnect_reports_replayed_pending(tmp_path):
     assert "replayed=yes" in rendered
 
 
+def test_auth_reconnect_rejects_malformed_with_empty_fields(tmp_path):
+    """Server replied ok=True but with empty token/session_id/expires_at.
+
+    Regression for the --token-file bug on reconnect: without
+    validation, the rotated ``new_token`` (``""``) overwrites the
+    file via ``O_TRUNC`` and the next ``auth reconnect`` then fails
+    with a misleading ``missing_token`` error. The CLI must refuse
+    to write the file and emit the standard malformed error.
+    """
+    tool = _import_tool()
+    path = str(tmp_path / "tok")
+    with open(path, "w") as f:
+        f.write("old-tok\n")
+    os.chmod(path, 0o600)
+    args = _make_args(subcommand="reconnect", token=None, token_file=path)
+    client = _make_client_mock(reconnect={
+        "ok": True,
+        "moniker": "alice",
+        "is_sysop": False,
+        "session_id": "",
+        "token": "",
+        "expires_at": "",
+        "replayed": None,
+    })
+    with patch.object(tool, "_auth_service", return_value=client), \
+         patch.object(tool.io, "echo") as echo:
+        ok = tool.auth_reconnect(args)
+
+    assert ok is False
+    client.reconnect.assert_awaited_once_with("old-tok")
+    assert os.path.exists(path), "old token file must be preserved"
+    with open(path) as f:
+        assert f.read().strip() == "old-tok", (
+            "must not overwrite a still-valid token with an empty string"
+        )
+    rendered = "\n".join(c.args[0] for c in echo.call_args_list)
+    assert "malformed auth_result" in rendered
+    assert "token" in rendered
+    assert "session_id" in rendered
+    assert "expires_at" in rendered
+
+
+def test_auth_reconnect_rejects_malformed_with_only_token_empty(tmp_path):
+    """Same regression, but only ``token`` is empty (partial response)."""
+    tool = _import_tool()
+    path = str(tmp_path / "tok")
+    with open(path, "w") as f:
+        f.write("old-tok\n")
+    os.chmod(path, 0o600)
+    args = _make_args(subcommand="reconnect", token=None, token_file=path)
+    client = _make_client_mock(reconnect={
+        "ok": True,
+        "moniker": "alice",
+        "is_sysop": False,
+        "session_id": "sess-1",
+        "token": "",
+        "expires_at": "2030-01-01T00:15:00Z",
+        "replayed": None,
+    })
+    with patch.object(tool, "_auth_service", return_value=client), \
+         patch.object(tool.io, "echo") as echo:
+        ok = tool.auth_reconnect(args)
+
+    assert ok is False
+    with open(path) as f:
+        assert f.read().strip() == "old-tok"
+    rendered = "\n".join(c.args[0] for c in echo.call_args_list)
+    assert "malformed auth_result" in rendered
+    assert "token" in rendered
+    assert "session_id" not in rendered
+    assert "expires_at" not in rendered
+
+
 # ---------------------------------------------------------------------
 # auth_refresh
 
@@ -646,6 +877,79 @@ def test_auth_refresh_propagates_not_authenticated():
     assert ok is False
     rendered = "\n".join(c.args[0] for c in echo.call_args_list)
     assert "not_authenticated" in rendered
+
+
+def test_auth_refresh_rejects_malformed_with_empty_fields(tmp_path):
+    """Server replied ok=True but with empty token/session_id/expires_at.
+
+    Regression for the --token-file bug on refresh: without
+    validation, the rotated ``new_token`` (``""``) overwrites the
+    file via ``O_TRUNC`` and the next ``auth reconnect`` then fails
+    with a misleading ``missing_token`` error. The CLI must refuse
+    to write the file and emit the standard malformed error.
+    """
+    tool = _import_tool()
+    path = str(tmp_path / "tok")
+    with open(path, "w") as f:
+        f.write("old-tok\n")
+    os.chmod(path, 0o600)
+    args = _make_args(subcommand="refresh", token=None, token_file=path)
+    client = _make_client_mock(refresh={
+        "ok": True,
+        "moniker": "alice",
+        "is_sysop": False,
+        "session_id": "",
+        "token": "",
+        "expires_at": "",
+        "balance": 7,
+    })
+    with patch.object(tool, "_auth_service", return_value=client), \
+         patch.object(tool.io, "echo") as echo:
+        ok = tool.auth_refresh(args)
+
+    assert ok is False
+    client.refresh.assert_awaited_once_with("old-tok")
+    assert os.path.exists(path), "old token file must be preserved"
+    with open(path) as f:
+        assert f.read().strip() == "old-tok", (
+            "must not overwrite a still-valid token with an empty string"
+        )
+    rendered = "\n".join(c.args[0] for c in echo.call_args_list)
+    assert "malformed auth_result" in rendered
+    assert "token" in rendered
+    assert "session_id" in rendered
+    assert "expires_at" in rendered
+
+
+def test_auth_refresh_rejects_malformed_with_only_token_empty(tmp_path):
+    """Same regression, but only ``token`` is empty (partial response)."""
+    tool = _import_tool()
+    path = str(tmp_path / "tok")
+    with open(path, "w") as f:
+        f.write("old-tok\n")
+    os.chmod(path, 0o600)
+    args = _make_args(subcommand="refresh", token=None, token_file=path)
+    client = _make_client_mock(refresh={
+        "ok": True,
+        "moniker": "alice",
+        "is_sysop": False,
+        "session_id": "sess-1",
+        "token": "",
+        "expires_at": "2030-01-01T00:15:00Z",
+        "balance": 7,
+    })
+    with patch.object(tool, "_auth_service", return_value=client), \
+         patch.object(tool.io, "echo") as echo:
+        ok = tool.auth_refresh(args)
+
+    assert ok is False
+    with open(path) as f:
+        assert f.read().strip() == "old-tok"
+    rendered = "\n".join(c.args[0] for c in echo.call_args_list)
+    assert "malformed auth_result" in rendered
+    assert "token" in rendered
+    assert "session_id" not in rendered
+    assert "expires_at" not in rendered
 
 
 # ---------------------------------------------------------------------
