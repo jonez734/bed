@@ -1,5 +1,15 @@
 # bed/api/auth.py
 # AuthService: short-lived signed bearer tokens for bed.
+#
+# TODO: define ``bbsengine6.auth.access(args, op, **kwargs)`` and route
+# auth / reconnect / auth_refresh / auth_revoke decisions through it,
+# following the bbsengine6.bank.access() pattern in bed/api/bank.py.
+# Suggested op vocabulary: "login", "reconnect", "refresh", "revoke".
+# Today the session-bound gate (e.g. ``auth_refresh`` requires the
+# original socket) lives inline in each ``_handle_auth_*`` method --
+# moving it into a module-level access() function would let the
+# bbsengine6 auth package own the authorization policy instead of
+# bed/api/auth.py hard-coding it.
 
 from __future__ import annotations
 
@@ -362,6 +372,10 @@ class AuthService(BaseService):
             )
 
         live_state = self.sessions.get_by_websocket(websocket_id)
+        # TODO: once bbsengine6.auth.access() lands, replace this inline
+        # session-bound gate with a call to
+        # ``bbsengine6.auth.access(args, "refresh", session=live_state,
+        # message={"token": token})``.
         if live_state is None or live_state.session_id != store_record.session_id:
             return error_envelope(
                 CODE_NOT_AUTHENTICATED,

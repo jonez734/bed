@@ -22,6 +22,8 @@ import asyncio
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 
 # ---------------------------------------------------------------------
 # Helpers
@@ -1879,3 +1881,130 @@ def test_bank_service_reexported_from_bed_api():
     assert "BankService" in api_pkg.__dict__
     assert "CODE_FORBIDDEN" in api_pkg.__all__
     assert "forbidden" in api_pkg.__all__
+
+
+# ---------------------------------------------------------------------
+# bbsengine6.bank.access() delegation
+#
+# bed.api.bank.BankService delegates every access decision to the
+# module-level access() function defined in bbsengine6.bank. These
+# tests pin that delegation contract: every _handle_* method calls
+# access() with the expected op and message shape; when access()
+# returns False, the handler returns a forbidden envelope; when True,
+# the underlying bbsengine6 call runs.
+#
+# The full op-by-op matrix is covered by
+# bbsengine6/py/tests/test_bank_access.py. Here we only need to pin
+# that the bed handler actually invokes it.
+
+
+def _patch_access_returning(value):
+    """Patch ``bed.api.bank._bank_access`` to return ``value``.
+
+    Returns the patch object so the test can assert call_args.
+    """
+    from bed.api import bank as bank_mod
+
+    return patch.object(bank_mod, "_bank_access", return_value=value)
+
+
+def test_handle_balance_delegates_to_bbsengine6_bank_access():
+    """_handle_balance calls bbsengine6.bank.access with op='balance'
+    and the message dict from the wire."""
+    from bed.api.bank import BankService
+
+    ws, sm = _make_session(moniker="alice")
+    service = BankService(_make_args(), sm)
+    bank_mock = _make_bank_mock(balance=42)
+    with patch.object(service, "_get_bank", return_value=bank_mock), \
+         _patch_access_returning(True) as access_mock, \
+         patch("bed.api.bank.io.echo"):
+        result = asyncio.run(
+            service._handle_balance(ws, {"moniker": "alice"})
+        )
+    access_mock.assert_called_once()
+    args, op = access_mock.call_args[0]
+    assert op == "balance"
+    assert access_mock.call_args.kwargs.get("message", {}).get("moniker") == "alice"
+    assert access_mock.call_args.kwargs.get("session") is not None
+
+
+def test_handle_balance_returns_forbidden_when_access_denies():
+    """If bbsengine6.bank.access() returns False, the handler returns
+    a forbidden envelope and never calls the underlying bank service."""
+    from bed.api.bank import BankService
+
+    ws, sm = _make_session(moniker="alice")
+    service = BankService(_make_args(), sm)
+    bank_mock = _make_bank_mock()
+    with patch.object(service, "_get_bank", return_value=bank_mock), \
+         _patch_access_returning(False), \
+         patch("bed.api.bank.io.echo"):
+        result = asyncio.run(
+            service._handle_balance(ws, {"moniker": "alice"})
+        )
+    assert result["type"] == "error"
+    assert result["code"] == "forbidden"
+    bank_mock.get_balance.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "msg_type,op",
+    [
+        ("bank_balance", "balance"),
+        ("bank_add", "add"),
+        ("bank_remove", "remove"),
+        ("bank_history", "history"),
+        ("bank_transfer_request", "transfer"),
+        ("bank_transfer_approve", "approve"),
+        ("bank_transfer_reject", "reject"),
+        ("bank_pending", "pending"),
+        ("bank_list_all", "list_all"),
+    ],
+)
+def test_handle_message_passes_correct_op_to_access(msg_type, op):
+    """The wire-type -> op mapping is exhaustive and stable.
+
+    If a new op is added without updating _TYPE_TO_OP / _OP_TO_HANDLER,
+    handle_message returns None and this parametrization catches it.
+    """
+    from bed.api.bank import BankService
+
+    # Per-op minimal valid messages that pass the wire-shape gate.
+    valid_msgs = {
+        "bank_balance": {"moniker": "alice"},
+        "bank_add": {"moniker": "alice", "amount": 1},
+        "bank_remove": {"moniker": "alice", "amount": 1},
+        "bank_history": {"moniker": "alice"},
+        "bank_transfer_request": {"from": "alice", "to": "bob", "amount": 1},
+        "bank_transfer_approve": {"transfer_id": 1},
+        "bank_transfer_reject": {"transfer_id": 1},
+        "bank_pending": {"moniker": "alice"},
+        "bank_list_all": {},
+    }
+    msg = {"type": msg_type, **valid_msgs[msg_type]}
+    bank_mock = _make_bank_mock()
+    if msg_type == "bank_list_all":
+        ws, sm = _make_session(moniker="sysop", is_sysop=True)
+    else:
+        ws, sm = _make_session(moniker="alice")
+    service = BankService(_make_args(), sm)
+    with patch.object(service, "_get_bank", return_value=bank_mock), \
+         _patch_access_returning(True) as access_mock, \
+         patch("bed.api.bank.io.echo"):
+        result = asyncio.run(service.handle_message(None, ws, "/", msg))
+    assert access_mock.call_args[0][1] == op
+
+
+def test_handle_message_returns_none_for_unknown_type():
+    """If a wire-type is not in _TYPE_TO_OP, handle_message returns
+    None (no error envelope). The bank service does not own unknown
+    message types."""
+    from bed.api.bank import BankService
+
+    ws, sm = _make_session(moniker="alice")
+    service = BankService(_make_args(), sm)
+    result = asyncio.run(
+        service.handle_message(None, ws, "/", {"type": "totally_unknown"})
+    )
+    assert result is None

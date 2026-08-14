@@ -15,6 +15,19 @@
 #   Push:     {"type": "message", "channel": "engine_message_recipient",
 #              "message_id": N, "recipient_id": N, "status": ...,
 #              "urgency": "...", "datestamp": "..."}
+#
+# TODO: define ``bbsengine6.message.access(args, op, **kwargs)`` and
+# route ``message_subscribe`` / ``message_unsubscribe`` /
+# ``message_list_pending`` through it, following the
+# bbsengine6.bank.access() pattern in bed/api/bank.py. Suggested op
+# vocabulary: "subscribe", "unsubscribe", "list_pending".
+#
+# NOTE: today anyone can subscribe to anyone's notifications or read
+# anyone's pending message queue. This is a real authorization gap;
+# once access() lands it should enforce a self-moniker-or-sysop
+# rule (mirrors bbsengine6.bank.access("balance")), and the bed
+# handlers should delegate to it instead of accepting any moniker
+# from the wire.
 
 from __future__ import annotations
 
@@ -220,6 +233,9 @@ class MessageService(BaseService):
                 "code": "missing_moniker",
                 "message": "moniker is required",
             }
+        # TODO: gate on
+        # ``bbsengine6.message.access(args, "subscribe", session=state,
+        # message=msg)`` once that lands; require self-moniker-or-sysop.
         async with self._subscribed_lock:
             self._subscribed[moniker] = websocket
         logger.info("MessageService: subscribed moniker=%s", moniker)
@@ -243,6 +259,9 @@ class MessageService(BaseService):
     async def _handle_list_pending(
         self, message: Dict[str, Any]
     ) -> Dict[str, Any]:
+        # TODO: gate on
+        # ``bbsengine6.message.access(args, "list_pending", session=state,
+        # message=msg)`` once that lands; require self-moniker-or-sysop.
         moniker = (message.get("moniker") or "").strip()
         if not moniker:
             return {

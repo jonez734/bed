@@ -729,7 +729,7 @@ def test_bank_history_partial_loginid_lookup_keeps_unknown_moniker():
 
 def test_bank_list_all_empty():
     tool = _import_tool()
-    args = _make_args()
+    args = _make_args(sysop=True)
     bank = _make_bank_mock(list_all=MagicMock(return_value=[]))
     with patch.object(tool, "_bank_service", return_value=bank), \
          patch.object(tool.io, "echo") as echo:
@@ -740,7 +740,7 @@ def test_bank_list_all_empty():
 
 def test_bank_list_all_renders_rows():
     tool = _import_tool()
-    args = _make_args()
+    args = _make_args(sysop=True)
     rows = [{"moniker": "alice", "balance": 100}, {"moniker": "bob", "balance": 50}]
     bank = _make_bank_mock(list_all=MagicMock(return_value=rows))
     with patch.object(tool, "_bank_service", return_value=bank), \
@@ -1174,7 +1174,7 @@ def test_bank_history_in_bed_mode_uses_facade():
 
 def test_bank_list_all_in_bed_mode_uses_facade():
     tool = _import_tool()
-    args = _make_args()
+    args = _make_args(sysop=True)
     args._backend = "bed"
     facade = tool._BedBankFacade(args)
     rows = [{"moniker": "alice", "balance": 100}]
@@ -1199,3 +1199,195 @@ def _async_return(value):
         return value
 
     return MagicMock(side_effect=_coro)
+
+
+# ---------------------------------------------------------------------
+# access() gating -- bed.tools.bank delegates authorization to
+# bbsengine6.bank.access(). These tests pin that delegation.
+#
+# Design note: every bank_X CLI subcommand operates on the calling
+# member's own account (the ``moniker`` arg is the RESOLVED user,
+# used as both session and target). The only realistic denial cases
+# are (a) bank_list_all without --sysop, and (b) any subcommand
+# invoked with an empty/unresolved moniker (e.g. directly without
+# going through _resolve_moniker). Helpers (_check_access,
+# _make_session) are tested directly so the policy plumbing is
+# pinned even though the user-facing subcommands rarely exercise
+# the deny branch.
+
+
+def test_bank_list_all_denies_non_sysop():
+    """bank_list_all is sysop-only via bbsengine6.bank.access."""
+    tool = _import_tool()
+    args = _make_args()  # sysop=False
+    bank = _make_bank_mock()
+    with patch.object(tool, "_bank_service", return_value=bank), \
+         patch.object(tool.io, "echo"):
+        assert tool.bank_list_all(args, "alice") is False
+    bank.list_all.assert_not_called()
+
+
+def test_bank_list_all_allows_sysop():
+    """--sysop satisfies the list_all sysop-only rule."""
+    tool = _import_tool()
+    args = _make_args(sysop=True)
+    bank = _make_bank_mock(list_all=MagicMock(return_value=[]))
+    with patch.object(tool, "_bank_service", return_value=bank), \
+         patch.object(tool.io, "echo"):
+        assert tool.bank_list_all(args, "alice") is True
+    bank.list_all.assert_called_once_with()
+
+
+def test_bank_balance_denies_when_session_moniker_empty():
+    """If session_moniker is empty (caller never resolved a user),
+    access() denies and the service is never called."""
+    tool = _import_tool()
+    args = _make_args()
+    bank = _make_bank_mock(get_balance=MagicMock(return_value=42))
+    with patch.object(tool, "_bank_service", return_value=bank), \
+         patch.object(tool.io, "echo"):
+        assert tool.bank_balance(args, "") is False
+    bank.get_balance.assert_not_called()
+
+
+def test_bank_history_denies_when_session_moniker_empty():
+    tool = _import_tool()
+    args = _make_args()
+    bank = _make_bank_mock()
+    with patch.object(tool, "_bank_service", return_value=bank), \
+         patch.object(tool.io, "echo"):
+        assert tool.bank_history(args, "") is False
+    bank.get_history.assert_not_called()
+
+
+def test_bank_pending_denies_when_session_moniker_empty():
+    tool = _import_tool()
+    args = _make_args()
+    bank = _make_bank_mock()
+    with patch.object(tool, "_bank_service", return_value=bank), \
+         patch.object(tool.io, "echo"):
+        assert tool.bank_pending(args, "") is False
+    bank.get_pending_transfers.assert_not_called()
+
+
+def test_bank_add_denies_when_session_moniker_empty():
+    tool = _import_tool()
+    args = _make_args()
+    bank = _make_bank_mock()
+    with patch.object(tool, "_bank_service", return_value=bank), \
+         patch.object(tool.io, "inputinteger", return_value=10), \
+         patch.object(tool.io, "echo"):
+        assert tool.bank_add(args, "") is False
+    bank.add_funds.assert_not_called()
+
+
+def test_bank_remove_denies_when_session_moniker_empty():
+    tool = _import_tool()
+    args = _make_args()
+    bank = _make_bank_mock()
+    with patch.object(tool, "_bank_service", return_value=bank), \
+         patch.object(tool.io, "inputinteger", return_value=10), \
+         patch.object(tool.io, "echo"):
+        assert tool.bank_remove(args, "") is False
+    bank.remove_funds.assert_not_called()
+
+
+def test_bank_transfer_denies_when_session_moniker_empty():
+    tool = _import_tool()
+    args = _make_args()
+    bank = _make_bank_mock()
+    with patch.object(tool, "_bank_service", return_value=bank), \
+         patch.object(tool.io, "inputstring", return_value="bob"), \
+         patch.object(tool.io, "inputinteger", return_value=5), \
+         patch.object(tool.io, "echo"):
+        assert tool.bank_transfer(args, "") is False
+    bank.transfer.assert_not_called()
+
+
+def test_bank_approve_denies_when_session_moniker_empty():
+    tool = _import_tool()
+    args = _make_args()
+    bank = _make_bank_mock()
+    with patch.object(tool, "_bank_service", return_value=bank), \
+         patch.object(tool.io, "inputinteger", return_value=7), \
+         patch.object(tool.io, "echo"):
+        assert tool.bank_approve(args, "") is False
+    bank.approve_transfer.assert_not_called()
+
+
+def test_bank_reject_denies_when_session_moniker_empty():
+    tool = _import_tool()
+    args = _make_args()
+    bank = _make_bank_mock()
+    with patch.object(tool, "_bank_service", return_value=bank), \
+         patch.object(tool.io, "inputinteger", return_value=7), \
+         patch.object(tool.io, "echo"):
+        assert tool.bank_reject(args, "") is False
+    bank.reject_transfer.assert_not_called()
+
+
+def test_check_access_uses_args_moniker_when_session_moniker_omitted():
+    """When subcommand passes no resolved moniker, fall back to
+    ``args.moniker`` (the --moniker flag)."""
+    tool = _import_tool()
+    args = _make_args(moniker="alice", sysop=False)
+    assert tool._check_access(args, "balance", moniker="alice") is True
+    assert tool._check_access(args, "balance", moniker="bob") is False
+
+
+def test_check_access_aliases_from_to_from_in_message():
+    """``from_`` keyword in the CLI maps to ``from`` in the wire-shaped
+    message dict that bbsengine6.bank.access() reads."""
+    tool = _import_tool()
+    args = _make_args()
+    seen = {}
+
+    def spy(args_, op, /, **kwargs):
+        seen["session"] = kwargs.get("session")
+        seen["message"] = kwargs.get("message")
+        return True
+
+    with patch.object(tool, "_bank_access", side_effect=spy):
+        # session_moniker=alice, from=alice, to=bob -> own from -> True
+        assert tool._check_access(
+            args, "transfer", session_moniker="alice",
+            from_="alice", to="bob",
+        ) is True
+    assert seen["message"].get("from") == "alice"
+    assert "from_" not in seen["message"]
+
+
+def test_check_access_returns_false_emits_error_echo():
+    """When access is denied the helper prints a one-line error so the
+    caller can short-circuit. Pin the echo contract."""
+    tool = _import_tool()
+    args = _make_args()
+    with patch.object(tool.io, "echo") as echo:
+        ok = tool._check_access(
+            args, "balance", session_moniker="alice", moniker="bob"
+        )
+    assert ok is False
+    assert any("not permitted" in str(c) for c in echo.call_args_list)
+
+
+def test_make_session_uses_session_moniker_then_args_moniker():
+    """``_make_session`` prefers the explicit session_moniker, then
+    falls back to ``args.moniker``."""
+    tool = _import_tool()
+    args = _make_args(moniker="alice")
+    s1 = tool._make_session(args, moniker="explicit")
+    assert s1.moniker == "explicit"
+    s2 = tool._make_session(args)
+    assert s2.moniker == "alice"
+    s3 = tool._make_session(args, moniker=None)
+    assert s3.moniker == "alice"
+    s4 = tool._make_session(args, moniker="")
+    assert s4.moniker == "alice"
+
+
+def test_make_session_is_sysop_reflects_args_sysop_flag():
+    tool = _import_tool()
+    args_a = _make_args(sysop=True)
+    args_b = _make_args(sysop=False)
+    assert tool._make_session(args_a).is_sysop is True
+    assert tool._make_session(args_b).is_sysop is False

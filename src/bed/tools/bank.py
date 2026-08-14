@@ -1,11 +1,22 @@
-"""Stand-alone bank operations script."""
+"""Stand-alone bank operations script.
+
+The CLI delegates authorization to ``bbsengine6.bank.access`` (the
+same module-level function bed.api.bank.BankService uses). This
+keeps the policy in one place: the bank module owns who may do
+what, and both the WS service and the CLI ask it. The CLI builds a
+synthetic SessionState-like object from ``args.moniker`` (resolved
+to the current member if not given) and ``args.sysop`` (the
+``--sysop`` flag).
+"""
 
 import argparse
 import asyncio
+from types import SimpleNamespace
 from typing import Any, Dict, List
 
 from bbsengine6 import io, member, database
 from bbsengine6.bank import BankService
+from bbsengine6.bank import access as _bank_access
 
 from bed.tools import _routing
 
@@ -21,10 +32,87 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         default=None,
         help="Target member moniker (defaults to current user)",
     )
-    # TODO: wire in sysop check
     parentparser.add_argument(
         "--sysop", action="store_true", help="Bypass sysop privilege check"
     )
+
+
+# Subcommand -> domain verb (op) understood by bbsengine6.bank.access.
+# The bank module owns the verb vocabulary; this dict is the only
+# place the CLI needs to maintain the translation.
+_SUBCMD_TO_OP: Dict[str, str] = {
+    "balance": "balance",
+    "add": "add",
+    "remove": "remove",
+    "history": "history",
+    "transfer": "transfer",
+    "approve": "approve",
+    "reject": "reject",
+    "pending": "pending",
+    "list_all": "list_all",
+}
+
+
+def _make_session(args, moniker: str | None = None) -> SimpleNamespace:
+    """Build a SessionState-like object for the CLI's access() call.
+
+    The bank tool does not authenticate via bed -- it just reads
+    ``--moniker`` and ``--sysop``. So the synthetic session is
+    populated from those flags plus the resolved moniker (passed
+    in by the caller as the function argument, since the CLI
+    resolves the current user before invoking any subcommand).
+    access() only needs ``.moniker`` and ``.is_sysop``.
+    """
+    return SimpleNamespace(
+        moniker=moniker if moniker else (getattr(args, "moniker", None) or ""),
+        is_sysop=bool(getattr(args, "sysop", False)),
+    )
+
+
+# Map CLI-side keyword argument names to the wire-protocol field
+# names that bbsengine6.bank.access() reads. ``from`` is a Python
+# keyword, so the CLI uses ``from_``; the bank module expects
+# ``message["from"]``.
+_FIELD_ALIASES = {"from_": "from"}
+
+
+def _check_access(
+    args, op: str, *, session_moniker: str | None = None, **message_fields: Any
+) -> bool:
+    """Gate a CLI subcommand through ``bbsengine6.bank.access``.
+
+    Returns True if access is allowed, False otherwise. On False,
+    prints a one-line error so the caller can short-circuit.
+    ``session_moniker`` overrides ``args.moniker`` for the session;
+    pass the resolved moniker (or the moniker argument the
+    subcommand received) here.
+
+    The session-bound gate is checked first: if neither
+    ``session_moniker`` nor ``args.moniker`` resolves to a non-empty
+    string, the subcommand is denied unconditionally. This matches
+    the WS handler's ``_require_session`` gate so the two surfaces
+    agree on what "unauthenticated" means.
+    """
+    synth = _make_session(args, moniker=session_moniker)
+    if not (synth.moniker or "").strip():
+        io.echo(
+            f"Operation '{op}' requires an authenticated session.",
+            level="error",
+        )
+        return False
+    msg = {}
+    for k, v in message_fields.items():
+        if v is None:
+            continue
+        wire_key = _FIELD_ALIASES.get(k, k)
+        msg[wire_key] = v
+    if _bank_access(args, op, session=synth, message=msg):
+        return True
+    io.echo(
+        f"Operation '{op}' is not permitted for this account.",
+        level="error",
+    )
+    return False
 
 
 def _resolve_moniker(args) -> str | None:
@@ -219,6 +307,10 @@ def _bank_service(args: Any) -> Any:
 
 
 def bank_balance(args, moniker: str, **kwargs) -> bool:
+    if not _check_access(
+        args, "balance", session_moniker=moniker, moniker=moniker
+    ):
+        return False
     svc = _bank_service(args)
     balance = svc.get_balance(moniker)
     io.echo(f"{moniker}: {balance}")
@@ -226,11 +318,15 @@ def bank_balance(args, moniker: str, **kwargs) -> bool:
 
 
 def bank_add(args, moniker: str, **kwargs) -> bool:
-    svc = _bank_service(args)
     amount = io.inputinteger("Amount to add: ")
     if amount is None or amount <= 0:
         io.echo("Invalid amount.", level="error")
         return False
+    if not _check_access(
+        args, "add", session_moniker=moniker, moniker=moniker, amount=amount
+    ):
+        return False
+    svc = _bank_service(args)
     result = svc.add_funds(moniker, amount, transaction_type="credit")
     if result.get("success"):
         io.echo(f"{result['message']}  New balance: {result['new_balance']}")
@@ -240,11 +336,15 @@ def bank_add(args, moniker: str, **kwargs) -> bool:
 
 
 def bank_remove(args, moniker: str, **kwargs) -> bool:
-    svc = _bank_service(args)
     amount = io.inputinteger("Amount to withdraw: ")
     if amount is None or amount <= 0:
         io.echo("Invalid amount.", level="error")
         return False
+    if not _check_access(
+        args, "remove", session_moniker=moniker, moniker=moniker, amount=amount
+    ):
+        return False
+    svc = _bank_service(args)
     result = svc.remove_funds(moniker, amount, transaction_type="debit")
     if result.get("success"):
         io.echo(f"{result['message']}  New balance: {result['new_balance']}")
@@ -254,7 +354,6 @@ def bank_remove(args, moniker: str, **kwargs) -> bool:
 
 
 def bank_transfer(args, moniker: str, **kwargs) -> bool:
-    svc = _bank_service(args)
     to_moniker = io.inputstring("Transfer to moniker: ")
     if not to_moniker:
         io.echo("No moniker entered.", level="error")
@@ -263,6 +362,17 @@ def bank_transfer(args, moniker: str, **kwargs) -> bool:
     if amount is None or amount <= 0:
         io.echo("Invalid amount.", level="error")
         return False
+    if not _check_access(
+        args,
+        "transfer",
+        session_moniker=moniker,
+        from_=moniker,
+        to=to_moniker,
+        amount=amount,
+        requested_by=moniker,
+    ):
+        return False
+    svc = _bank_service(args)
     result = svc.transfer(moniker, to_moniker, amount, moniker)
     if result.get("success"):
         io.echo(result["message"])
@@ -272,6 +382,10 @@ def bank_transfer(args, moniker: str, **kwargs) -> bool:
 
 
 def bank_pending(args, moniker: str, is_sysop: bool = False, **kwargs) -> bool:
+    if not _check_access(
+        args, "pending", session_moniker=moniker, moniker=moniker
+    ):
+        return False
     svc = _bank_service(args)
     transfers = svc.get_pending_transfers(moniker, is_sysop=is_sysop)
     if not transfers:
@@ -289,11 +403,19 @@ def bank_pending(args, moniker: str, is_sysop: bool = False, **kwargs) -> bool:
 
 
 def bank_approve(args, moniker: str, **kwargs) -> bool:
-    svc = _bank_service(args)
     transfer_id = io.inputinteger("Transfer ID to approve: ")
     if transfer_id is None:
         io.echo("Invalid ID.", level="error")
         return False
+    if not _check_access(
+        args,
+        "approve",
+        session_moniker=moniker,
+        transfer_id=transfer_id,
+        responded_by=moniker,
+    ):
+        return False
+    svc = _bank_service(args)
     result = svc.approve_transfer(transfer_id, moniker)
     if result.get("success"):
         io.echo(result["message"])
@@ -303,11 +425,19 @@ def bank_approve(args, moniker: str, **kwargs) -> bool:
 
 
 def bank_reject(args, moniker: str, **kwargs) -> bool:
-    svc = _bank_service(args)
     transfer_id = io.inputinteger("Transfer ID to reject: ")
     if transfer_id is None:
         io.echo("Invalid ID.", level="error")
         return False
+    if not _check_access(
+        args,
+        "reject",
+        session_moniker=moniker,
+        transfer_id=transfer_id,
+        responded_by=moniker,
+    ):
+        return False
+    svc = _bank_service(args)
     result = svc.reject_transfer(transfer_id, moniker)
     if result.get("success"):
         io.echo(result["message"])
@@ -317,6 +447,10 @@ def bank_reject(args, moniker: str, **kwargs) -> bool:
 
 
 def bank_history(args, moniker: str, **kwargs) -> bool:
+    if not _check_access(
+        args, "history", session_moniker=moniker, moniker=moniker
+    ):
+        return False
     svc = _bank_service(args)
     txns = svc.get_history(moniker)
     if not txns:
@@ -334,6 +468,8 @@ def bank_history(args, moniker: str, **kwargs) -> bool:
 
 
 def bank_list_all(args, moniker: str, **kwargs) -> bool:
+    if not _check_access(args, "list_all", session_moniker=moniker):
+        return False
     svc = _bank_service(args)
     rows = svc.list_all()
     if not rows:

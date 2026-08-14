@@ -19,14 +19,23 @@
 #   Error:    {"type": "error", "code": "...", "message": "..."}
 #
 # Authentication / authorization:
-#   Every handler requires a SessionState bound to the websocket (set by
-#   AuthService on a successful ``auth``/``reconnect``/``auth_refresh``).
-#   Handlers that target a specific account require the session moniker
-#   to match the message moniker (case-insensitive, after strip);
-#   sessions with ``is_sysop=True`` bypass the ownership check.
-#   ``bank_list_all`` is sysop-only. ``bank_pending`` ignores the wire's
-#   ``is_sysop`` and uses ``state.is_sysop`` instead, so a non-sysop
-#   session cannot escalate by sending ``is_sysop: true``.
+#   Every handler delegates its access decision to
+#   ``bbsengine6.bank.access(args, op, session=state, message=msg)``.
+#   This module is the reference implementation for the
+#   bbsengine6.<name>.access() pattern; other bed.api.* services
+#   (auth, message, ...) should follow this template -- see the
+#   TODO comments in bed/api/auth.py and bed/api/message.py.
+#
+#   Handlers perform three gates in order:
+#     1. Session bound (else ``not_authenticated``).
+#     2. Wire-shape validation -- moniker present, amount int > 0,
+#        transfer_id int > 0 (else ``missing_moniker`` /
+#        ``invalid_amount``). This stays in the handler because
+#        envelope codes are a wire-protocol concern.
+#     3. ``bbsengine6.bank.access()`` authorization (else ``forbidden``).
+#   ``bank_list_all`` is sysop-only. ``bank_pending`` ignores the
+#   wire's ``is_sysop`` and uses ``state.is_sysop`` instead, so a
+#   non-sysop session cannot escalate by sending ``is_sysop: true``.
 
 from __future__ import annotations
 
@@ -36,6 +45,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from bbsengine6 import io
 from bbsengine6.bank import BankService as _BBSBankService
+from bbsengine6.bank import access as _bank_access
 
 from .errors import (
     CODE_DATABASE_ERROR,
@@ -52,6 +62,23 @@ logger = logging.getLogger(__name__)
 CODE_MISSING_MONIKER = "missing_moniker"
 CODE_INVALID_AMOUNT = "invalid_amount"
 CODE_OPERATION_FAILED = "operation_failed"
+
+
+# Map from WS ``type`` field to the domain verb understood by
+# ``bbsengine6.bank.access``. The bank module owns the verb vocabulary;
+# this dict is the only place bed-side code needs to maintain the
+# translation.
+_TYPE_TO_OP: Dict[str, str] = {
+    "bank_balance": "balance",
+    "bank_add": "add",
+    "bank_remove": "remove",
+    "bank_history": "history",
+    "bank_transfer_request": "transfer",
+    "bank_transfer_approve": "approve",
+    "bank_transfer_reject": "reject",
+    "bank_pending": "pending",
+    "bank_list_all": "list_all",
+}
 
 
 def _jsonable(value: Any) -> Any:
@@ -81,9 +108,96 @@ def _jsonable_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return {key: _jsonable(value) for key, value in row.items()}
 
 
-def _moniker_eq(a: str, b: str) -> bool:
-    """Case-insensitive moniker equality after strip()."""
-    return (a or "").strip().lower() == (b or "").strip().lower()
+def _get_session_for(
+    self_ref: "BankService", websocket: Any
+) -> Tuple[Optional[SessionState], Optional[Dict[str, Any]]]:
+    """Look up the SessionState bound to ``websocket``.
+
+    Returns ``(state, None)`` on success or ``(None, error_envelope)``
+    when no session is bound (the websocket has not completed
+    ``auth``/``reconnect``/``auth_refresh``). Kept as a module-level
+    helper (not a method) so it composes cleanly with the
+    ``_validate_shape`` / ``access()`` pipeline.
+    """
+    if websocket is None:
+        return None, not_authenticated()
+    try:
+        ws_id = str(websocket.id)
+    except Exception:
+        return None, not_authenticated()
+    state = self_ref.sessions.get_by_websocket(ws_id)
+    if state is None:
+        return None, not_authenticated()
+    return state, None
+
+
+def _validate_shape(
+    op: str, message: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Validate the wire-shape invariants ``bbsengine6.bank.access``
+    intentionally does not check.
+
+    Returns ``None`` on success or an error envelope on failure.
+    Kept here so envelope codes stay a wire-protocol concern, not an
+    authorization concern.
+    """
+    if op in ("balance", "add", "remove", "history", "pending"):
+        moniker = (message.get("moniker") or "").strip()
+        if not moniker:
+            return error_envelope(
+                CODE_MISSING_MONIKER, "moniker is required"
+            )
+    if op in ("add", "remove"):
+        try:
+            amount = int(message.get("amount", 0))
+        except (TypeError, ValueError):
+            return error_envelope(
+                CODE_INVALID_AMOUNT, "amount must be an integer"
+            )
+        if amount <= 0:
+            return error_envelope(
+                CODE_INVALID_AMOUNT, "amount must be positive"
+            )
+    if op == "history":
+        try:
+            limit = int(message.get("limit", 50))
+        except (TypeError, ValueError):
+            return error_envelope(
+                CODE_INVALID_AMOUNT, "limit must be an integer"
+            )
+        if limit < 0:
+            return error_envelope(
+                CODE_INVALID_AMOUNT, "limit must be non-negative"
+            )
+    if op == "transfer":
+        f = (message.get("from") or "").strip()
+        t = (message.get("to") or "").strip()
+        if not f or not t:
+            return error_envelope(
+                CODE_MISSING_MONIKER, "from and to monikers are required"
+            )
+        try:
+            amount = int(message.get("amount", 0))
+        except (TypeError, ValueError):
+            return error_envelope(
+                CODE_INVALID_AMOUNT, "amount must be an integer"
+            )
+        if amount <= 0:
+            return error_envelope(
+                CODE_INVALID_AMOUNT, "amount must be positive"
+            )
+    if op in ("approve", "reject"):
+        try:
+            tid = int(message.get("transfer_id", 0))
+        except (TypeError, ValueError):
+            return error_envelope(
+                CODE_INVALID_AMOUNT, "transfer_id must be an integer"
+            )
+        if tid <= 0:
+            return error_envelope(
+                CODE_INVALID_AMOUNT, "transfer_id must be positive"
+            )
+    return None
 
 
 class BankService(BaseService):
@@ -100,17 +214,7 @@ class BankService(BaseService):
     lazy ``psycopg`` import).
     """
 
-    HANDLED_TYPES = (
-        "bank_balance",
-        "bank_add",
-        "bank_remove",
-        "bank_history",
-        "bank_transfer_request",
-        "bank_transfer_approve",
-        "bank_transfer_reject",
-        "bank_pending",
-        "bank_list_all",
-    )
+    HANDLED_TYPES = tuple(_TYPE_TO_OP.keys())
 
     def __init__(self, args: Any, session_manager: Any) -> None:
         super().__init__(args, session_manager)
@@ -130,47 +234,27 @@ class BankService(BaseService):
             self._bank = _BBSBankService(self.args)
         return self._bank
 
-    def _require_session(
-        self, websocket: Any
+    def _check_access(
+        self, websocket: Any, op: str, message: Dict[str, Any]
     ) -> Tuple[Optional[SessionState], Optional[Dict[str, Any]]]:
-        """Look up the SessionState bound to ``websocket``.
+        """Run the three access gates in order: session, shape, authz.
 
-        Returns ``(state, None)`` on success or ``(None, error_envelope)``
-        when no session is bound (the websocket has not completed
-        ``auth``/``reconnect``/``auth_refresh``).
+        Returns ``(state, None)`` on success or ``(state_or_None, error_envelope)``
+        on failure. The caller uses the returned envelope as the wire
+        response and stops processing.
         """
-        if websocket is None:
-            return None, not_authenticated()
-        try:
-            ws_id = str(websocket.id)
-        except Exception:
-            return None, not_authenticated()
-        state = self.sessions.get_by_websocket(ws_id)
-        if state is None:
-            return None, not_authenticated()
+        state, err = _get_session_for(self, websocket)
+        if err is not None:
+            return None, err
+
+        err = _validate_shape(op, message)
+        if err is not None:
+            return state, err
+
+        if not _bank_access(self.args, op, session=state, message=message):
+            return state, forbidden("Operation not permitted for this account")
+
         return state, None
-
-    @staticmethod
-    def _require_owner(
-        state: SessionState, target_moniker: str
-    ) -> Optional[Dict[str, Any]]:
-        """Reject if ``target_moniker`` is not the session's own account.
-
-        A session with ``is_sysop=True`` may act on any account; a
-        non-sysop session must match its own moniker (case-insensitive,
-        after strip). Missing target is treated as forbidden rather
-        than silently accepted, so a malformed envelope never falls
-        through to the underlying bbsengine6 call.
-        """
-        if state.is_sysop:
-            return None
-        if not (target_moniker or "").strip():
-            return forbidden("moniker is required")
-        if not _moniker_eq(state.moniker, target_moniker):
-            return forbidden(
-                "Cannot operate on another member's account"
-            )
-        return None
 
     def register_all(self, server: Any) -> None:
         server.register_service(self, list(self.HANDLED_TYPES))
@@ -179,49 +263,19 @@ class BankService(BaseService):
         self, server: Any, websocket: Any, path: str, message: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         msg_type = message.get("type")
-        if msg_type == "bank_balance":
-            return await self._handle_balance(websocket, message)
-        if msg_type == "bank_add":
-            return await self._handle_add(websocket, message)
-        if msg_type == "bank_remove":
-            return await self._handle_remove(websocket, message)
-        if msg_type == "bank_history":
-            return await self._handle_history(websocket, message)
-        if msg_type == "bank_transfer_request":
-            return await self._handle_transfer_request(websocket, message)
-        if msg_type == "bank_transfer_approve":
-            return await self._handle_transfer_approve(websocket, message)
-        if msg_type == "bank_transfer_reject":
-            return await self._handle_transfer_reject(websocket, message)
-        if msg_type == "bank_pending":
-            return await self._handle_pending(websocket, message)
-        if msg_type == "bank_list_all":
-            return await self._handle_list_all(websocket, message)
-        return None
-
-    @staticmethod
-    def _require_moniker(message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Return None if ``moniker`` is present; else return an error envelope."""
-        moniker = (message.get("moniker") or "").strip()
-        if not moniker:
-            return error_envelope(
-                CODE_MISSING_MONIKER, "moniker is required"
-            )
-        return None
+        op = _TYPE_TO_OP.get(msg_type)
+        if op is None:
+            return None
+        handler = _OP_TO_HANDLER[op]
+        return await handler(self, websocket, message)
 
     async def _handle_balance(
         self, websocket: Any, message: Dict[str, Any]
     ) -> Dict[str, Any]:
-        state, err = self._require_session(websocket)
+        state, err = self._check_access(websocket, "balance", message)
         if err is not None:
             return err
-        err = self._require_moniker(message)
-        if err is not None:
-            return err
-        err = self._require_owner(state, message["moniker"])
-        if err is not None:
-            return err
-        moniker = message["moniker"]
+        moniker = (message.get("moniker") or "").strip()
         try:
             balance = self._get_bank().get_balance(moniker)
         except Exception as e:
@@ -238,26 +292,11 @@ class BankService(BaseService):
     async def _handle_add(
         self, websocket: Any, message: Dict[str, Any]
     ) -> Dict[str, Any]:
-        state, err = self._require_session(websocket)
+        state, err = self._check_access(websocket, "add", message)
         if err is not None:
             return err
-        err = self._require_moniker(message)
-        if err is not None:
-            return err
-        err = self._require_owner(state, message["moniker"])
-        if err is not None:
-            return err
-        try:
-            amount = int(message.get("amount", 0))
-        except (TypeError, ValueError):
-            return error_envelope(
-                CODE_INVALID_AMOUNT, "amount must be an integer"
-            )
-        if amount <= 0:
-            return error_envelope(
-                CODE_INVALID_AMOUNT, "amount must be positive"
-            )
-        moniker = message["moniker"]
+        moniker = (message.get("moniker") or "").strip()
+        amount = int(message.get("amount", 0))
         description = (message.get("description") or "credit").strip() or "credit"
         try:
             result = self._get_bank().add_funds(
@@ -286,26 +325,11 @@ class BankService(BaseService):
     async def _handle_remove(
         self, websocket: Any, message: Dict[str, Any]
     ) -> Dict[str, Any]:
-        state, err = self._require_session(websocket)
+        state, err = self._check_access(websocket, "remove", message)
         if err is not None:
             return err
-        err = self._require_moniker(message)
-        if err is not None:
-            return err
-        err = self._require_owner(state, message["moniker"])
-        if err is not None:
-            return err
-        try:
-            amount = int(message.get("amount", 0))
-        except (TypeError, ValueError):
-            return error_envelope(
-                CODE_INVALID_AMOUNT, "amount must be an integer"
-            )
-        if amount <= 0:
-            return error_envelope(
-                CODE_INVALID_AMOUNT, "amount must be positive"
-            )
-        moniker = message["moniker"]
+        moniker = (message.get("moniker") or "").strip()
+        amount = int(message.get("amount", 0))
         description = (message.get("description") or "debit").strip() or "debit"
         try:
             result = self._get_bank().remove_funds(
@@ -334,26 +358,11 @@ class BankService(BaseService):
     async def _handle_history(
         self, websocket: Any, message: Dict[str, Any]
     ) -> Dict[str, Any]:
-        state, err = self._require_session(websocket)
+        state, err = self._check_access(websocket, "history", message)
         if err is not None:
             return err
-        err = self._require_moniker(message)
-        if err is not None:
-            return err
-        err = self._require_owner(state, message["moniker"])
-        if err is not None:
-            return err
-        try:
-            limit = int(message.get("limit", 50))
-        except (TypeError, ValueError):
-            return error_envelope(
-                CODE_INVALID_AMOUNT, "limit must be an integer"
-            )
-        if limit < 0:
-            return error_envelope(
-                CODE_INVALID_AMOUNT, "limit must be non-negative"
-            )
-        moniker = message["moniker"]
+        moniker = (message.get("moniker") or "").strip()
+        limit = int(message.get("limit", 50))
         try:
             rows = self._get_bank().get_history(moniker, limit)
         except Exception as e:
@@ -370,41 +379,15 @@ class BankService(BaseService):
     async def _handle_transfer_request(
         self, websocket: Any, message: Dict[str, Any]
     ) -> Dict[str, Any]:
-        state, err = self._require_session(websocket)
+        state, err = self._check_access(websocket, "transfer", message)
         if err is not None:
             return err
         from_moniker = (message.get("from") or "").strip()
         to_moniker = (message.get("to") or "").strip()
-        if not from_moniker or not to_moniker:
-            return error_envelope(
-                CODE_MISSING_MONIKER, "from and to monikers are required"
-            )
-        try:
-            amount = int(message.get("amount", 0))
-        except (TypeError, ValueError):
-            return error_envelope(
-                CODE_INVALID_AMOUNT, "amount must be an integer"
-            )
-        if amount <= 0:
-            return error_envelope(
-                CODE_INVALID_AMOUNT, "amount must be positive"
-            )
-        requested_by_raw = (message.get("requested_by") or "").strip()
-        if (
-            requested_by_raw
-            and not state.is_sysop
-            and not _moniker_eq(state.moniker, requested_by_raw)
-        ):
-            return forbidden(
-                "requested_by does not match authenticated session"
-            )
-        if not state.is_sysop and not _moniker_eq(
-            state.moniker, from_moniker
-        ):
-            return forbidden(
-                "Cannot request a transfer from another member's account"
-            )
-        requested_by = requested_by_raw or state.moniker
+        amount = int(message.get("amount", 0))
+        requested_by = (
+            (message.get("requested_by") or "").strip() or state.moniker
+        )
         try:
             result = self._get_bank().transfer(
                 from_moniker, to_moniker, amount, requested_by
@@ -432,29 +415,13 @@ class BankService(BaseService):
     async def _handle_transfer_approve(
         self, websocket: Any, message: Dict[str, Any]
     ) -> Dict[str, Any]:
-        state, err = self._require_session(websocket)
+        state, err = self._check_access(websocket, "approve", message)
         if err is not None:
             return err
-        try:
-            transfer_id = int(message.get("transfer_id", 0))
-        except (TypeError, ValueError):
-            return error_envelope(
-                CODE_INVALID_AMOUNT, "transfer_id must be an integer"
-            )
-        if transfer_id <= 0:
-            return error_envelope(
-                CODE_INVALID_AMOUNT, "transfer_id must be positive"
-            )
-        responded_by_raw = (message.get("responded_by") or "").strip()
-        if (
-            responded_by_raw
-            and not state.is_sysop
-            and not _moniker_eq(state.moniker, responded_by_raw)
-        ):
-            return forbidden(
-                "responded_by does not match authenticated session"
-            )
-        responded_by = responded_by_raw or state.moniker
+        transfer_id = int(message.get("transfer_id", 0))
+        responded_by = (
+            (message.get("responded_by") or "").strip() or state.moniker
+        )
         try:
             result = self._get_bank().approve_transfer(
                 transfer_id, responded_by
@@ -487,29 +454,13 @@ class BankService(BaseService):
     async def _handle_transfer_reject(
         self, websocket: Any, message: Dict[str, Any]
     ) -> Dict[str, Any]:
-        state, err = self._require_session(websocket)
+        state, err = self._check_access(websocket, "reject", message)
         if err is not None:
             return err
-        try:
-            transfer_id = int(message.get("transfer_id", 0))
-        except (TypeError, ValueError):
-            return error_envelope(
-                CODE_INVALID_AMOUNT, "transfer_id must be an integer"
-            )
-        if transfer_id <= 0:
-            return error_envelope(
-                CODE_INVALID_AMOUNT, "transfer_id must be positive"
-            )
-        responded_by_raw = (message.get("responded_by") or "").strip()
-        if (
-            responded_by_raw
-            and not state.is_sysop
-            and not _moniker_eq(state.moniker, responded_by_raw)
-        ):
-            return forbidden(
-                "responded_by does not match authenticated session"
-            )
-        responded_by = responded_by_raw or state.moniker
+        transfer_id = int(message.get("transfer_id", 0))
+        responded_by = (
+            (message.get("responded_by") or "").strip() or state.moniker
+        )
         try:
             result = self._get_bank().reject_transfer(
                 transfer_id, responded_by
@@ -532,17 +483,12 @@ class BankService(BaseService):
     async def _handle_pending(
         self, websocket: Any, message: Dict[str, Any]
     ) -> Dict[str, Any]:
-        state, err = self._require_session(websocket)
+        state, err = self._check_access(websocket, "pending", message)
         if err is not None:
             return err
         moniker = (message.get("moniker") or "").strip()
-        if not moniker:
-            return error_envelope(
-                CODE_MISSING_MONIKER, "moniker is required"
-            )
-        err = self._require_owner(state, moniker)
-        if err is not None:
-            return err
+        # Use server-side is_sysop from the session, not the wire's
+        # ``is_sysop`` field, so a non-sysop session cannot escalate.
         is_sysop = bool(state.is_sysop)
         try:
             rows = self._get_bank().get_pending_transfers(
@@ -563,11 +509,9 @@ class BankService(BaseService):
     async def _handle_list_all(
         self, websocket: Any, message: Dict[str, Any]
     ) -> Dict[str, Any]:
-        state, err = self._require_session(websocket)
+        state, err = self._check_access(websocket, "list_all", message)
         if err is not None:
             return err
-        if not state.is_sysop:
-            return forbidden("bank_list_all is sysop-only")
         try:
             rows = self._get_bank().list_all()
         except Exception as e:
@@ -582,3 +526,19 @@ class BankService(BaseService):
                 for row in rows
             ],
         }
+
+
+# Domain-verb -> handler dispatch. Keeps handle_message() a flat
+# dict lookup and makes it obvious at import time that every op has
+# exactly one handler.
+_OP_TO_HANDLER = {
+    "balance": BankService._handle_balance,
+    "add": BankService._handle_add,
+    "remove": BankService._handle_remove,
+    "history": BankService._handle_history,
+    "transfer": BankService._handle_transfer_request,
+    "approve": BankService._handle_transfer_approve,
+    "reject": BankService._handle_transfer_reject,
+    "pending": BankService._handle_pending,
+    "list_all": BankService._handle_list_all,
+}
