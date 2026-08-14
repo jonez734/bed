@@ -5,6 +5,11 @@ the bed project so the protocol client and server evolve together; both
 empyre and casino import from here.
 """
 
+from bed.client.authservice import (
+    BedAuthServiceClient,
+    get_auth_client,
+    reset_auth_client,
+)
 from bed.client.bank import BedBankClient
 from bed.client.bankservice import (
     BedBankServiceClient,
@@ -26,16 +31,19 @@ from bed.client.singleton import (
 )
 
 __all__ = [
+    "BedAuthServiceClient",
     "BedBankClient",
     "BedBankServiceClient",
     "BedConnection",
     "BedMessageClient",
     "BedMessageServiceClient",
     "BedUnavailable",
+    "get_auth_client",
     "get_bank_client",
     "get_bed_connection",
     "get_message_client",
     "probe_bed",
+    "reset_auth_client",
     "reset_bank_client",
     "reset_bed_connection",
     "reset_message_client",

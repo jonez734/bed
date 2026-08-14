@@ -204,3 +204,58 @@ def test_subscribe_swallows_set_local_unread_count_errors():
         assert result.get("ok") is True
 
     asyncio.run(runner())
+
+
+# ---------------------------------------------------------------------
+# bed.client.authservice
+
+
+def test_auth_client_exports_present():
+    """The public auth client symbols must be importable from
+    ``bed.client`` (mirrors the bank/message client exports)."""
+    import bed.client as client_pkg
+
+    assert "BedAuthServiceClient" in client_pkg.__all__
+    assert "get_auth_client" in client_pkg.__all__
+    assert "reset_auth_client" in client_pkg.__all__
+    assert hasattr(client_pkg, "BedAuthServiceClient")
+    assert hasattr(client_pkg, "get_auth_client")
+    assert hasattr(client_pkg, "reset_auth_client")
+
+
+def test_get_auth_client_returns_same_instance_for_same_connection():
+    """``get_auth_client`` caches one client per connection (same
+    pattern as ``get_bank_client`` / ``get_message_client``)."""
+    import bed.client.authservice as auth_mod
+
+    auth_mod.reset_auth_client()
+    conn = MagicMock()
+    a = auth_mod.get_auth_client(conn)
+    b = auth_mod.get_auth_client(conn)
+    assert a is b
+    auth_mod.reset_auth_client()
+
+
+def test_get_auth_client_rebuilds_when_connection_changes():
+    """A different connection produces a different client (so tests
+    that pass a fresh loopback transport get a fresh client)."""
+    import bed.client.authservice as auth_mod
+
+    auth_mod.reset_auth_client()
+    conn1 = MagicMock()
+    conn2 = MagicMock()
+    a = auth_mod.get_auth_client(conn1)
+    b = auth_mod.get_auth_client(conn2)
+    assert a is not b
+    auth_mod.reset_auth_client()
+
+
+def test_reset_auth_client_drops_cache():
+    import bed.client.authservice as auth_mod
+
+    auth_mod.reset_auth_client()
+    conn = MagicMock()
+    auth_mod.get_auth_client(conn)
+    assert auth_mod._module_client is not None
+    auth_mod.reset_auth_client()
+    assert auth_mod._module_client is None

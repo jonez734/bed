@@ -39,6 +39,7 @@ dev = [
 [project.scripts]
 bed = "bed.main:main"
 bed-startup = "bed.startup:main"
+auth = "bed.tools.auth:main"
 bank = "bed.tools.bank:main"
 ping = "bed.tools.ping:main"
 
