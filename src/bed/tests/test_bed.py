@@ -35,6 +35,7 @@ class TestBEDMocked(unittest.IsolatedAsyncioTestCase):
         self.mock_args.debug = False
         self.mock_args.host = "127.0.0.1"
         self.mock_args.port = 18772
+        self.mock_args.bed_name = "bed"
 
         mock_pool = MagicMock()
         mock_pool.connection.return_value.__enter__ = MagicMock(
@@ -52,6 +53,17 @@ class TestBEDMocked(unittest.IsolatedAsyncioTestCase):
 
         self.bed.router = DefaultRouter(self.mock_args)
         self.bed.router.register_all(self.bed.server)
+
+        # BED.start() registers PingService LAST so it overwrites the
+        # router's ``ping`` registration. Mirror that ordering here so
+        # the test exercises the production registration sequence.
+        from bed.api import PingService, SessionRegistry
+        ping_svc = PingService(
+            self.mock_args,
+            SessionRegistry(),
+            name=self.mock_args.bed_name,
+        )
+        ping_svc.register_all(self.bed.server)
 
         await self.bed.server.start()
         self._server_started = True
@@ -74,7 +86,15 @@ class TestBEDMocked(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(ws.state == websockets.State.OPEN)
 
     async def test_ping_pong(self):
-        """Test ping/pong."""
+        """Test ping/pong.
+
+        After PingService registration, the pong carries the bed
+        ``name`` (from args.bed_name) and ``version`` (from
+        bed._version). The router's plain ``{"type": "pong"}`` is
+        overwritten because BED.start() registers PingService LAST.
+        """
+        from bed import _version
+
         uri = f"ws://{self.mock_args.host}:{self.mock_args.port}/"
 
         async with websockets.connect(uri) as ws:
@@ -82,6 +102,8 @@ class TestBEDMocked(unittest.IsolatedAsyncioTestCase):
             response = json.loads(await ws.recv())
 
             self.assertEqual(response["type"], "pong")
+            self.assertEqual(response["name"], self.mock_args.bed_name)
+            self.assertEqual(response["version"], _version.__version__)
 
     async def test_list_services(self):
         """Test listing registered services."""
@@ -143,6 +165,41 @@ class TestBEDParseArgs(unittest.IsolatedAsyncioTestCase):
         with patch("sys.argv", ["bed"] + self._extra_args):
             args = self._parse_args()
             self.assertEqual(args.router, "mymodule.MyRouter")
+
+    def test_default_bed_name(self):
+        """Test default bed_name is 'bed'."""
+        self._extra_args = ["--config", "/dev/null"]
+        with patch("sys.argv", ["bed"] + self._extra_args):
+            args = self._parse_args()
+            self.assertEqual(args.bed_name, "bed")
+
+    def test_custom_bed_name(self):
+        """--bed-name NAME overrides the default."""
+        self._extra_args = ["--config", "/dev/null", "--bed-name", "mybbs"]
+        with patch("sys.argv", ["bed"] + self._extra_args):
+            args = self._parse_args()
+            self.assertEqual(args.bed_name, "mybbs")
+
+    def test_default_secret_path_derives_from_default_name(self):
+        """Default secret path stays at ~/.config/bed/bed.secret when
+        bed_name is 'bed' (no change for existing installs)."""
+        import os
+        from bed.lib import _default_secret_path
+
+        self.assertEqual(
+            _default_secret_path(),
+            os.path.expanduser("~/.config/bed/bed.secret"),
+        )
+
+    def test_default_secret_path_substitutes_name(self):
+        """A non-default bed_name yields ~/.config/bed/<name>.secret."""
+        import os
+        from bed.lib import _default_secret_path
+
+        self.assertEqual(
+            _default_secret_path("mybbs"),
+            os.path.expanduser("~/.config/bed/mybbs.secret"),
+        )
 
     def test_external_router_resolves(self):
         """--router bbsengine6.net.defaultrouter.DefaultRouter resolves via load_router_class.
@@ -758,6 +815,54 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(_expand_user(""), "")
         self.assertEqual(_expand_user("/already/absolute"), "/already/absolute")
 
+    def test_config_file_bed_name_overrides_default(self):
+        """bed.name in the JSON config fills in args.bed_name when the
+        CLI did not set --bed-name."""
+        from bed.main import _apply_bed_name_config
+
+        args = self._parse([])
+        cfg = {"bed": {"name": "mybbs"}}
+        _apply_bed_name_config(args, cfg)
+        self.assertEqual(args.bed_name, "mybbs")
+
+    def test_cli_bed_name_wins_over_config(self):
+        """An explicit --bed-name on the CLI beats a bed.name in the JSON."""
+        from bed.main import _apply_bed_name_config
+
+        args = self._parse(["--bed-name", "explicitname"])
+        cfg = {"bed": {"name": "fromjson"}}
+        _apply_bed_name_config(args, cfg)
+        self.assertEqual(args.bed_name, "explicitname")
+
+    def test_config_empty_bed_name_falls_back_to_default(self):
+        """An empty bed.name in the JSON falls back to the default
+        'bed' so the secret-path derivation stays sane."""
+        from bed.main import _apply_bed_name_config
+
+        args = self._parse([])
+        cfg = {"bed": {"name": ""}}
+        _apply_bed_name_config(args, cfg)
+        self.assertEqual(args.bed_name, "bed")
+
+    def test_config_missing_bed_name_keeps_default(self):
+        """A config without a bed.name at all leaves args.bed_name at
+        the argparse default 'bed'."""
+        from bed.main import _apply_bed_name_config
+
+        args = self._parse([])
+        cfg = {"bed": {"autorestart": False}}
+        _apply_bed_name_config(args, cfg)
+        self.assertEqual(args.bed_name, "bed")
+
+    def test_config_bed_name_trims_whitespace(self):
+        """Surrounding whitespace in bed.name is stripped."""
+        from bed.main import _apply_bed_name_config
+
+        args = self._parse([])
+        cfg = {"bed": {"name": "  mybbs  "}}
+        _apply_bed_name_config(args, cfg)
+        self.assertEqual(args.bed_name, "mybbs")
+
 
 class TestPidfile(unittest.TestCase):
     """Test the --pidfile arg and the _write_pidfile / _remove_pidfile
@@ -1110,6 +1215,7 @@ class TestPhase2BED(unittest.IsolatedAsyncioTestCase):
             databaseuser="x",
             databasepassword="x",
             bed_secret="",
+            bed_name="bed",
             token_ttl=900,
             token_persistence="memory",
             credential_provider="password",
@@ -1322,11 +1428,13 @@ class TestSighupReload(unittest.IsolatedAsyncioTestCase):
             databasehost="db.local",
             token_persistence="memory",
             credential_provider="password",
+            bed_name="bed",
         )
         new_cfg = {
             "bind": {"host": "0.0.0.0", "port": 9001},
             "database": {"name": "zoid7", "host": "db2.local"},
             "auth": {"token_persistence": "db", "credential_provider": "moniker-only"},
+            "bed": {"name": "mybbs"},
         }
         ar_ref = [False]
         rd_ref = [5]
@@ -1346,6 +1454,7 @@ class TestSighupReload(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args.port, 8765)
         self.assertEqual(args.databasename, "zoid6")
         self.assertEqual(args.token_persistence, "memory")
+        self.assertEqual(args.bed_name, "bed")
         # But a warning was logged.
         warnings = [m for lvl, m in captured if lvl == "warning"]
         self.assertTrue(
@@ -1355,6 +1464,10 @@ class TestSighupReload(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             any("host=" in m for m in warnings),
             f"missing host= in warning; captured={captured}",
+        )
+        self.assertTrue(
+            any("bed_name=" in m for m in warnings),
+            f"missing bed_name= in warning; captured={captured}",
         )
 
     def test_sighup_handles_missing_config_file(self) -> None:
