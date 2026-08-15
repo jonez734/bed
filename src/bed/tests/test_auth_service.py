@@ -595,6 +595,137 @@ class TestSessionRegistry(unittest.TestCase):
         st = r.bind("s1", "w2", "alice", False, loginid="alice_v2")
         self.assertEqual(st.loginid, "alice_v2")
 
+    def test_session_state_table_moniker_default(self) -> None:
+        """A freshly-bound SessionState has ``table_moniker=None`` and ``spectator_of=set()``."""
+        r = SessionRegistry()
+        r.bind("s1", "w1", "alice", False)
+        st = r.get_by_session("s1")
+        self.assertIsNone(st.table_moniker)
+        self.assertEqual(st.spectator_of, set())
+
+    def test_set_table_moniker(self) -> None:
+        r = SessionRegistry()
+        r.bind("s1", "w1", "alice", False)
+        self.assertIsNone(r.get_table_moniker("s1"))
+        st = r.set_table_moniker("s1", "room-1")
+        self.assertEqual(st.table_moniker, "room-1")
+        self.assertEqual(r.get_table_moniker("s1"), "room-1")
+
+    def test_set_table_moniker_to_none_clears(self) -> None:
+        r = SessionRegistry()
+        r.bind("s1", "w1", "alice", False)
+        r.set_table_moniker("s1", "room-1")
+        r.set_table_moniker("s1", None)
+        self.assertIsNone(r.get_table_moniker("s1"))
+
+    def test_set_table_moniker_replaces(self) -> None:
+        """A player can only sit at one table -- the new value overwrites the old."""
+        r = SessionRegistry()
+        r.bind("s1", "w1", "alice", False)
+        r.set_table_moniker("s1", "room-1")
+        r.set_table_moniker("s1", "room-2")
+        self.assertEqual(r.get_table_moniker("s1"), "room-2")
+
+    def test_set_table_moniker_unknown_session(self) -> None:
+        r = SessionRegistry()
+        self.assertIsNone(r.set_table_moniker("nope", "room-1"))
+        self.assertIsNone(r.get_table_moniker("nope"))
+
+    def test_add_remove_spectator(self) -> None:
+        r = SessionRegistry()
+        r.bind("s1", "w1", "alice", False)
+        r.add_spectator("s1", "room-1")
+        self.assertEqual(r.get_table_observers("room-1"), {"s1"})
+        self.assertEqual(r.get_by_session("s1").spectator_of, {"room-1"})
+        r.remove_spectator("s1", "room-1")
+        self.assertEqual(r.get_table_observers("room-1"), set())
+        self.assertEqual(r.get_by_session("s1").spectator_of, set())
+
+    def test_add_spectator_multi_table(self) -> None:
+        """A single session can spectate multiple tables concurrently."""
+        r = SessionRegistry()
+        r.bind("s1", "w1", "alice", False)
+        r.add_spectator("s1", "room-1")
+        r.add_spectator("s1", "room-2")
+        self.assertEqual(r.get_table_observers("room-1"), {"s1"})
+        self.assertEqual(r.get_table_observers("room-2"), {"s1"})
+        self.assertEqual(r.get_by_session("s1").spectator_of, {"room-1", "room-2"})
+
+    def test_add_spectator_multi_session(self) -> None:
+        r = SessionRegistry()
+        r.bind("s1", "w1", "alice", False)
+        r.bind("s2", "w2", "bob", False)
+        r.add_spectator("s1", "room-1")
+        r.add_spectator("s2", "room-1")
+        self.assertEqual(r.get_table_observers("room-1"), {"s1", "s2"})
+
+    def test_add_spectator_idempotent(self) -> None:
+        r = SessionRegistry()
+        r.bind("s1", "w1", "alice", False)
+        r.add_spectator("s1", "room-1")
+        r.add_spectator("s1", "room-1")
+        self.assertEqual(r.get_table_observers("room-1"), {"s1"})
+
+    def test_remove_spectator_idempotent(self) -> None:
+        r = SessionRegistry()
+        r.bind("s1", "w1", "alice", False)
+        r.remove_spectator("s1", "room-1")
+        self.assertEqual(r.get_by_session("s1").spectator_of, set())
+        self.assertEqual(r.get_table_observers("room-1"), set())
+
+    def test_remove_spectator_unknown_session(self) -> None:
+        r = SessionRegistry()
+        self.assertIsNone(r.remove_spectator("nope", "room-1"))
+
+    def test_get_table_player_count(self) -> None:
+        r = SessionRegistry()
+        r.bind("s1", "w1", "alice", False)
+        r.bind("s2", "w2", "bob", False)
+        r.bind("s3", "w3", "carol", False)
+        r.set_table_moniker("s1", "room-1")
+        r.set_table_moniker("s2", "room-1")
+        r.set_table_moniker("s3", "room-2")
+        self.assertEqual(r.get_table_player_count("room-1"), 2)
+        self.assertEqual(r.get_table_player_count("room-2"), 1)
+        self.assertEqual(r.get_table_player_count("room-3"), 0)
+
+    def test_get_table_player_count_excludes_spectators(self) -> None:
+        r = SessionRegistry()
+        r.bind("s1", "w1", "alice", False)
+        r.add_spectator("s1", "room-1")
+        self.assertEqual(r.get_table_player_count("room-1"), 0)
+
+    def test_drop_purges_spectator_index(self) -> None:
+        r = SessionRegistry()
+        r.bind("s1", "w1", "alice", False)
+        r.add_spectator("s1", "room-1")
+        r.drop("s1")
+        self.assertEqual(r.get_table_observers("room-1"), set())
+        self.assertEqual(len(r), 0)
+
+    def test_drop_purges_all_spectated_tables(self) -> None:
+        """Dropping a session removes it from every table it was spectating."""
+        r = SessionRegistry()
+        r.bind("s1", "w1", "alice", False)
+        r.add_spectator("s1", "room-1")
+        r.add_spectator("s1", "room-2")
+        r.drop("s1")
+        self.assertEqual(r.get_table_observers("room-1"), set())
+        self.assertEqual(r.get_table_observers("room-2"), set())
+
+    def test_bind_initial_spectator_of(self) -> None:
+        """``bind`` accepts ``spectator_of=`` to seed the spectator set."""
+        r = SessionRegistry()
+        r.bind("s1", "w1", "alice", False, spectator_of={"room-1", "room-2"})
+        self.assertEqual(r.get_table_observers("room-1"), {"s1"})
+        self.assertEqual(r.get_table_observers("room-2"), {"s1"})
+
+    def test_bind_initial_table_moniker(self) -> None:
+        """``bind`` accepts ``table_moniker=`` to seed the seated table."""
+        r = SessionRegistry()
+        r.bind("s1", "w1", "alice", False, table_moniker="room-1")
+        self.assertEqual(r.get_table_moniker("s1"), "room-1")
+
 
 class TestBEDWiring(unittest.TestCase):
     """BED main flow: AuthService is wired for non-DefaultRouter + DB JSON flags."""
