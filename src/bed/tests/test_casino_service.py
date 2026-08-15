@@ -4,8 +4,8 @@ Mirrors the structure of ``test_bank_service.py``:
 - ``_check_access`` direct pipeline tests (gates 1-5)
 - token-aware authorization (revoked / expired / invalid wire tokens)
 - per-handler smoke tests for representative ops
-- ``bbsengine6.casino.access()`` policy integration (the per-op rules
-  in :mod:`bbsengine6.casino` are the single source of truth)
+- ``casino.access.access()`` policy integration (the per-op rules
+  in :mod:`casino.access` are the single source of truth)
 
 All tests run without a live DB -- the service classes that touch
 the DB (``casino.services.game``, ``casino.services.table``, etc.)
@@ -210,7 +210,7 @@ def test_check_access_returns_not_authenticated_for_unbound_ws():
 
     state, err = check_access(svc, _make_websocket("ws-fresh"), "list_tables", {"type": "list_tables"})
     # list_tables is a public op -- even an unbound ws should be allowed
-    # through the gate; the policy in bbsengine6.casino.access() returns
+    # through the gate; the policy in casino.access.access() returns
     # True for list_tables regardless of session.
     assert state is None
     assert err is None  # public op allowed without session
@@ -236,7 +236,7 @@ def test_check_access_returns_not_authenticated_for_protected_op():
 
 
 def test_check_access_lets_bound_session_through_policy():
-    """A bound session passes the gate when ``bbsengine6.casino.access``
+    """A bound session passes the gate when ``casino.access.access``
     says yes.
     """
     from casino.api._auth import check_access
@@ -727,14 +727,14 @@ def test_slot_service_handler_slot_history_self_only():
 
 
 # ---------------------------------------------------------------------
-# bbsengine6.casino.access() policy integration
+# casino.access.access() policy integration
 
 
 def test_casino_access_returns_true_for_list_tables_no_session():
-    """``bbsengine6.casino.access`` returns True for ``list_tables``
+    """``casino.access.access`` returns True for ``list_tables``
     regardless of session (public op).
     """
-    from bbsengine6.casino import access
+    from casino.access import access
 
     args = argparse.Namespace()
     assert access(args, "list_tables", session=None, message={}) is True
@@ -742,7 +742,7 @@ def test_casino_access_returns_true_for_list_tables_no_session():
 
 def test_casino_access_denies_unknown_op():
     """An unknown op verb always denies."""
-    from bbsengine6.casino import access
+    from casino.access import access
 
     args = argparse.Namespace()
     state = MagicMock()
@@ -756,7 +756,7 @@ def test_casino_access_uses_claim_derived_moniker_when_present():
     """Claim-derived moniker wins over session moniker when claims
     are populated by a verified token.
     """
-    from bbsengine6.casino import access
+    from casino.access import access
 
     args = argparse.Namespace()
     state = MagicMock()
