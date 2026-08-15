@@ -99,6 +99,36 @@ def _import_tool():
     return importlib.reload(bank_mod)
 
 
+def _make_inputchoice_mock(return_value: str = "Q"):
+    """Build a side_effect for ``tool.io.inputchoice`` with ``help=`` support.
+
+    Mirrors the KEY_F1 path in
+    :func:`bbsengine6.io.inputchoice.inputchoice`: when a callable
+    ``help=`` kwarg is supplied, the fake invokes it before returning
+    ``return_value``. The returned ``calls`` list records every
+    invocation as a dict so tests can assert on the kwargs the bank
+    menu passed (e.g. that ``help=tool._render_bank_menu`` was wired).
+
+    Returns:
+        ``(side_effect, calls)`` tuple. ``calls`` is a list of dicts
+        keyed by ``prompt``, ``valid``, ``default``, plus any kwargs
+        forwarded by the bank menu.
+    """
+    calls: List[Dict[str, Any]] = []
+    def _side_effect(prompt, valid, default, **kwargs):
+        calls.append({
+            "prompt": prompt,
+            "valid": valid,
+            "default": default,
+            **kwargs,
+        })
+        help_cb = kwargs.get("help")
+        if callable(help_cb):
+            help_cb(**kwargs)
+        return return_value
+    return _side_effect, calls
+
+
 # ---------------------------------------------------------------------
 # buildargs
 
@@ -796,9 +826,60 @@ def test_main_quit_exits_cleanly():
     args = _make_args(moniker="alice")
     with patch.object(tool, "_resolve_moniker", return_value="alice"), \
          patch.object(tool.io, "inputchoice", return_value="Q"), \
-         patch.object(tool, "_bank_service") as bs:
+         patch.object(tool, "_bank_service") as bs, \
+         patch.object(tool.bottombar, "setbottombar"), \
+         patch.object(tool.bbsengine6_screen, "init"), \
+         patch.object(tool.io, "echo"):
         tool.main_with_args(args)
     bs.assert_not_called()
+
+
+def test_menu_inputchoice_help_kwarg_wired_and_outputs_menu():
+    """The bank menu passes ``help=_render_bank_menu`` to ``io.inputchoice``,
+    and invoking that help (simulating KEY_F1) reprints the menu options.
+
+    The mock invokes the help callable on every inputchoice call --
+    matching the real inputchoice's KEY_F1 path. With the menu loop
+    iterating exactly once (mock returns ``Q``), the menu is rendered
+    twice: once by the explicit ``_render_bank_menu(args=args)`` call
+    above the loop, and once by the help kwarg invocation inside the
+    mock. Each description must therefore appear in the captured
+    ``io.echo`` calls at least twice.
+    """
+    tool = _import_tool()
+    args = _make_args(moniker="alice")
+
+    fake, calls = _make_inputchoice_mock("Q")
+    with patch.object(tool, "_resolve_moniker", return_value="alice"), \
+         patch.object(tool.io, "inputchoice", side_effect=fake), \
+         patch.object(tool.io, "echo") as echo, \
+         patch.object(tool.bottombar, "setbottombar"), \
+         patch.object(tool.bbsengine6_screen, "init"):
+        tool.main_with_args(args)
+
+    # Wiring assertion: bank menu forwarded help=_render_bank_menu.
+    assert calls, "io.inputchoice was not called"
+    assert calls[0].get("help") is tool._render_bank_menu
+
+    # Behavior assertion: each description appears >= 2 times.
+    # Once from the initial _render_bank_menu(args=args) call above
+    # the loop, and once from the help kwarg invocation inside the
+    # mock (simulating KEY_F1).
+    echo_blob = "\n".join(str(c) for c in echo.call_args_list)
+    for desc in (
+        "show current balance",
+        "credit funds to this account",
+        "debit funds from this account",
+        "transfer funds to another member",
+        "show pending transfers",
+        "show transaction history",
+        "list every account",
+        "quit the bank menu",
+    ):
+        assert echo_blob.count(desc) >= 2, (
+            f"description {desc!r} printed {echo_blob.count(desc)} times; "
+            f"expected >= 2 (initial render + F1 help)"
+        )
 
 
 def test_main_keyboard_interrupt_swallowed():
@@ -807,7 +888,9 @@ def test_main_keyboard_interrupt_swallowed():
     args = _make_args(moniker="alice")
     with patch.object(tool, "_resolve_moniker", return_value="alice"), \
          patch.object(tool.io, "inputchoice", side_effect=KeyboardInterrupt), \
-         patch.object(tool.io, "echo") as echo:
+         patch.object(tool.io, "echo") as echo, \
+         patch.object(tool.bottombar, "setbottombar"), \
+         patch.object(tool.bbsengine6_screen, "init"):
         tool.main_with_args(args)
     assert any("*INTR*" in c.args[0] for c in echo.call_args_list)
 
@@ -817,7 +900,9 @@ def test_main_eof_swallowed():
     args = _make_args(moniker="alice")
     with patch.object(tool, "_resolve_moniker", return_value="alice"), \
          patch.object(tool.io, "inputchoice", side_effect=EOFError), \
-         patch.object(tool.io, "echo") as echo:
+         patch.object(tool.io, "echo") as echo, \
+         patch.object(tool.bottombar, "setbottombar"), \
+         patch.object(tool.bbsengine6_screen, "init"):
         tool.main_with_args(args)
     assert any("*EOF*" in c.args[0] for c in echo.call_args_list)
 
@@ -1753,7 +1838,10 @@ def test_main_with_args_bed_mode_calls_authenticate_ws(tmp_path):
              tool, "_authenticate_ws", return_value=True
          ) as authn, \
          patch.object(tool, "_resolve_moniker", return_value="alice"), \
-         patch.object(tool.io, "inputchoice", return_value="Q"):
+         patch.object(tool.io, "inputchoice", return_value="Q"), \
+         patch.object(tool.bottombar, "setbottombar"), \
+         patch.object(tool.bbsengine6_screen, "init"), \
+         patch.object(tool.io, "echo"):
         tool.main_with_args(args)
     authn.assert_called_once_with(args)
 
@@ -1771,7 +1859,10 @@ def test_main_with_args_bed_mode_aborts_when_authenticate_ws_fails(
     with patch.object(tool._routing, "select_backend", return_value="bed"), \
          patch.object(tool, "_authenticate_ws", return_value=False), \
          patch.object(tool, "_resolve_moniker") as rm, \
-         patch.object(tool.io, "inputchoice") as ic:
+         patch.object(tool.io, "inputchoice") as ic, \
+         patch.object(tool.bottombar, "setbottombar"), \
+         patch.object(tool.bbsengine6_screen, "init"), \
+         patch.object(tool.io, "echo"):
         tool.main_with_args(args)
     rm.assert_not_called()
     ic.assert_not_called()
@@ -1786,7 +1877,10 @@ def test_main_with_args_direct_mode_skips_authenticate_ws():
              tool, "_authenticate_ws"
          ) as authn, \
          patch.object(tool, "_resolve_moniker", return_value="alice"), \
-         patch.object(tool.io, "inputchoice", return_value="Q"):
+         patch.object(tool.io, "inputchoice", return_value="Q"), \
+         patch.object(tool.bottombar, "setbottombar"), \
+         patch.object(tool.bbsengine6_screen, "init"), \
+         patch.object(tool.io, "echo"):
         tool.main_with_args(args)
     authn.assert_not_called()
 
@@ -1881,3 +1975,607 @@ def test_facade_passes_empty_token_when_unresolved(tmp_path):
          ):
         facade = tool._BedBankFacade(args)
     assert facade._client._token == ""
+
+
+# ---------------------------------------------------------------------
+# bottombar fragments
+#
+# Tests for the bed.bank bottombar wiring: left side "bed.bank (<v>)",
+# moniker+balance fragment (with dirty-flag re-query), and host:port /
+# direct fragment. The four module-level globals
+# ``_current_args / _current_moniker / _current_balance /
+# _balance_dirty`` are mutated by menu() and the bank_* callables, so
+# every test in this section saves them in a fixture and restores
+# them afterwards so test bleed doesn't poison the next run.
+
+
+@pytest.fixture
+def _save_bank_state():
+    tool = _import_tool()
+    saved = (
+        tool._current_args,
+        tool._current_moniker,
+        tool._current_balance,
+        tool._balance_dirty,
+    )
+    yield tool
+    (
+        tool._current_args,
+        tool._current_moniker,
+        tool._current_balance,
+        tool._balance_dirty,
+    ) = saved
+
+
+def _set_state(
+    tool,
+    *,
+    args=None,
+    moniker="",
+    balance=None,
+    dirty=True,
+):
+    """Write the four module-level bottombar state globals in one shot."""
+    tool._current_args = args
+    tool._current_moniker = moniker
+    tool._current_balance = balance
+    tool._balance_dirty = dirty
+
+
+class TestBankBottombarFragments:
+    """Behavior of the two bottombar fragments in isolation."""
+
+    def test_moniker_balance_fragment_renders_cached_value(
+        self, _save_bank_state
+    ):
+        tool = _save_bank_state
+        _set_state(
+            tool,
+            args=_make_args(moniker="alice"),
+            moniker="alice",
+            balance=100,
+            dirty=False,
+        )
+        assert tool._bank_moniker_balance_fragment() == "alice: 100"
+
+    def test_moniker_balance_fragment_renders_unknown_when_balance_none(
+        self, _save_bank_state
+    ):
+        tool = _save_bank_state
+        _set_state(
+            tool,
+            args=_make_args(moniker="alice"),
+            moniker="alice",
+            balance=None,
+            dirty=False,
+        )
+        assert tool._bank_moniker_balance_fragment() == "alice: ?"
+
+    def test_moniker_balance_fragment_returns_empty_when_no_moniker(
+        self, _save_bank_state
+    ):
+        tool = _save_bank_state
+        _set_state(tool, args=_make_args(), moniker="", dirty=False)
+        assert tool._bank_moniker_balance_fragment() == ""
+
+    def test_moniker_balance_fragment_refetches_when_dirty(
+        self, _save_bank_state
+    ):
+        """A dirty fragment hits the bank service on the next render."""
+        tool = _save_bank_state
+        args = _make_args(moniker="alice")
+        _set_state(
+            tool, args=args, moniker="alice", balance=42, dirty=True
+        )
+        bank = _make_bank_mock(get_balance=MagicMock(return_value=150))
+        with patch.object(tool, "_bank_service", return_value=bank):
+            rendered = tool._bank_moniker_balance_fragment()
+        assert rendered == "alice: 150"
+        assert tool._current_balance == 150
+        assert tool._balance_dirty is False
+        bank.get_balance.assert_called_once_with("alice")
+
+    def test_moniker_balance_fragment_swallows_refetch_failure(
+        self, _save_bank_state
+    ):
+        """If the re-query raises, the fragment returns the last known
+        balance rather than crashing the render."""
+        tool = _save_bank_state
+        _set_state(
+            tool,
+            args=_make_args(moniker="alice"),
+            moniker="alice",
+            balance=42,
+            dirty=True,
+        )
+        with patch.object(
+            tool, "_bank_service",
+            side_effect=RuntimeError("db down"),
+        ):
+            rendered = tool._bank_moniker_balance_fragment()
+        assert rendered == "alice: 42"
+
+    def test_moniker_balance_fragment_no_refetch_when_args_unbound(
+        self, _save_bank_state
+    ):
+        """Before menu() entry the args slot is None, so the fragment
+        can't hit the DB -- it returns 'alice: ?' without raising."""
+        tool = _save_bank_state
+        _set_state(
+            tool, args=None, moniker="alice", balance=None, dirty=True
+        )
+        assert tool._bank_moniker_balance_fragment() == "alice: ?"
+
+    def test_host_fragment_bed_mode_shows_host_port(self, _save_bank_state):
+        tool = _save_bank_state
+        args = _make_args(bed_host="h", bed_port=9999)
+        args._backend = "bed"
+        _set_state(tool, args=args, moniker="alice", dirty=False)
+        assert tool._bank_host_fragment() == "h:9999"
+
+    def test_host_fragment_direct_mode_shows_direct(
+        self, _save_bank_state
+    ):
+        tool = _save_bank_state
+        args = _make_args(bed_host="h", bed_port=9999)
+        args._backend = "direct"
+        _set_state(tool, args=args, moniker="alice", dirty=False)
+        assert tool._bank_host_fragment() == "direct"
+
+    def test_host_fragment_uses_defaults_when_attrs_missing(
+        self, _save_bank_state
+    ):
+        """A bare Namespace without bed_host/bed_port/_backend falls
+        back to localhost:8765 (the routing-layer defaults)."""
+        tool = _save_bank_state
+        args = argparse.Namespace()
+        _set_state(tool, args=args, moniker="alice", dirty=False)
+        assert tool._bank_host_fragment() == "localhost:8765"
+
+    def test_host_fragment_returns_empty_when_args_unbound(
+        self, _save_bank_state
+    ):
+        tool = _save_bank_state
+        _set_state(tool, args=None, moniker="alice", dirty=False)
+        assert tool._bank_host_fragment() == ""
+
+
+class TestBankBalanceCacheWiring:
+    """Verify each bank_* op touches the cache correctly."""
+
+    def test_bank_balance_caches_value_and_marks_clean(
+        self, _save_bank_state
+    ):
+        tool = _save_bank_state
+        args = _make_args(moniker="alice")
+        _set_state(tool, args=args, moniker="alice", dirty=True)
+        bank = _make_bank_mock(get_balance=MagicMock(return_value=100))
+        with patch.object(tool, "_bank_service", return_value=bank), \
+             patch.object(tool.io, "echo"):
+            tool.bank_balance(args, "alice")
+        assert tool._current_balance == 100
+        assert tool._balance_dirty is False
+
+    def test_bank_balance_failure_marks_dirty(self, _save_bank_state):
+        tool = _save_bank_state
+        args = _make_args(moniker="alice")
+        _set_state(tool, args=args, moniker="alice", dirty=False)
+        bank = _make_bank_mock(get_balance=MagicMock(side_effect=RuntimeError("db")))
+        with patch.object(tool, "_bank_service", return_value=bank), \
+             patch.object(tool.io, "echo"):
+            with pytest.raises(RuntimeError):
+                tool.bank_balance(args, "alice")
+        assert tool._balance_dirty is True
+
+    def test_bank_balance_access_denied_marks_dirty(
+        self, _save_bank_state
+    ):
+        tool = _save_bank_state
+        args = _make_args(moniker="alice")
+        _set_state(tool, args=args, moniker="alice", dirty=False)
+        with patch.object(tool, "_check_access", return_value=False), \
+             patch.object(tool.io, "echo"):
+            ok = tool.bank_balance(args, "alice")
+        assert ok is False
+        assert tool._balance_dirty is True
+
+    def test_bank_add_success_caches_new_balance(
+        self, _save_bank_state
+    ):
+        tool = _save_bank_state
+        args = _make_args(moniker="alice")
+        _set_state(tool, args=args, moniker="alice", dirty=True)
+        bank = _make_bank_mock(
+            add_funds=MagicMock(
+                return_value={
+                    "success": True,
+                    "new_balance": 150,
+                    "message": "added",
+                }
+            )
+        )
+        with patch.object(tool.io, "inputinteger", return_value=50), \
+             patch.object(tool, "_bank_service", return_value=bank), \
+             patch.object(tool.io, "echo"):
+            tool.bank_add(args, "alice")
+        assert tool._current_balance == 150
+        assert tool._balance_dirty is False
+
+    def test_bank_add_failure_marks_dirty(self, _save_bank_state):
+        tool = _save_bank_state
+        args = _make_args(moniker="alice")
+        _set_state(tool, args=args, moniker="alice", dirty=False)
+        bank = _make_bank_mock(
+            add_funds=MagicMock(
+                return_value={"success": False, "message": "nope"}
+            )
+        )
+        with patch.object(tool.io, "inputinteger", return_value=50), \
+             patch.object(tool, "_bank_service", return_value=bank), \
+             patch.object(tool.io, "echo"):
+            tool.bank_add(args, "alice")
+        assert tool._balance_dirty is True
+
+    def test_bank_add_invalid_amount_marks_dirty(
+        self, _save_bank_state
+    ):
+        tool = _save_bank_state
+        args = _make_args(moniker="alice")
+        _set_state(tool, args=args, moniker="alice", dirty=False)
+        with patch.object(tool.io, "inputinteger", return_value=0), \
+             patch.object(tool.io, "echo"):
+            ok = tool.bank_add(args, "alice")
+        assert ok is False
+        assert tool._balance_dirty is True
+
+    def test_bank_remove_success_caches_new_balance(
+        self, _save_bank_state
+    ):
+        tool = _save_bank_state
+        args = _make_args(moniker="alice")
+        _set_state(tool, args=args, moniker="alice", dirty=True)
+        bank = _make_bank_mock(
+            remove_funds=MagicMock(
+                return_value={
+                    "success": True,
+                    "new_balance": 75,
+                    "message": "removed",
+                }
+            )
+        )
+        with patch.object(tool.io, "inputinteger", return_value=25), \
+             patch.object(tool, "_bank_service", return_value=bank), \
+             patch.object(tool.io, "echo"):
+            tool.bank_remove(args, "alice")
+        assert tool._current_balance == 75
+        assert tool._balance_dirty is False
+
+    def test_bank_transfer_success_marks_dirty(self, _save_bank_state):
+        """A transfer between two accounts changes our balance in an
+        unknown direction (we could be the source or the recipient),
+        so we mark dirty and let the next render re-query."""
+        tool = _save_bank_state
+        args = _make_args(moniker="alice")
+        _set_state(tool, args=args, moniker="alice", balance=100, dirty=False)
+        bank = _make_bank_mock(
+            transfer=MagicMock(
+                return_value={"success": True, "message": "ok", "transfer_id": 7}
+            )
+        )
+        with patch.object(tool.io, "inputstring", return_value="bob"), \
+             patch.object(tool.io, "inputinteger", return_value=10), \
+             patch.object(tool, "_bank_service", return_value=bank), \
+             patch.object(tool.io, "echo"):
+            tool.bank_transfer(args, "alice")
+        assert tool._balance_dirty is True
+
+    def test_bank_approve_success_marks_dirty(self, _save_bank_state):
+        tool = _save_bank_state
+        args = _make_args(moniker="alice")
+        _set_state(tool, args=args, moniker="alice", balance=100, dirty=False)
+        bank = _make_bank_mock(
+            approve_transfer=MagicMock(
+                return_value={"success": True, "message": "ok", "transfer_id": 7}
+            )
+        )
+        with patch.object(tool.io, "inputinteger", return_value=7), \
+             patch.object(tool, "_bank_service", return_value=bank), \
+             patch.object(tool.io, "echo"):
+            tool.bank_approve(args, "alice")
+        assert tool._balance_dirty is True
+
+
+class TestBankMenuBottombarLifecycle:
+    """End-to-end wiring through ``menu()``."""
+
+    def test_menu_registers_fragments_on_entry(self):
+        tool = _import_tool()
+        args = _make_args(moniker="alice")
+        saved = (
+            tool._current_args,
+            tool._current_moniker,
+            tool._current_balance,
+            tool._balance_dirty,
+        )
+        try:
+            args._backend = "bed"
+            with patch.object(tool, "_resolve_moniker", return_value="alice"), \
+                 patch.object(tool.io, "inputchoice", return_value="Q"), \
+                 patch.object(
+                     tool.bottombar, "register_bottombar_fragment"
+                 ) as reg, \
+                 patch.object(tool.bottombar, "setbottombar"), \
+                 patch.object(tool.bbsengine6_screen, "init"), \
+                 patch.object(tool.io, "echo"), \
+                 patch.object(tool.io, "echo"):
+                tool.menu(args, "alice")
+            ids = [c.args[0] for c in reg.call_args_list]
+            assert tool._bank_host_fragment in ids
+            assert tool._bank_moniker_balance_fragment in ids
+            assert ids.index(tool._bank_host_fragment) < (
+                ids.index(tool._bank_moniker_balance_fragment)
+            )
+        finally:
+            (
+                tool._current_args,
+                tool._current_moniker,
+                tool._current_balance,
+                tool._balance_dirty,
+            ) = saved
+
+    def test_menu_unregisters_fragments_on_exit(self):
+        tool = _import_tool()
+        args = _make_args(moniker="alice")
+        saved = (
+            tool._current_args,
+            tool._current_moniker,
+            tool._current_balance,
+            tool._balance_dirty,
+        )
+        try:
+            args._backend = "bed"
+            with patch.object(tool, "_resolve_moniker", return_value="alice"), \
+                 patch.object(tool.io, "inputchoice", return_value="Q"), \
+                 patch.object(
+                     tool.bottombar, "unregister_bottombar_fragment"
+                 ) as unreg, \
+                 patch.object(tool.bottombar, "setbottombar"), \
+                 patch.object(tool.bbsengine6_screen, "init"), \
+                 patch.object(tool.io, "echo"), \
+                 patch.object(tool.io, "echo"):
+                tool.menu(args, "alice")
+            ids = [c.args[0] for c in unreg.call_args_list]
+            assert tool._bank_moniker_balance_fragment in ids
+            assert tool._bank_host_fragment in ids
+        finally:
+            (
+                tool._current_args,
+                tool._current_moniker,
+                tool._current_balance,
+                tool._balance_dirty,
+            ) = saved
+
+    def test_menu_unregisters_fragments_on_keyboard_interrupt(self):
+        tool = _import_tool()
+        args = _make_args(moniker="alice")
+        saved = (
+            tool._current_args,
+            tool._current_moniker,
+            tool._current_balance,
+            tool._balance_dirty,
+        )
+        try:
+            args._backend = "bed"
+            with patch.object(tool, "_resolve_moniker", return_value="alice"), \
+                 patch.object(
+                     tool.io, "inputchoice",
+                     side_effect=KeyboardInterrupt,
+                 ), \
+                 patch.object(
+                     tool.bottombar, "unregister_bottombar_fragment"
+                 ) as unreg, \
+                 patch.object(tool.bottombar, "setbottombar"), \
+                 patch.object(tool.bbsengine6_screen, "init"), \
+                 patch.object(tool.io, "echo"), \
+                 patch.object(tool.io, "echo"):
+                try:
+                    tool.menu(args, "alice")
+                except KeyboardInterrupt:
+                    pass
+            ids = [c.args[0] for c in unreg.call_args_list]
+            assert tool._bank_moniker_balance_fragment in ids
+            assert tool._bank_host_fragment in ids
+        finally:
+            (
+                tool._current_args,
+                tool._current_moniker,
+                tool._current_balance,
+                tool._balance_dirty,
+            ) = saved
+
+    def test_menu_unregisters_fragments_on_eof(self):
+        tool = _import_tool()
+        args = _make_args(moniker="alice")
+        saved = (
+            tool._current_args,
+            tool._current_moniker,
+            tool._current_balance,
+            tool._balance_dirty,
+        )
+        try:
+            args._backend = "bed"
+            with patch.object(tool, "_resolve_moniker", return_value="alice"), \
+                 patch.object(tool.io, "inputchoice", side_effect=EOFError), \
+                 patch.object(
+                     tool.bottombar, "unregister_bottombar_fragment"
+                 ) as unreg, \
+                 patch.object(tool.bottombar, "setbottombar"), \
+                 patch.object(tool.bbsengine6_screen, "init"), \
+                 patch.object(tool.io, "echo"), \
+                 patch.object(tool.io, "echo"):
+                try:
+                    tool.menu(args, "alice")
+                except EOFError:
+                    pass
+            ids = [c.args[0] for c in unreg.call_args_list]
+            assert tool._bank_moniker_balance_fragment in ids
+            assert tool._bank_host_fragment in ids
+        finally:
+            (
+                tool._current_args,
+                tool._current_moniker,
+                tool._current_balance,
+                tool._balance_dirty,
+            ) = saved
+
+    def test_menu_left_side_format_is_bed_bank_version(self):
+        tool = _import_tool()
+        args = _make_args(moniker="alice")
+        saved = (
+            tool._current_args,
+            tool._current_moniker,
+            tool._current_balance,
+            tool._balance_dirty,
+        )
+        try:
+            args._backend = "bed"
+            from bed import _version as bed_version
+            with patch.object(tool, "_resolve_moniker", return_value="alice"), \
+                 patch.object(tool.io, "inputchoice", return_value="Q"), \
+                 patch.object(tool.bottombar, "setbottombar") as sb, \
+                 patch.object(tool.bbsengine6_screen, "init"), \
+                 patch.object(tool.io, "echo"), \
+                 patch.object(tool.io, "echo"):
+                tool.menu(args, "alice")
+            assert sb.call_args_list
+            first_left = sb.call_args_list[0].args[1]
+            assert first_left.startswith("bed.bank (")
+            assert first_left.endswith(")")
+            assert bed_version.__version__ in first_left
+        finally:
+            (
+                tool._current_args,
+                tool._current_moniker,
+                tool._current_balance,
+                tool._balance_dirty,
+            ) = saved
+
+    def test_setbottombar_recalled_after_each_subcommand(self):
+        """The user wants a redraw after every subcommand so the
+        bottom bar reflects the new balance. The first setbottombar
+        call is at menu entry; subsequent calls follow each non-Q
+        subcommand. The cleanup render after exit goes through
+        ``io.echo`` (which erases the bottom row), not
+        ``setbottombar``."""
+        tool = _import_tool()
+        args = _make_args(moniker="alice")
+        saved = (
+            tool._current_args,
+            tool._current_moniker,
+            tool._current_balance,
+            tool._balance_dirty,
+        )
+        try:
+            args._backend = "bed"
+            with patch.object(tool, "_resolve_moniker", return_value="alice"), \
+                 patch.object(
+                     tool.io, "inputchoice",
+                     side_effect=["B", "A", "Q"],
+                 ), \
+                 patch.object(
+                     tool, "bank_balance",
+                     return_value=True,
+                 ), \
+                 patch.object(
+                     tool.io, "inputinteger", return_value=10,
+                 ), \
+                 patch.object(
+                     tool, "bank_add", return_value=True,
+                 ), \
+                 patch.object(tool.bottombar, "setbottombar") as sb, \
+                 patch.object(tool.bbsengine6_screen, "init"), \
+                 patch.object(tool.io, "echo") as clear_echo:
+                tool.menu(args, "alice")
+            assert len(sb.call_args_list) == 3
+            for c in sb.call_args_list:
+                assert c.args[1].startswith("bed.bank (")
+            assert clear_echo.called
+            clear_arg = clear_echo.call_args.args[0]
+            assert "{savecursor}" in clear_arg
+            assert "{el}" in clear_arg
+            assert "{reset}" in clear_arg
+            assert "{restorecursor}" in clear_arg
+        finally:
+            (
+                tool._current_args,
+                tool._current_moniker,
+                tool._current_balance,
+                tool._balance_dirty,
+            ) = saved
+
+    def test_menu_calls_screen_init_on_entry(self):
+        """``io.screen.init()`` must run before setbottombar so the
+        scroll region (top/bottom margins) is in effect when the
+        bar is drawn."""
+        tool = _import_tool()
+        args = _make_args(moniker="alice")
+        saved = (
+            tool._current_args,
+            tool._current_moniker,
+            tool._current_balance,
+            tool._balance_dirty,
+            tool._screen_initialized,
+        )
+        try:
+            args._backend = "bed"
+            with patch.object(tool, "_resolve_moniker", return_value="alice"), \
+                 patch.object(tool.io, "inputchoice", return_value="Q"), \
+                 patch.object(tool.bbsengine6_screen, "init") as init, \
+                 patch.object(tool.bottombar, "setbottombar"), \
+                 patch.object(tool.io, "echo"), \
+                 patch.object(tool.io, "echo"):
+                tool.menu(args, "alice")
+            init.assert_called_once_with()
+        finally:
+            (
+                tool._current_args,
+                tool._current_moniker,
+                tool._current_balance,
+                tool._balance_dirty,
+                tool._screen_initialized,
+            ) = saved
+
+    def test_menu_screen_init_only_called_once_across_invocations(self):
+        """Calling ``menu()`` twice in the same process must not
+        re-init the screen -- ``screen.init()`` writes ANSI escape
+        sequences every time it runs, which is wasteful and visible
+        on slower terminals."""
+        tool = _import_tool()
+        args = _make_args(moniker="alice")
+        saved = (
+            tool._current_args,
+            tool._current_moniker,
+            tool._current_balance,
+            tool._balance_dirty,
+            tool._screen_initialized,
+        )
+        try:
+            args._backend = "bed"
+            with patch.object(tool, "_resolve_moniker", return_value="alice"), \
+                 patch.object(tool.io, "inputchoice", return_value="Q"), \
+                 patch.object(tool.bbsengine6_screen, "init") as init, \
+                 patch.object(tool.bottombar, "setbottombar"), \
+                 patch.object(tool.io, "echo"), \
+                 patch.object(tool.io, "echo"):
+                tool.menu(args, "alice")
+                tool.menu(args, "alice")
+            init.assert_called_once_with()
+        finally:
+            (
+                tool._current_args,
+                tool._current_moniker,
+                tool._current_balance,
+                tool._balance_dirty,
+                tool._screen_initialized,
+            ) = saved
+

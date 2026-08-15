@@ -30,12 +30,36 @@ import os
 from types import SimpleNamespace
 from typing import Any, Dict, List
 
-from bbsengine6 import io, member, database
+from bbsengine6 import io, member, database, util, bottombar
 from bbsengine6.bank import BankService
 from bbsengine6.bank import access as _bank_access
 
+from bed import _version as bed_version
 from bed.tools import _routing
 from bed.tools import _token
+
+from bbsengine6.io import screen as bbsengine6_screen
+from bbsengine6.io import terminal as bbsengine6_terminal
+
+
+# Module-level state read by the bottombar fragments. See
+# _bank_moniker_balance_fragment / _bank_host_fragment below. The
+# fragments are registered on menu() entry and unregistered on exit;
+# in between, bank_balance/bank_add/bank_remove write the cache and
+# bank_transfer_*/bank_approve/bank_reject mark it dirty.
+_current_args: Any = None
+_current_moniker: str = ""
+_current_balance: int | None = None
+_balance_dirty: bool = True
+
+
+# Mirrors the pattern in bbsengine6.ed.common.ui._screen_initialized:
+# call io.screen.init() exactly once per process so the scroll region
+# (top/bottom margins) is set before any setbottombar() call lands.
+# setbottombar() positions text on ``terminal.lines()`` -- without a
+# scroll region the bottombar would scroll off the visible area when
+# the user types past the bottom of the screen.
+_screen_initialized: bool = False
 
 
 def buildargs(parentparser: argparse.ArgumentParser) -> None:
@@ -500,13 +524,32 @@ def _bank_service(args: Any) -> Any:
     return BankService(args)
 
 
+def _cache_balance(value: int) -> None:
+    """Write a fresh balance into the bottombar cache and mark it clean."""
+    global _current_balance, _balance_dirty
+    _current_balance = int(value)
+    _balance_dirty = False
+
+
+def _mark_balance_dirty() -> None:
+    """Force the balance fragment to re-query on the next render."""
+    global _balance_dirty
+    _balance_dirty = True
+
+
 def bank_balance(args, moniker: str, **kwargs) -> bool:
     if not _check_access(
         args, "balance", session_moniker=moniker, moniker=moniker
     ):
+        _mark_balance_dirty()
         return False
     svc = _bank_service(args)
-    balance = svc.get_balance(moniker)
+    try:
+        balance = int(svc.get_balance(moniker))
+    except Exception:
+        _mark_balance_dirty()
+        raise
+    _cache_balance(balance)
     io.echo(f"{moniker}: {balance}")
     return True
 
@@ -515,16 +558,20 @@ def bank_add(args, moniker: str, **kwargs) -> bool:
     amount = io.inputinteger("Amount to add: ")
     if amount is None or amount <= 0:
         io.echo("Invalid amount.", level="error")
+        _mark_balance_dirty()
         return False
     if not _check_access(
         args, "add", session_moniker=moniker, moniker=moniker, amount=amount
     ):
+        _mark_balance_dirty()
         return False
     svc = _bank_service(args)
     result = svc.add_funds(moniker, amount, transaction_type="credit")
     if result.get("success"):
+        _cache_balance(int(result.get("new_balance", 0)))
         io.echo(f"{result['message']}  New balance: {result['new_balance']}")
     else:
+        _mark_balance_dirty()
         io.echo(result.get("message", "Failed."), level="error")
     return result.get("success", False)
 
@@ -533,16 +580,20 @@ def bank_remove(args, moniker: str, **kwargs) -> bool:
     amount = io.inputinteger("Amount to withdraw: ")
     if amount is None or amount <= 0:
         io.echo("Invalid amount.", level="error")
+        _mark_balance_dirty()
         return False
     if not _check_access(
         args, "remove", session_moniker=moniker, moniker=moniker, amount=amount
     ):
+        _mark_balance_dirty()
         return False
     svc = _bank_service(args)
     result = svc.remove_funds(moniker, amount, transaction_type="debit")
     if result.get("success"):
+        _cache_balance(int(result.get("new_balance", 0)))
         io.echo(f"{result['message']}  New balance: {result['new_balance']}")
     else:
+        _mark_balance_dirty()
         io.echo(result.get("message", "Failed."), level="error")
     return result.get("success", False)
 
@@ -569,8 +620,10 @@ def bank_transfer(args, moniker: str, **kwargs) -> bool:
     svc = _bank_service(args)
     result = svc.transfer(moniker, to_moniker, amount, moniker)
     if result.get("success"):
+        _mark_balance_dirty()
         io.echo(result["message"])
     else:
+        _mark_balance_dirty()
         io.echo(result.get("message", "Transfer failed."), level="error")
     return result.get("success", False)
 
@@ -612,8 +665,10 @@ def bank_approve(args, moniker: str, **kwargs) -> bool:
     svc = _bank_service(args)
     result = svc.approve_transfer(transfer_id, moniker)
     if result.get("success"):
+        _mark_balance_dirty()
         io.echo(result["message"])
     else:
+        _mark_balance_dirty()
         io.echo(result.get("message", "Approval failed."), level="error")
     return result.get("success", False)
 
@@ -674,34 +729,191 @@ def bank_list_all(args, moniker: str, **kwargs) -> bool:
     return True
 
 
+def _render_bank_menu(**kwargs) -> None:
+    """Print the bank menu: centered heading + one line per option.
+
+    Used as the ``help=`` callback passed to
+    :func:`bbsengine6.io.inputchoice.inputchoice` so that pressing
+    ``KEY_F1`` (or ``KEY_HELP``) redraws the menu. Accepts ``**kwargs``
+    because ``inputchoice`` forwards all caller-supplied kwargs to the
+    help callable (typically ``args=args``).
+    """
+    util.heading("bank")
+    io.echo("{var:optioncolor}[B]{var:labelcolor} -- show current balance")
+    io.echo("{var:optioncolor}[A]{var:labelcolor} -- credit funds to this account")
+    io.echo("{var:optioncolor}[W]{var:labelcolor} -- debit funds from this account")
+    io.echo("{var:optioncolor}[T]{var:labelcolor} -- transfer funds to another member")
+    io.echo("{var:optioncolor}[P]{var:labelcolor} -- show pending transfers")
+    io.echo("{var:optioncolor}[H]{var:labelcolor} -- show transaction history")
+    io.echo("{var:optioncolor}[L]{var:labelcolor} -- list every account")
+    io.echo("{f6}{var:optioncolor}[Q]{var:labelcolor} -- quit the bank menu")
+
+
+def _bank_moniker_balance_fragment(**kwargs) -> str:
+    """Right-side fragment: ``"<moniker>: <balance>"``.
+
+    Reads the cached ``_current_moniker`` / ``_current_balance`` set by
+    :func:`menu` and refreshed by :func:`bank_balance` /
+    :func:`bank_add` / :func:`bank_remove` on every successful op.
+    Re-queries the bank when ``_balance_dirty`` is set (true after
+    transfer_* / approve / reject, on failure paths, and before any
+    successful read since menu() entry). Re-query failures are
+    swallowed so a transient DB hiccup never blanks the bar.
+
+    Returns an empty string when no moniker is bound yet (i.e. before
+    menu() has been entered) and ``"<moniker>: ?"`` when the balance
+    has never been resolved.
+    """
+    global _current_balance, _balance_dirty
+
+    if not _current_moniker:
+        return ""
+
+    if _balance_dirty and _current_args is not None:
+        try:
+            svc = _bank_service(_current_args)
+            _current_balance = int(svc.get_balance(_current_moniker))
+            _balance_dirty = False
+        except Exception:
+            pass
+
+    if _current_balance is None:
+        return f"{_current_moniker}: ?"
+    return f"{_current_moniker}: {_current_balance}"
+
+
+def _bank_host_fragment(**kwargs) -> str:
+    """Right-side fragment: ``"<host>:<port>"`` or ``"direct"``.
+
+    Reads ``args._backend``, ``args.bed_host`` and ``args.bed_port``
+    from the cached ``_current_args``. Falls back to the routing
+    defaults (``localhost:8765``) when the args object does not
+    carry the bed routing attributes (e.g. when driven from tests
+    with a hand-rolled Namespace).
+    """
+    args = _current_args
+    if args is None:
+        return ""
+    if getattr(args, "_backend", None) == "direct":
+        return "direct"
+    host = getattr(args, "bed_host", "localhost") or "localhost"
+    port = int(getattr(args, "bed_port", 8765) or 8765)
+    return f"{host}:{port}"
+
+
+def _register_bank_fragments() -> None:
+    """Register the bank fragments on the active bottombar registry.
+
+    Registration order determines left-to-right render order on the
+    bar (the registry joins fragments with ' | '). Registering
+    ``_bank_host_fragment`` first puts ``host:port`` leftmost on the
+    right-hand side and ``moniker:balance`` rightmost -- so a
+    notification fragment (which the registry prepends) sits at the
+    far left, then ``host:port``, then ``moniker:balance`` at the
+    far right.
+
+    Idempotent: the registry dedupes by identity, so calling this
+    twice in a row is a no-op the second time.
+    """
+    bottombar.register_bottombar_fragment(_bank_host_fragment)
+    bottombar.register_bottombar_fragment(_bank_moniker_balance_fragment)
+
+
+def _unregister_bank_fragments() -> None:
+    """Unregister the bank fragments from the active bottombar registry.
+
+    Counterpart to :func:`_register_bank_fragments`. Safe to call when
+    the fragments were never registered (no-op on a miss).
+    """
+    bottombar.unregister_bottombar_fragment(_bank_host_fragment)
+    bottombar.unregister_bottombar_fragment(_bank_moniker_balance_fragment)
+
+
+def _ensure_screen_initialized() -> None:
+    """Call ``io.screen.init()`` exactly once per process.
+
+    Mirrors :func:`bbsengine6.ed.common.ui.init_screen`. ``screen.init()``
+    sets the terminal scroll region (top/bottom margins) so the bottom
+    bar stays parked on the last line instead of scrolling off when
+    output overflows. setbottombar() positions text on the last line,
+    so calling it before screen.init() is a no-op (the bar would be
+    drawn but immediately scrolled away on the next line of output).
+    """
+    global _screen_initialized
+    if not _screen_initialized:
+        bbsengine6_screen.init()
+        _screen_initialized = True
+
+
+def _clear_bottombar() -> None:
+    """Wipe the bottom row so we don't leak the bar past menu() exit.
+
+    Mirrors the cleanup echo in ``empyre/__main__.py``: save the
+    cursor, jump to ``(terminal.height(), 0)``, erase the line, reset
+    attributes, then restore the cursor.
+    """
+    io.echo(
+        f"{{savecursor}}{{curpos:{bbsengine6_terminal.height()},0}}"
+        f"{{el}}{{reset}}{{restorecursor}}"
+    )
+
+
 def menu(args, moniker: str) -> bool:
+    global _current_args, _current_moniker, _current_balance, _balance_dirty
     is_sysop = getattr(args, "sysop", False)
 
-    while True:
-        cmd = io.inputchoice(
-            "{var:promptcolor}[B]alance  [A]dd  [W]ithdraw  [T]ransfer  "
-            "[P]ending  [H]istory  [L]ist all  [Q]uit: {var:inputcolor}",
-            "b,a,w,t,p,h,l,q",
-            default="q",
-            args=args,
+    _current_args = args
+    _current_moniker = moniker
+    _current_balance = None
+    _balance_dirty = True
+
+    _ensure_screen_initialized()
+    _register_bank_fragments()
+    try:
+        _render_bank_menu(args=args)
+        bottombar.setbottombar(
+            args, f"bed.bank ({bed_version.__version__})"
         )
 
-        if cmd == "B":
-            bank_balance(args, moniker)
-        elif cmd == "A":
-            bank_add(args, moniker)
-        elif cmd == "W":
-            bank_remove(args, moniker)
-        elif cmd == "T":
-            bank_transfer(args, moniker)
-        elif cmd == "P":
-            bank_pending(args, moniker, is_sysop=is_sysop)
-        elif cmd == "H":
-            bank_history(args, moniker)
-        elif cmd == "L":
-            bank_list_all(args, moniker)
-        elif cmd == "Q":
-            break
+        while True:
+            cmd = io.inputchoice(
+                "{var:promptcolor}bank: {var:inputcolor}",
+                "b,a,w,t,p,h,l,q",
+                default="q",
+                args=args,
+                help=_render_bank_menu,
+            )
+
+            if cmd == "B":
+                io.echo(" Balance")
+                bank_balance(args, moniker)
+            elif cmd == "A":
+                io.echo(" Add credits")
+                bank_add(args, moniker)
+            elif cmd == "W":
+                io.echo(" Withdraw credits")
+                bank_remove(args, moniker)
+            elif cmd == "T":
+                io.echo(" Transfer")
+                bank_transfer(args, moniker)
+            elif cmd == "P":
+                io.echo(" Pending transfers")
+                bank_pending(args, moniker, is_sysop=is_sysop)
+            elif cmd == "H":
+                io.echo(" History")
+                bank_history(args, moniker)
+            elif cmd == "L":
+                io.echo(" List all")
+                bank_list_all(args, moniker)
+            elif cmd == "Q":
+                break
+
+            bottombar.setbottombar(
+                args, f"bed.bank ({bed_version.__version__})"
+            )
+    finally:
+        _unregister_bank_fragments()
+        _clear_bottombar()
 
     return True
 
