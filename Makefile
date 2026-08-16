@@ -5,7 +5,7 @@ VERSION = $(shell date +%Y%m%d%H%M)
 PYTHON ?= python3.12
 RSYNC = rsync --chmod=F0644 --mkpath --archive --verbose
 
-.PHONY: all help clean build version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon setup-db deploy commit-version
+.PHONY: all help clean build ensure-repo ensure-build-dir version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon setup-db deploy commit-version
 
 all: help
 
@@ -47,7 +47,18 @@ version:
 	@echo '__githash__ = "'`git log -1 --format='%H' 2>/dev/null | cut -c 1-16`'"' >> src/$(PROJECT)/_version.py
 	@cat src/$(PROJECT)/_version.py
 
-build: version
+.PHONY: ensure-repo
+ensure-repo:
+	@stat -c '%G' /srv/repo 2>/dev/null | grep -qx repo || sudo chgrp repo /srv/repo
+	@stat -c '%a' /srv/repo 2>/dev/null | grep -q '^2775$$' || sudo chmod 2775 /srv/repo
+
+.PHONY: ensure-build-dir
+ensure-build-dir: ensure-repo
+	@mkdir -p /srv/repo/$(PROJECT)/
+	@stat -c '%G' /srv/repo/$(PROJECT)/ 2>/dev/null | grep -qx repo || sudo chgrp repo /srv/repo/$(PROJECT)/
+	@stat -c '%a' /srv/repo/$(PROJECT)/ 2>/dev/null | grep -q '^2775$$' || sudo chmod 2775 /srv/repo/$(PROJECT)/
+
+build: version ensure-build-dir
 	$(PYTHON) -m build --outdir $(OUTDIR)
 
 rename-sdist:

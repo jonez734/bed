@@ -1,5 +1,5 @@
 PROJECT = bed
-OUTDIR = ../dist/ # /srv/repo/$(PROJECT)/
+OUTDIR = /srv/repo/$(PROJECT)/
 VERSION := $(shell date +%Y%m%d%H%M)
 
 PYTHON ?= python3
@@ -17,15 +17,12 @@ TMPFILES_DST = /usr/lib/tmpfiles.d/bed.conf
 FACTORY_DIR = ../usr/share/factory/etc/bed
 ETC_DIR = /etc/bed
 
-.PHONY: install build version
+.PHONY: install version
 .PHONY: clean rename-sdist sign release all
 .PHONY: install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-systemd uninstall-systemd install-etc uninstall-etc
 
 install: version
 	cd .. && $(PIP) install --no-cache-dir -e .
-
-build: version
-	cd .. && $(PYTHON) -m build --outdir $(OUTDIR)
 
 rename-sdist:
 	@for f in $(OUTDIR)/*.tar.gz; do \
@@ -43,7 +40,8 @@ sign:
 		fi \
 	done
 
-release: clean build rename-sdist sign
+release:
+	$(MAKE) -C .. release
 
 all:
 
@@ -51,7 +49,6 @@ clean:
 	-rm *~
 	$(MAKE) -C bed clean
 
-# TODO: OUTDIR differs from existing bed/Makefile (../dist/ vs /srv/repo/bed/); consolidate entry points
 # TODO: standardize version label names across packages (drop __ prefix/suffix on __datestamp__/__version__)
 install-sysusers:
 	install -m 0644 $(SYSUSERS_SRC) $(SYSUSERS_DST)
