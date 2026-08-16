@@ -12,6 +12,72 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed message: CLI tool, with auto-direct mode for DB-only subcommands
+
+Adds the `bed message` console script (registered as `message` in
+`pyproject.toml`). The tool is the operator-facing surface for the
+unified message system: it drives `bed.api.message.MessageService`
+for the WS-bound ops and `bbsengine6.message.*` for the DB-backed
+ops, mirroring the bank tool's two-backend shape.
+
+Seven subcommands:
+
+| Subcommand       | Backend  | Notes                                            |
+|------------------|----------|--------------------------------------------------|
+| `subscribe`      | `bed`    | binds the bed WS to a moniker for NOTIFY fanout |
+| `unsubscribe`    | `bed`    | drops the bed WS binding for a moniker          |
+| `watch`          | `bed`    | subscribe + tail live pushes until interrupted |
+| `pending`        | either   | backend-aware; WS or DB                          |
+| `send`           | direct   | store a new message in the local DB              |
+| `mark_read`      | direct   | mark a message as read for a recipient           |
+| `mark_delivered` | direct   | mark a message as delivered for a recipient      |
+
+`send` / `mark_read` / `mark_delivered` are forced to direct mode
+inside `main_with_args` (`bed/src/bed/tools/message.py:835-838`)
+regardless of whether the operator passed `--direct`. Bed's
+`MessageService` registers only `subscribe` / `unsubscribe` /
+`list_pending`; new messages flow through the local DB and surface
+to bed via the `engine_message_recipient` NOTIFY trigger, so there
+is no server-side wire handler for the DB-only ops. Forcing
+`args.direct = True` before `select_backend` runs means the bed
+probe is skipped entirely, the operator never has to pass `--direct`,
+and the "bed unreachable; rerun with --direct" exit no longer fires
+for these subcommands. The single source of truth is
+`_DIRECT_ONLY_SUBCMDS` (`message.py:80`); adding a new DB-only
+subcommand means adding it to the set.
+
+Authorization on the CLI runs the same per-op policy the server
+does, just on the client side. WS-bound ops (`subscribe` /
+`unsubscribe` / `pending` / `watch`) delegate to
+`bbsengine6.message.access()` via `_check_access`
+(`message.py:256-300`); DB-only ops use a self-or-sysop gate
+(`_check_self_or_sysop`, `message.py:302-336`) because
+`bbsengine6.message.access` only recognizes the three wire-protocol
+verbs. The CLI mirrors the WS handler's session-bound gate so the
+two surfaces agree on what "unauthenticated" means.
+
+Token lifecycle: in `bed` mode the CLI reads the bearer token from
+`--token-file` (default `$XDG_RUNTIME_DIR/bed.token` or
+`/tmp/bed-<uid>/bed.token`), uses `auth reconnect` to bind the
+session to the WS, stashes the claim-derived `moniker` /
+`is_sysop` on `args` so `_check_access` can use them, and persists
+a rotated token back to the file at mode 0600. In `direct` mode
+no token is required; the actor moniker is resolved from `--moniker`
+or the local DB.
+
+`send` accepts `--to MONIKER` (repeatable), `--channel NAME`,
+`--urgency {ROUTINE,IMPORTANT,URGENT,CRITICAL}`, and either
+`--content BODY` or `--template BODY` (mutually exclusive). The
+template body is rendered via `bbsengine6.message.render_template`.
+The CLI surfaces rate-limit / system-disabled / no-recipients cases
+as one-line errors and exits non-zero.
+
+Spec coverage: new Section 14 ("CLI tool — `bed message`") in
+`bed/specs/message.md` covers subcommand vocabulary, backend
+selection, the auto-direct-mode behavior, CLI flags, authorization,
+token lifecycle, and per-handler dispatch. README's console-scripts
+table now lists `message` and links to the spec.
+
 ### bed: add `bed.name` instance identity + identity-aware `ping`
 
 A bed instance now has a `name` (default `"bed"`, override via

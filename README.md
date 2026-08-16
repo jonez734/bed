@@ -264,7 +264,7 @@ bed/
 │   │   ├── bed.service     systemd unit file
 │   │   ├── bed.sysusers    systemd-sysusers config (creates bed user/group)
 │   │   └── bed.tmpfiles    systemd-tmpfiles config (/var/log/bed, /var/lib/bed)
-│   ├── tools/              bank, ping console-script CLIs
+│   ├── tools/              auth, bank, message, ping console-script CLIs
 │   ├── data/
 │   │   ├── bed.json        packaged default config
 │   │   └── sql/bed_token.sql   optional DB token-store schema
@@ -292,14 +292,49 @@ bed/
 
 ## Console scripts
 
-`pip install .` registers four entry points:
+`pip install .` registers five entry points:
 
 | Script         | Module                  | Purpose                                       |
 |----------------|-------------------------|-----------------------------------------------|
 | `bed`          | `bed.main:main`         | the WebSocket daemon                          |
 | `bed-startup`  | `bed.startup:main`      | standalone database bootstrap                 |
+| `auth`         | `bed.tools.auth:main`   | standalone auth CLI (login, reconnect, refresh, revoke) |
 | `bank`         | `bed.tools.bank:main`   | standalone bank CLI (balance, add, remove, history, transfer) |
+| `message`      | `bed.tools.message:main` | standalone message CLI (subscribe, pending, send, mark read/delivered, watch) — see [`specs/message.md`](specs/message.md) § 14 |
 | `ping`         | `bed.tools.ping:main`   | smoke-test WebSocket + auth round-trip        |
+
+### `bed message` quick reference
+
+The message CLI mirrors the bank tool's two-backend shape. The
+WS-bound ops (`subscribe` / `unsubscribe` / `watch` / `pending`)
+talk to the bed daemon via WebSocket and require a valid
+`--token-file` (run `bed auth login` first). The DB-backed ops
+(`send` / `mark_read` / `mark_delivered`) are always routed to the
+local DB through `bbsengine6.message.*` — `--direct` is implicit
+for them, so the operator never has to pass it and the CLI never
+exits with "bed unreachable" for these subcommands. `--direct` is
+still honored when passed explicitly.
+
+```bash
+# Subscribe to NOTIFY fanout for alice (bed mode, needs auth)
+bed message subscribe --moniker alice
+
+# Tail live pushes until Ctrl-C
+bed message watch --moniker alice
+
+# List pending messages (bed or DB; backend-aware)
+bed message pending --moniker alice
+
+# Send a message (always direct)
+bed message send --to bob --content "hello"
+
+# Mark a message read for the actor (always direct)
+bed message mark_read --message-id 12345
+```
+
+The full subcommand/flag table, the auto-direct-mode rationale,
+and the per-handler dispatch are in
+[`specs/message.md`](specs/message.md) § 14.
 
 ## Tests
 
