@@ -463,8 +463,30 @@ class BED:
                 self.router.register_all(self.server)
 
             if not getattr(self.args, "no_message_service", False):
+                # When auth is enabled, hand MessageService the same
+                # HMAC secret / token store / instance id the auth
+                # service uses, so it can re-verify
+                # ``state.auth_service_token`` on every message op and
+                # route the claim-derived ``moniker`` / ``is_sysop``
+                # into ``bbsengine6.message.access()``. When auth is
+                # disabled, none of those are available and the
+                # message service falls back to session-only
+                # authorization (legacy / --token-persistence=none
+                # mode). Mirrors the bank_kwargs block below.
+                msg_kwargs: Dict[str, Any] = {}
+                if (
+                    self.auth_service is not None
+                    and self.token_store is not None
+                ):
+                    msg_kwargs = {
+                        "secret": getattr(self.auth_service, "secret", None),
+                        "token_store": self.token_store,
+                        "instance_id": getattr(
+                            self.auth_service, "instance_id", None
+                        ),
+                    }
                 self.message_service = MessageService(
-                    db_args, self._session_registry
+                    db_args, self._session_registry, **msg_kwargs
                 )
                 self.message_service.register_all(self.server)
                 self._message_listener_task = asyncio.create_task(

@@ -41,6 +41,7 @@ bed = "bed.main:main"
 bed-startup = "bed.startup:main"
 auth = "bed.tools.auth:main"
 bank = "bed.tools.bank:main"
+message = "bed.tools.message:main"
 ping = "bed.tools.ping:main"
 
 [project.urls]
