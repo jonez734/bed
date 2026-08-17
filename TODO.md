@@ -2248,3 +2248,95 @@ awaits `self.server.stop()` and releases the port.
   get_player_balance and place_bet` — the casino-side
   fix for the NULL credits crash (already landed).
 
+## `bed.venv` (non-sudo) / `bed.prod` (sudo) deploy split
+
+### Problem
+
+`bed/Makefile:183` `deploy: install` runs the full production
+install — sysusers, tmpfiles, venv, systemd, /etc/bed. All five
+steps contain `sudo` commands (`bed/Makefile:95, 104, 122-123,
+133, 136-137, 151-152, 167-170`).
+
+When `deploytool deploy casino.tui` pulls in `bed` as a
+transitive dep
+(`deploytool/src/deploytool/lib.py:81` `casino.tui → ["bed"]`),
+the full production install runs even though casino.tui only
+needs bed's Python wheel importable from the active venv.
+casino.tui does not need the systemd service, /etc/bed config,
+or `systemd-sysusers`/`systemd-tmpfiles` host setup.
+
+### Goal
+
+Split `bed`'s deploy into two named paths, both registered with
+deploytool so the registry reflects the choice:
+
+- `bed.venv` (default, non-sudo) — build wheels for
+  `getdate_next`, `bbsengine6`, and `bed`, then `pip install`
+  them into the **active venv**
+  (`$(VIRTUAL_ENV)/bin/pip` or `python -m pip`). WHEEL_DIR is in
+  `/tmp` (user-owned), so no `sudo` is needed.
+- `bed.prod` (explicit, sudo) — umbrella full prod install
+  (sysusers + tmpfiles + per-service venv + systemd + /etc/bed).
+  Reuses the existing `install` target.
+
+`deploy bed` (no sub) defaults to `bed.venv` since it's the
+first entry in `TARGETS` (per `lib.py:189-198`). `deploy
+bed.prod` is explicit. `deploytool deploy casino.tui`'s
+transitive `bed` dep now resolves to `bed.venv` automatically.
+
+The existing `deploy: install` (line 183) is preserved for back-
+compat — anyone running `make deploy` directly still gets the
+full prod install. New operators should prefer the named sub-
+targets.
+
+### Tasks
+
+- [ ] Add `bed/Makefile` `deploy-venv` target (non-sudo, see
+      body in the plan above). Mirrors `install-venv`
+      (`bed/Makefile:120-138`) minus the `sudo -u $(VENV_OWNER)`
+      venv bootstrap (122-123) and the SELinux relabel
+      (135-137). Add to `.PHONY` (line 8) and `help` block
+      (lines 16-34).
+- [ ] Add `bed/Makefile` `deploy-prod: install` target (full
+      prod install). Add to `.PHONY` (line 8) and `help` block
+      (lines 16-34).
+- [ ] Pin `casino.tui`'s `bed` dep explicitly. Change
+      `deploytool/src/deploytool/lib.py:81` from
+      `"tui": ["bed"]` to
+      `"tui": [("bbsengine6", "tui"), "bed"]` so bbsengine6's
+      www deploy is dropped (per the bbsengine6.tui fix from
+      the prior turn) and `bed` resolves to `bed.venv` (the
+      default).
+- [ ] Register `"bed": ["venv", "prod"]` in
+      `deploytool/src/deploytool/lib.py:96-105` `TARGETS`.
+- [ ] Verify with `deploytool --dry-run`:
+      - `bed` → `[bed.venv]` (default first sub).
+      - `bed.venv` → `[bed.venv]` (explicit).
+      - `bed.prod` → `[bed.prod]` (full prod install).
+      - `casino.tui` → `[bbsengine6.tui, bed.venv, casino.tui]`
+        (no `bbsengine6` unsuffixed; no `bed.prod`).
+- [ ] Real-run smoke test: `deploytool deploy bed` in a fresh
+      venv exits 0 with no `sudo` prompts and `bed` is
+      importable from the venv.
+- [ ] Real-run smoke test: `deploytool deploy bed.prod` (with
+      sudo) exits 0 and `systemctl status bed` shows the
+      service loaded.
+- [ ] Back-compat smoke test: `make deploy` (direct invocation,
+      not via deploytool) still runs the full prod install
+      (Q2.A preserved).
+
+### Cross-references
+
+- `bed/Makefile:120-138` — existing `install-venv` body that
+  `deploy-venv` mirrors (sans `sudo`).
+- `bed/Makefile:159` — existing `install` body that
+  `deploy-prod` reuses (Q3.B umbrella).
+- `bed/Makefile:183` — existing `deploy: install` preserved
+  for back-compat (Q2.A).
+- `deploytool/src/deploytool/lib.py:74-90` — companion
+  `CONDITIONAL_DEPENDENCIES["casino"]["tui"]` change.
+- `deploytool/src/deploytool/lib.py:96-105` — `TARGETS` entry
+  that registers the new sub-targets.
+- `deploytool/src/deploytool/lib.py:189-198` — sub-target
+  defaulting logic (first entry wins when no sub given).
+

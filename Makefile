@@ -5,7 +5,7 @@ VERSION = $(shell date +%Y%m%d%H%M)
 PYTHON ?= python3.12
 RSYNC = rsync --chmod=F0644 --mkpath --archive --verbose
 
-.PHONY: all help clean build ensure-repo ensure-build-dir version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon setup-db deploy commit-version
+.PHONY: all help clean build ensure-repo ensure-build-dir version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon setup-db deploy deploy-venv deploy-prod commit-version
 
 all: help
 
@@ -31,6 +31,9 @@ help:
 	@echo "  install-etc        Install /etc/bed/ config from factory defaults"
 	@echo "  uninstall-etc      Remove installed config files"
 	@echo "  setup-db           Bootstrap database: bbsengine6 startup + bed role"
+	@echo "  deploy             Full prod install (legacy; alias for deploy-prod)"
+	@echo "  deploy-venv        Non-sudo: build wheels + pip install into active venv"
+	@echo "  deploy-prod        Full prod install (sysusers + tmpfiles + venv + systemd + etc)"
 	@echo "  clean              Remove build artifacts"
 
 clean:
@@ -179,6 +182,27 @@ uninstall-systemd:
 
 uninstall: uninstall-systemd uninstall-venv uninstall-tmpfiles uninstall-sysusers uninstall-etc
 	@echo "bed fully uninstalled"
+
+# Non-sudo: build wheels for getdate_next + bbsengine6 + bed, then
+# pip install into the active venv. Mirrors install-venv (lines 120-138)
+# minus the sudo -u $(VENV_OWNER) venv bootstrap (122-123) and the
+# SELinux relabel (135-137). WHEEL_DIR lives in /tmp (user-owned) so
+# no sudo is needed for the build either.
+deploy-venv:
+	$(MAKE) -C $(BBSENGINE_DIR) version
+	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(GETDATE_DIR)
+	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(BBSENGINE_DIR)
+	$(MAKE) version
+	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
+	$(VIRTUAL_ENV)/bin/pip install $(WHEEL_DIR)/*.whl \
+		2>/dev/null || $(PYTHON) -m pip install $(WHEEL_DIR)/*.whl
+	-rm -rf $(WHEEL_DIR)
+	@echo "bed installed into active venv (non-sudo)"
+
+# Umbrella prod install: includes everything that needs sudo
+# AND the per-service venv. Reuses the existing install target.
+deploy-prod: install
+	@echo "bed installed (production)"
 
 deploy: install
 
