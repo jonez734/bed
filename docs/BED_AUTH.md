@@ -154,16 +154,58 @@ the same way as `bind.*` and `database.*`.
 # handled. Your router only needs to assume the websocket is
 # authenticated.
 
+from typing import Any, Optional
 from bed.api import SessionRegistry  # shared with AuthService
 
 class GameRouter:
-    def __init__(self, args):
+    def __init__(
+        self,
+        args: Any,
+        *,
+        session_registry: Optional[SessionRegistry] = None,
+        secret: Optional[bytes] = None,
+        token_store: Any = None,
+        instance_id: Optional[str] = None,
+        clock: Any = None,
+    ) -> None:
         self.args = args
-        self.sessions: SessionRegistry = args.bed_session_registry
+        # BED forwards the live `SessionRegistry` here so handlers see
+        # sessions that `AuthService` just bound. Without it, the
+        # per-call `_check_access` falls back to a private in-process
+        # registry and every gameplay op after `auth` returns
+        # `not_authenticated` even though the client holds a valid
+        # token. (Legacy `__init__(args)`-only routers still work —
+        # bed passes an empty kwargs dict when auth is disabled.)
+        self.session_registry = session_registry
+        self.secret = secret
+        self.token_store = token_store
+        self.instance_id = instance_id
+        self.clock = clock
 
     def register_all(self, server):
         server.register_service(self, ["bet", "hit", "stand"])
 ```
+
+The wiring contract is:
+
+- When auth is **enabled** (`token_persistence != "none"` and
+  `credential_provider != "moniker-only"` — see `_auth_enabled` in
+  `bed/main.py`), `bed.main.BED.start` constructs the
+  `MessageRouterClass` with `args` plus the keyword-only kwargs
+  `{session_registry, secret, token_store, instance_id, clock}`.
+  Routers that don't accept these kwargs raise `TypeError` and the
+  router never starts — this is the intended failure mode so the
+  misconfiguration is caught loudly at boot, not silently at runtime.
+- When auth is **disabled**, the kwargs dict is empty (`{}`) and the
+  router is constructed as `MessageRouterClass(args)`. The router
+  still works for door-mode / `wscat`-style smoke tests, but
+  `_check_access` will report `not_authenticated` on every gameplay
+  op and there is no token to attach.
+- For a router that *itself* wraps sub-routers (e.g. `zoid6`'s
+  `MessageRouter._register_module`), each sub-router must be
+  constructed with the same kwargs. Dropping them on the floor
+  reproduces the door-mode bug at the sub-router level even when
+  the outer router accepted them.
 
 If you want to log a player out, or issue per-action challenges,
 import `AuthService` and call `auth_service.token_store.delete(token)`.

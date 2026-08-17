@@ -459,7 +459,34 @@ class BED:
                 self.auth_service.register_all(self.server)
 
             if self.MessageRouterClass is not None:
-                self.router = self.MessageRouterClass(db_args)
+                # Mirror the msg_kwargs / bank_kwargs blocks below so
+                # the router sees the same session registry + token
+                # wiring MessageService and BankService get. Without
+                # this the router falls back to its own fresh
+                # CasinoSessionManager and the per-op _check_access
+                # gate cannot find the session AuthService just bound,
+                # which surfaces to clients as a spurious
+                # ``not_authenticated`` envelope on the first
+                # gameplay op after auth. Token kwargs stay empty
+                # when auth is disabled (DefaultRouter + no auth) so
+                # the router's legacy / door-mode fallback stays
+                # intact for tests.
+                router_kwargs: Dict[str, Any] = {}
+                if (
+                    self.auth_service is not None
+                    and self.token_store is not None
+                ):
+                    router_kwargs = {
+                        "session_registry": self._session_registry,
+                        "secret": getattr(
+                            self.auth_service, "secret", None
+                        ),
+                        "token_store": self.token_store,
+                        "instance_id": getattr(
+                            self.auth_service, "instance_id", None
+                        ),
+                    }
+                self.router = self.MessageRouterClass(db_args, **router_kwargs)
                 self.router.register_all(self.server)
 
             if not getattr(self.args, "no_message_service", False):
