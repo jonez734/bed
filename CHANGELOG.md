@@ -12,6 +12,23 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: `ensure_startup` also drives `casino.startup.main`
+
+After `bbsengine6.startup` and the `bed` role setup, `bed.startup.ensure_startup`
+now dispatches to `casino.startup.main` via `bbsengine6.module.runmodule`,
+so the casino package is loaded lazily — not a hard install-time
+dependency on `bed`. The dispatch runs after the bed role setup commits
+and the pool connection is released; casino owns its own pool/conn
+lifecycle inside `casino.startup.main`.
+
+`casino.startup.main` is idempotent (`database.classexists`,
+`schemaexists`, `extensioninstalled`, `manage_schema_priv`), so
+repeated invocations of `ensure_startup` are safe. Operators who want
+to bootstrap the engine + bed role but not the casino schema can run
+`python -m bbsengine6.startup` + the bed role setup directly; the
+casino step is only added to the convenience entry point
+`bed.startup.ensure_startup`.
+
 ### bed message: CLI tool, with auto-direct mode for DB-only subcommands
 
 Adds the `bed message` console script (registered as `message` in

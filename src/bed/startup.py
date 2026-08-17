@@ -10,7 +10,7 @@ with LOGIN if it does not already exist, granting it USAGE on the
 
 import sys
 
-from bbsengine6 import database, io
+from bbsengine6 import database, io, module as bbsmodule
 from bbsengine6.startup import lib as startuplib
 
 
@@ -56,7 +56,8 @@ def _ensure_bed_role(args, conn):
 
 
 def ensure_startup(args):
-    """Run bbsengine6 startup, then ensure the bed role exists.
+    """Run bbsengine6 startup, ensure the bed role exists, then bootstrap
+    the casino schema.
 
     Idempotent: safe to call repeatedly.  Returns True on success, False
     on failure.  Non-interactive: does not parse arguments or call
@@ -70,13 +71,20 @@ def ensure_startup(args):
     pool = database.getpool(args, dbname=args.databasename)
     with database.connect(args, pool=pool) as conn:
         ok = _ensure_bed_role(args, conn)
-        if ok:
-            conn.commit()
-            io.echo("bed startup complete", level="ok")
-        else:
+        if not ok:
             conn.rollback()
-            io.echo("bed startup failed", level="error")
-        return ok
+            io.echo("bed role setup failed", level="error")
+            return False
+        conn.commit()
+    # conn released; casino.startup.main opens its own pool/conn lifecycle.
+
+    casino_result = bbsmodule.runmodule(args, "casino.startup.main")
+    if casino_result is not True:
+        io.echo("casino startup failed", level="error")
+        return False
+
+    io.echo("bed startup complete", level="ok")
+    return True
 
 
 def main(args=None):
