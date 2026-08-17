@@ -36,19 +36,22 @@ dev = [
     "ruff",
 ]
 
-[project.scripts]
-bed = "bed.main:main"
-bed-startup = "bed.startup:main"
-auth = "bed.tools.auth:main"
-bank = "bed.tools.bank:main"
-message = "bed.tools.message:main"
-ping = "bed.tools.ping:main"
-
 [project.urls]
 Homepage = "https://bbsengine.org/"
 
+[tool.setuptools]
+script-files = [
+    "bin/bed",
+    "bin/bed-startup",
+    "bin/auth",
+    "bin/bank",
+    "bin/message",
+    "bin/ping",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
 
 [tool.setuptools.dynamic]
 version = { attr = "bed._version.__version__" }

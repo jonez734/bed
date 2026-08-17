@@ -212,6 +212,19 @@ import `AuthService` and call `auth_service.token_store.delete(token)`.
 The token is also stored on the per-session state at
 `SessionState.auth_service_token`.
 
+### See also
+
+- `zoid6/SPEC.md` §3.2 — `MessageRouter._register_module` must
+  forward the same kwargs to sub-router constructors. Dropping them
+  reproduces the door-mode bug at the sub-router level even when
+  the outer router accepted them; the canonical regression test is
+  `zoid6/src/zoid6/tests/test_message_router.py::TestRegisterModuleAuthWiring`.
+- `casino/docs/AUTH.md` §6 — Casino-side `CasinoClient` captures the
+  bearer token from `auth_result` and re-injects it on every op
+  (`send_msg({type, token, ...})`). The bug fixed in this contract
+  triangle returned `code=not_authenticated` on the first gameplay
+  op after a successful login because the token was discarded.
+
 ## Security notes
 
 - HMAC secret is per-instance; rotating it invalidates all outstanding
