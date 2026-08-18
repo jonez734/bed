@@ -12,6 +12,39 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: add `casino` section to default `bed.json`
+
+`src/bed/data/bed.json` now carries a top-level `casino` block
+with the per-casino nested layout (`casinos.<name>.blackjack.*`):
+
+```json
+{
+  "casino": {
+    "blackjack": {
+      "surrender_allowed": "early",
+      "surrender_multiplier": 0.5
+    }
+  }
+}
+```
+
+`surrender_multiplier=0.5` is the universal standard in regulated
+casinos (Las Vegas Strip / Atlantic City / Macau; Wizard of Odds
+and Vegas Advantage). Casino's `services.game.GameService.surrender`
+reads the value via `casino.config.get_surrender_multiplier(args)`
+so the per-table `net` in `dal.table.get_table_stats` stays
+consistent with what the settle path actually credited the player.
+
+BED's `main_async` does not yet apply this block to
+`args._casino_config` explicitly. Casino's
+`MessageRouter._bootstrap_casino_config(args)` auto-discovers
+the section from `args.config_file`, so door-mode / standalone
+tests work without a bed wiring change. A future bed commit will
+add `_apply_casino_config(args, cfg)` that mirrors the existing
+`_apply_database_config` / `_apply_auth_config` blocks and
+forwards `args._casino_config` to `db_args` before constructing
+the casino `MessageRouter`.
+
 ### bed: `ensure_startup` also drives `casino.startup.main`
 
 After `bbsengine6.startup` and the `bed` role setup, `bed.startup.ensure_startup`
