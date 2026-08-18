@@ -31,5 +31,12 @@
     "enabled": true,
     "modulepath": "bed.api.message",
     "description": "Server-push notifications via PG LISTEN/NOTIFY on engine_message_recipient"
+  },
+  "casino": {
+    "blackjack": {
+      "surrender_allowed": "early",
+      "surrender_multiplier": 0.5,
+      "_comment_surrender_multiplier": "Forfeit fraction on late surrender; 0.5 matches Las Vegas Strip / Atlantic City / Macau standard (Wizard of Odds, Vegas Advantage)."
+    }
   }
 }
