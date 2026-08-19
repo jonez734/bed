@@ -5,6 +5,7 @@
 
 import argparse
 import asyncio
+import errno
 import os
 import signal
 import sys
@@ -813,12 +814,18 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
     return lib.buildargs(parentparser)
 
 
-def get_autorestart_config(
+def get_restart_config(
     args: argparse.Namespace,
     cfg: Optional[dict] = None,
-) -> tuple[bool, int, int]:
-    """Get autorestart config from args and a config dict.
-    Priority: CLI flag > cfg["bed"] > hardcoded defaults."""
+) -> tuple[bool, int, int, bool]:
+    """Get restart policy from args and a config dict.
+    Priority: CLI flag > cfg["bed"] > hardcoded defaults.
+
+    Returns ``(autorestart, restart_delay, max_restarts, restart_on_bind_failure)``.
+    ``restart_on_bind_failure`` controls in-process retry of
+    ``EADDRINUSE``/``EACCES`` from ``WebSocketServer.start()``; default
+    is False so a stuck port does not get restarted in a tight loop.
+    """
     bed_config = cfg.get("bed", {}) if isinstance(cfg, dict) else {}
 
     if args.autorestart is not None:
@@ -837,7 +844,14 @@ def get_autorestart_config(
         else bed_config.get("max_restarts", 10)
     )
 
-    return autorestart, restart_delay, max_restarts
+    if getattr(args, "restart_on_bind_failure", None) is not None:
+        restart_on_bind_failure = args.restart_on_bind_failure
+    else:
+        restart_on_bind_failure = bed_config.get(
+            "restart_on_bind_failure", False
+        )
+
+    return autorestart, restart_delay, max_restarts, restart_on_bind_failure
 
 
 def load_router_class(router_path: str) -> Type:
@@ -864,6 +878,7 @@ def _reload_config_and_apply(
     autorestart_ref: list,
     restart_delay_ref: list,
     max_restarts_ref: list,
+    restart_on_bind_failure_ref: Optional[list] = None,
 ) -> None:
     """SIGHUP handler body: reload config from disk, apply live knobs to
     the running bed, and warn about structural changes that require a
@@ -872,14 +887,16 @@ def _reload_config_and_apply(
     Args:
         args: the argparse namespace shared by ``main_async``.
         bed: the currently-running ``BED`` instance.
-        autorestart_ref / restart_delay_ref / max_restarts_ref: single-element
-            lists containing the loop-local variables from ``main_async``.
-            We pass them by reference because SIGHUP runs on the event loop
-            and cannot capture loop locals via closure for mutation.
+        autorestart_ref / restart_delay_ref / max_restarts_ref /
+        restart_on_bind_failure_ref: single-element lists containing
+        the loop-local variables from ``main_async``. We pass them by
+        reference because SIGHUP runs on the event loop and cannot
+        capture loop locals via closure for mutation.
 
     Behavior:
         - Live knobs (token_ttl, debug) are applied to the running daemon.
-        - autorestart / restart_delay / max_restarts are updated in place.
+        - autorestart / restart_delay / max_restarts /
+          restart_on_bind_failure are updated in place.
         - Structural keys (bind.*, database.*, token_persistence,
           credential_provider, bed_secret_path, bed_instance_id) are
           detected but not applied; the operator is told a restart is
@@ -931,6 +948,16 @@ def _reload_config_and_apply(
                     f"Live reload: max_restarts={new_mr} applied",
                 )
                 max_restarts_ref[0] = new_mr
+        if (
+            "restart_on_bind_failure" in bed_cfg
+            and restart_on_bind_failure_ref is not None
+        ):
+            new_robf = bool(bed_cfg["restart_on_bind_failure"])
+            if new_robf != restart_on_bind_failure_ref[0]:
+                io.echo(
+                    f"Live reload: restart_on_bind_failure={new_robf} applied",
+                )
+                restart_on_bind_failure_ref[0] = new_robf
 
     # Structural: any of these require a full restart.
     structural_diffs = []
@@ -982,8 +1009,8 @@ async def main_async() -> None:
     _apply_database_config(args, loaded_config)
     _apply_auth_config(args, loaded_config)
 
-    autorestart, restart_delay, max_restarts = get_autorestart_config(
-        args, loaded_config
+    autorestart, restart_delay, max_restarts, restart_on_bind_failure = (
+        get_restart_config(args, loaded_config)
     )
 
     try:
@@ -1013,6 +1040,7 @@ async def main_async() -> None:
     autorestart_ref: list = [autorestart]
     restart_delay_ref: list = [restart_delay]
     max_restarts_ref: list = [max_restarts]
+    restart_on_bind_failure_ref: list = [restart_on_bind_failure]
     loop = asyncio.get_event_loop()
 
     def signal_handler() -> None:
@@ -1038,6 +1066,7 @@ async def main_async() -> None:
             autorestart_ref,
             restart_delay_ref,
             max_restarts_ref,
+            restart_on_bind_failure_ref,
         )
 
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -1077,8 +1106,31 @@ async def main_async() -> None:
                 current_autorestart = autorestart_ref[0]
                 current_restart_delay = restart_delay_ref[0]
                 current_max_restarts = max_restarts_ref[0]
+                current_restart_on_bind_failure = restart_on_bind_failure_ref[0]
 
-                if current_autorestart:
+                is_permanent_bind_failure = (
+                    isinstance(e, OSError)
+                    and getattr(e, "errno", None)
+                    in (errno.EADDRINUSE, errno.EACCES)
+                )
+
+                if is_permanent_bind_failure and not current_restart_on_bind_failure:
+                    await bed.stop()
+                    io.echo(
+                        f"BED refusing to restart on bind failure: {e}. "
+                        f"Free the port, run as a user with bind permission, "
+                        f"or set restart_on_bind_failure=true to override.",
+                        level="error",
+                    )
+                    sys.exit(2)
+
+                if (
+                    current_autorestart
+                    or (
+                        is_permanent_bind_failure
+                        and current_restart_on_bind_failure
+                    )
+                ):
                     restart_count += 1
                     if restart_count > current_max_restarts:
                         io.echo(

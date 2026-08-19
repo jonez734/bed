@@ -159,6 +159,14 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         help="Max consecutive restarts before giving up (default: from bed.json, or 10)",
     )
     parentparser.add_argument(
+        "--restart-on-bind-failure",
+        action="store_true",
+        default=None,
+        help="Retry when the listening port is already in use or bind is "
+        "denied (EADDRINUSE/EACCES). Default: off — bed exits 2 so "
+        "systemd does not loop. Honors restart_delay / max_restarts.",
+    )
+    parentparser.add_argument(
         "--config",
         dest="config_file",
         required=True,

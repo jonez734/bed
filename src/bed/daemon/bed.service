@@ -19,6 +19,16 @@ ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5s
 
+# bed exits 2 on permanent bind failures (EADDRINUSE/EACCES) when
+# restart_on_bind_failure=false. Do not loop the unit on that case.
+RestartPreventExitStatus=2
+
+# Cap any unclassified crash loop at 10 attempts per 5 minutes so the
+# operator notices the failure (unit enters 'failed' state) instead
+# of the daemon quietly retrying forever.
+StartLimitBurst=10
+StartLimitIntervalSec=300s
+
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=30s
