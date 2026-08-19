@@ -111,8 +111,8 @@ Plus: `bed/tests/scripts/stop_bed.sh` (SIGTERM/SIGKILL test helper).
 
 | Feature | Module / File | Test | Notes |
 |---|---|---|---|
-| `BED` daemon class | `bed/src/bed/main.py:617` | `test_bed.py` | start/stop/restart, autorestart, restart_delay, max_restarts |
-| CLI argparse | `bed/src/bed/lib.py:147-156` | `test_bed.py::TestConfigFlag` | --host, --port, --router, --config, --pidfile, --autorestart, --debug, --foreground |
+| `BED` daemon class | `bed/src/bed/main.py:617` | `test_bed.py` | start/stop/restart, autorestart, restart_delay, max_restarts, restart_on_bind_failure |
+| CLI argparse | `bed/src/bed/lib.py:147-156` | `test_bed.py::TestConfigFlag` | --host, --port, --router, --config, --pidfile, --autorestart, --restart-on-bind-failure, --debug, --foreground |
 | Default host | `bed/src/bed/main.py` | n/a | `127.0.0.1` (was `localhost`, ambiguous for server bind) |
 | PID file (atomic) | `bed/src/bed/main.py:68-` | `test_bed.py::TestPidfile` | O_EXCL TOCTOU retry, stale-overwrite, live-collision exit 1 |
 | `bed.json` loader | `bed/src/bed/config.py:21-48` | `test_bed.py` | CLI > file > argparse default; BED_* env-var support; deep-merge |

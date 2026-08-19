@@ -12,6 +12,34 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: `restart_on_bind_failure` knob, exit 2 on EADDRINUSE/EACCES
+
+A permanent bind failure (port already in use, or permission denied)
+used to make `bed` exit 1, which the systemd unit then retried
+forever via `Restart=on-failure` — so a stuck port looked
+indistinguishable from a transient crash loop, even when the
+operator had explicitly set `autorestart: false`.
+
+- New config key: `bed.restart_on_bind_failure` (default `false`)
+  and matching CLI flag `--restart-on-bind-failure`. Independent of
+  `autorestart` so a bind-stuck port does not enable general crash
+  restarts.
+- When the listening port fails with `EADDRINUSE` (errno 98) or
+  `EACCES` (errno 13) and `restart_on_bind_failure` is `false`,
+  `bed` exits with status **2** and logs a clear "refusing to
+  restart on bind failure" message. systemd's
+  `RestartPreventExitStatus=2` keeps the unit stopped.
+- When `restart_on_bind_failure` is `true`, the in-process loop
+  retries with the configured `restart_delay`, capped at
+  `max_restarts`, exactly like the general `autorestart` loop.
+- `daemon/bed.service` now also sets `StartLimitBurst=10` and
+  `StartLimitIntervalSec=300s` so any unclassified crash loop
+  eventually leaves the unit in `failed` state, visible to the
+  operator, instead of silently retrying forever.
+- `src/bed/lib.py` adds the `--restart-on-bind-failure` CLI flag.
+- New test class `TestRestartOnBindFailure` in
+  `src/bed/tests/test_bed.py` covers the EADDRINUSE/EACCES path.
+
 ### bed: add `casino` section to default `bed.json`
 
 `src/bed/data/bed.json` now carries a top-level `casino` block

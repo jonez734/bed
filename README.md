@@ -210,6 +210,25 @@ to `usr/share/factory/etc/bed/bed.json`) disables `autorestart` so
 that systemd owns the restart loop. Set it to `true` for
 foreground-only deployments without systemd.
 
+### `restart_on_bind_failure`
+
+`bed` distinguishes two failure modes. When the listening port is
+already in use (`EADDRINUSE`) or the bind is denied (`EACCES`,
+e.g. trying to bind a privileged port without root), the daemon
+exits with status **2** and the systemd unit
+(`daemon/bed.service`) is configured with
+`RestartPreventExitStatus=2` so it does **not** spin on that
+condition — otherwise a stuck port would silently restart every
+`RestartSec=5s` forever, indistinguishable from a healthy crash
+loop.
+
+If you want in-process retries on bind failures (e.g. you hold the
+port from a sidecar that comes up later), set
+`restart_on_bind_failure: true` in `bed.json` or pass
+`--restart-on-bind-failure` on the command line. The retries honor
+`restart_delay` and `max_restarts` exactly like the general
+`autorestart` loop. Default is `false`.
+
 ### PID file
 
 `bed --pidfile /var/run/bed.pid` writes the daemon's pid to
