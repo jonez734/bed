@@ -9,7 +9,7 @@ import errno
 import os
 import signal
 import sys
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, List, Optional, Tuple, Type
 
 from bbsengine6 import io
 from bbsengine6.common import safe_path
@@ -47,6 +47,7 @@ def _get_bed_defaults() -> dict:
     _BED_DEFAULTS = {
         "host": parser.get_default("host"),
         "port": parser.get_default("port"),
+        "bind": parser.get_default("bind"),
         "databasename": parser.get_default("databasename"),
         "databasehost": parser.get_default("databasehost"),
         "databaseport": parser.get_default("databaseport"),
@@ -259,6 +260,103 @@ BIND_FIELDS = {
     "host": ("host", str, True),
     "port": ("port", int, False),
 }
+
+
+def _apply_bind_list_config(args: argparse.Namespace, cfg: dict) -> None:
+    """Apply a ``bind`` list (multi-bind) from a loaded config when the
+    CLI did not pass ``--bind``.
+
+    Accepts two shapes:
+
+    * List: ``"bind": [{"host": "...", "port": ...}, ...]`` (the
+      canonical form for multi-bind).
+    * Dict: ``"bind": {"host": "...", "port": ...}`` (legacy single-bind;
+      mirrors what ``_apply_bind_config`` reads under the hood).
+
+    The list form takes precedence when both are present (the dict
+    form's ``host``/``port`` keys would otherwise be applied first by
+    ``_apply_bind_config``). CLI takes precedence over both, so we
+    only set ``args.binds`` when the operator did not pass ``--bind``
+    on the command line.
+
+    A bad entry (missing ``host``, missing ``port``, non-integer
+    ``port``) is logged and skipped so a single bad row in a JSON
+    config does not prevent the daemon from starting — the operator
+    still gets a clear ERROR log line.
+    """
+    if getattr(args, "bind", None):
+        # Operator already specified --bind on the command line. Honor
+        # CLI over config without complaint.
+        return
+
+    bind_section = cfg.get("bind")
+    entries: List[Dict[str, Any]] = []
+    if isinstance(bind_section, list):
+        entries = [e for e in bind_section if isinstance(e, dict)]
+    elif isinstance(bind_section, dict):
+        # Legacy single-bind dict. If host/port keys are present and
+        # the operator did not set them via CLI, treat as a 1-element
+        # list. The legacy ``_apply_bind_config`` already handled the
+        # host/port pair; we just need to mirror it into args.binds so
+        # the multi-bind code path is the single source of truth.
+        if "host" in bind_section or "port" in bind_section:
+            entries = [bind_section]
+    if not entries:
+        return
+
+    parsed: List[Tuple[str, int]] = []
+    for idx, entry in enumerate(entries):
+        host_val = entry.get("host")
+        port_val = entry.get("port")
+        if not isinstance(host_val, str) or not host_val:
+            io.echo(
+                f"bind[{idx}]: missing or non-string 'host' "
+                f"(got: {host_val!r}); skipping",
+                level="error",
+            )
+            continue
+        if isinstance(port_val, int) and not isinstance(port_val, bool):
+            port_int = port_val
+        else:
+            try:
+                port_int = int(port_val)
+            except (TypeError, ValueError):
+                io.echo(
+                    f"bind[{idx}] ({host_val!r}): missing or non-integer "
+                    f"'port' (got: {port_val!r}); skipping",
+                    level="error",
+                )
+                continue
+        if not (1 <= port_int <= 65535):
+            io.echo(
+                f"bind[{idx}] ({host_val!r}): port {port_int} out of range "
+                f"[1, 65535]; skipping",
+                level="error",
+            )
+            continue
+        parsed.append((host_val, port_int))
+
+    if parsed:
+        args.binds = parsed
+
+
+def _resolve_binds(args: argparse.Namespace) -> List[Tuple[str, int]]:
+    """Build the final ``List[Tuple[str, int]]`` that
+    ``WebSocketServer(binds=...)`` will receive.
+
+    Precedence (highest first): ``--bind`` CLI flag,
+    ``bed.json`` ``bind`` list/dict, the legacy
+    ``--host``/``--port`` pair (single element), then the argparse
+    defaults of ``("127.0.0.1", 8765)``.
+    """
+    cli_binds = getattr(args, "bind", None) or []
+    if cli_binds:
+        return [tuple(b) for b in cli_binds]
+    cfg_binds = getattr(args, "binds", None) or []
+    if cfg_binds:
+        return [tuple(b) for b in cfg_binds]
+    return [(args.host, args.port)]
+
 
 DATABASE_FIELDS = {
     "databasename": ("name", str, False),
@@ -1005,9 +1103,14 @@ async def main_async() -> None:
         )
         sys.exit(1)
     _apply_bind_config(args, loaded_config)
+    _apply_bind_list_config(args, loaded_config)
     _apply_bed_name_config(args, loaded_config)
     _apply_database_config(args, loaded_config)
     _apply_auth_config(args, loaded_config)
+    # Compute the final bind list after every config source has had
+    # its say. ``_resolve_binds`` prefers ``--bind`` (CLI) > JSON
+    # ``bind`` list > legacy ``--host``/``--port``.
+    args.binds = _resolve_binds(args)
 
     autorestart, restart_delay, max_restarts, restart_on_bind_failure = (
         get_restart_config(args, loaded_config)

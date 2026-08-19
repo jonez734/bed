@@ -878,6 +878,195 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args.bed_name, "mybbs")
 
 
+class TestBindMulti(unittest.IsolatedAsyncioTestCase):
+    """--bind (CLI, repeatable) and the JSON ``bind`` list/dict shape
+    are merged into a single ``args.binds: List[Tuple[str, int]]`` by
+    ``_apply_bind_list_config`` + ``_resolve_binds``. These tests pin
+    down the precedence: CLI > JSON list > JSON dict (legacy) >
+    --host/--port > argparse default."""
+
+    def _parse(self, argv):
+        import argparse
+        from bed.main import buildargs
+
+        parser = argparse.ArgumentParser(description="BED - BBS Engine Daemon")
+        buildargs(parser)
+        with patch("sys.argv", ["bed", "--config", "/dev/null"] + argv):
+            return parser.parse_args()
+
+    def test_bind_cli_parses_single_literal(self):
+        """--bind 127.0.0.1:8765 yields args.bind = [('127.0.0.1', 8765)]."""
+        args = self._parse(["--bind", "127.0.0.1:8765"])
+        self.assertEqual(args.bind, [("127.0.0.1", 8765)])
+
+    def test_bind_cli_repeats_to_list(self):
+        """--bind may be passed multiple times; each call appends."""
+        args = self._parse([
+            "--bind", "127.0.0.1:8765",
+            "--bind", "[::1]:8765",
+        ])
+        self.assertEqual(
+            args.bind,
+            [("127.0.0.1", 8765), ("::1", 8765)],
+        )
+
+    def test_bind_cli_rejects_missing_port(self):
+        """A bare HOST without :PORT is rejected at parse time so
+        typos do not silently produce a default-port bind."""
+        from bed.lib import _bind_spec
+
+        with self.assertRaises(argparse.ArgumentTypeError):
+            _bind_spec("127.0.0.1")
+        with self.assertRaises(argparse.ArgumentTypeError):
+            _bind_spec("localhost:")
+
+    def test_bind_cli_rejects_non_integer_port(self):
+        """Port must parse as int; 'abc' fails fast."""
+        from bed.lib import _bind_spec
+
+        with self.assertRaises(argparse.ArgumentTypeError):
+            _bind_spec("127.0.0.1:abc")
+
+    def test_bind_cli_rejects_out_of_range_port(self):
+        """Port must be in [1, 65535]; 0 and 70000 are rejected."""
+        from bed.lib import _bind_spec
+
+        with self.assertRaises(argparse.ArgumentTypeError):
+            _bind_spec("127.0.0.1:0")
+        with self.assertRaises(argparse.ArgumentTypeError):
+            _bind_spec("127.0.0.1:70000")
+
+    def test_bind_cli_accepts_localhost_name(self):
+        """--bind localhost:8765 is allowed; the multi-bind code path
+        will fan it out to both 127.0.0.1 and ::1 at bind time."""
+        from bed.lib import _bind_spec
+
+        self.assertEqual(_bind_spec("localhost:8765"), ("localhost", 8765))
+
+    def test_bind_cli_accepts_bracketed_ipv6(self):
+        """--bind '[::1]:8765' keeps the IPv6 literal unambiguous."""
+        from bed.lib import _bind_spec
+
+        self.assertEqual(_bind_spec("[::1]:8765"), ("::1", 8765))
+
+    def test_apply_bind_list_config_parses_list_shape(self):
+        """JSON ``"bind": [{"host":..., "port":...}, ...]`` populates
+        ``args.binds`` when CLI did not pass ``--bind``."""
+        from bed.main import _apply_bind_list_config
+
+        args = self._parse([])
+        cfg = {
+            "bind": [
+                {"host": "127.0.0.1", "port": 9001},
+                {"host": "::1", "port": 9001},
+            ]
+        }
+        _apply_bind_list_config(args, cfg)
+        self.assertEqual(
+            args.binds,
+            [("127.0.0.1", 9001), ("::1", 9001)],
+        )
+
+    def test_apply_bind_list_config_parses_legacy_dict(self):
+        """A legacy ``"bind": {"host":..., "port":...}`` is treated as
+        a one-element list so existing single-bind configs keep
+        working."""
+        from bed.main import _apply_bind_list_config
+
+        args = self._parse([])
+        cfg = {"bind": {"host": "127.0.0.1", "port": 9002}}
+        _apply_bind_list_config(args, cfg)
+        self.assertEqual(args.binds, [("127.0.0.1", 9002)])
+
+    def test_apply_bind_list_config_cli_wins(self):
+        """--bind on the CLI is not overwritten by a JSON list."""
+        from bed.main import _apply_bind_list_config
+
+        args = self._parse(["--bind", "10.0.0.1:1111"])
+        cfg = {"bind": [{"host": "127.0.0.1", "port": 9001}]}
+        _apply_bind_list_config(args, cfg)
+        # args.binds is set in the final _resolve_binds step; this
+        # helper only populates it from config when CLI was absent.
+        self.assertIsNone(getattr(args, "binds", None))
+
+    def test_apply_bind_list_config_skips_bad_entries(self):
+        """A row with missing or invalid host/port is logged and
+        skipped, but valid siblings still pass through."""
+        from bed.main import _apply_bind_list_config
+
+        args = self._parse([])
+        cfg = {
+            "bind": [
+                {"host": "127.0.0.1", "port": 9003},
+                {"port": 9999},                      # missing host
+                {"host": "::1", "port": "not-int"},  # bad port
+                {"host": "::1", "port": 70000},      # out of range
+                {"host": "10.0.0.5", "port": 9004},
+            ]
+        }
+        _apply_bind_list_config(args, cfg)
+        self.assertEqual(
+            args.binds,
+            [("127.0.0.1", 9003), ("10.0.0.5", 9004)],
+        )
+
+    def test_apply_bind_list_config_empty_when_no_bind_keys(self):
+        """A JSON ``"bind": []`` or ``"bind": {}`` produces no
+        args.binds; _resolve_binds falls back to host/port."""
+        from bed.main import _apply_bind_list_config
+
+        args = self._parse([])
+        cfg = {"bind": []}
+        _apply_bind_list_config(args, cfg)
+        self.assertIsNone(getattr(args, "binds", None))
+
+        args = self._parse([])
+        cfg = {"bind": {}}
+        _apply_bind_list_config(args, cfg)
+        self.assertIsNone(getattr(args, "binds", None))
+
+    def test_resolve_binds_cli_first(self):
+        """--bind CLI list wins over JSON list and --host/--port."""
+        from bed.main import _resolve_binds
+
+        args = self._parse([
+            "--bind", "127.0.0.1:9100",
+            "--bind", "[::1]:9100",
+        ])
+        args.binds = [("from-config", 1), ("from-config", 2)]
+        args.host = "from-cli-host"
+        args.port = 9999
+        self.assertEqual(
+            _resolve_binds(args),
+            [("127.0.0.1", 9100), ("::1", 9100)],
+        )
+
+    def test_resolve_binds_config_second(self):
+        """JSON bind list wins when CLI did not pass --bind."""
+        from bed.main import _resolve_binds
+
+        args = self._parse([])
+        args.binds = [("from-config", 8765)]
+        args.host = "127.0.0.1"
+        args.port = 8765
+        self.assertEqual(
+            _resolve_binds(args),
+            [("from-config", 8765)],
+        )
+
+    def test_resolve_binds_falls_back_to_host_port(self):
+        """No CLI --bind, no config: the legacy --host/--port is the
+        single-element bind list."""
+        from bed.main import _resolve_binds
+
+        args = self._parse([])
+        args.bind = None
+        args.binds = None
+        args.host = "10.0.0.7"
+        args.port = 8123
+        self.assertEqual(_resolve_binds(args), [("10.0.0.7", 8123)])
+
+
 class TestPidfile(unittest.TestCase):
     """Test the --pidfile arg and the _write_pidfile / _remove_pidfile
     helpers in bed/src/bed/main.py:main_async."""

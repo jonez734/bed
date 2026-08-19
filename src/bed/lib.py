@@ -1,5 +1,6 @@
 import argparse
 import os
+from typing import Tuple
 
 from bbsengine6.common import safe_path
 from bbsengine6.database import buildargs as databasebuildargs
@@ -27,19 +28,89 @@ def _config_path_type(value: str) -> str:
     return safe_path(value, resolve_symlinks=False)
 
 
+def _bind_spec(value: str) -> Tuple[str, int]:
+    """argparse type= for ``--bind HOST:PORT``.
+
+    Returns ``(host, port)``. Host may be a literal IPv4 / IPv6
+    address, a hostname, or ``localhost`` (which resolves to both A
+    and AAAA records at bind time). Port must be an integer in
+    ``[1, 65535]``. Bare IPv6 addresses (``::1``) need to be wrapped
+    in brackets to keep ``:`` unambiguous: ``--bind '[::1]:8765'``.
+
+    Raises ``argparse.ArgumentTypeError`` with the offending value
+    so the operator sees which --bind entry failed to parse.
+    """
+    if not value or ":" not in value:
+        raise argparse.ArgumentTypeError(
+            f"--bind expects HOST:PORT, got: {value!r}"
+        )
+    # Bracketed IPv6 literal: '[::1]:8765'
+    if value.startswith("["):
+        end = value.find("]")
+        if end == -1 or end + 1 >= len(value) or value[end + 1] != ":":
+            raise argparse.ArgumentTypeError(
+                f"--bind expects HOST:PORT, got: {value!r} "
+                "(missing ']' or ':' after bracket)"
+            )
+        host_str = value[1:end]
+        port_str = value[end + 2:]
+    else:
+        host_str, _, port_str = value.rpartition(":")
+        if not host_str or not port_str:
+            raise argparse.ArgumentTypeError(
+                f"--bind expects HOST:PORT, got: {value!r}"
+            )
+    try:
+        port_int = int(port_str)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"--bind port must be an integer, got: {port_str!r} "
+            f"in {value!r}"
+        )
+    if not (1 <= port_int <= 65535):
+        raise argparse.ArgumentTypeError(
+            f"--bind port out of range [1, 65535], got: {port_int}"
+        )
+    return (host_str, port_int)
+
+
 def buildargs(parentparser: argparse.ArgumentParser) -> None:
     """Add BED arguments to parent parser."""
     databasebuildargs(parentparser)
     parentparser.add_argument(
         "--host",
         default="127.0.0.1",
-        help="Host to bind to (default: 127.0.0.1)",
+        help=(
+            "Host to bind to (sugar for a single --bind HOST:PORT). "
+            "Ignored when --bind is given at least once. "
+            "(default: 127.0.0.1)"
+        ),
     )
     parentparser.add_argument(
         "--port",
         type=int,
         default=8765,
-        help="Port to listen on (default: 8765)",
+        help=(
+            "Port to listen on (sugar for a single --bind HOST:PORT). "
+            "Ignored when --bind is given at least once. "
+            "(default: 8765)"
+        ),
+    )
+    parentparser.add_argument(
+        "--bind",
+        action="append",
+        type=_bind_spec,
+        default=None,
+        metavar="HOST:PORT",
+        help=(
+            "Add one (host, port) bind. Repeatable; one listener "
+            "socket per --bind entry, plus one socket per address "
+            "family when a host name resolves to both A and AAAA "
+            "(e.g. --bind localhost:8765 yields both 127.0.0.1 and "
+            "::1 listeners). Bracketed IPv6 literals use "
+            "--bind '[::1]:8765'. When --bind is given, --host and "
+            "--port are ignored."
+        ),
     )
     parentparser.add_argument(
         "--debug",
