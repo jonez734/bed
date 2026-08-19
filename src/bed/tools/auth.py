@@ -26,6 +26,7 @@ from bbsengine6 import io
 from bbsengine6.util import inputpassword
 
 from bed.client.authservice import BedAuthServiceClient
+from bed.client.exceptions import BedUnavailable
 from bed.tools import _routing
 from bed.tools import _token
 
@@ -309,6 +310,16 @@ def main_with_args(args) -> Optional[bool]:
     Split out from ``main()`` so tests can drive the CLI without going
     through argparse. Returns the subcommand's success flag, or
     ``None`` for early exits (BedNotReachable / --direct guard).
+
+    Connection-level failures are caught in two places:
+
+    - :class:`bed.tools._routing.BedNotReachable` from the TCP probe
+      in :func:`_routing.select_backend` (daemon not listening).
+    - :class:`bed.client.BedUnavailable` from the WebSocket send /
+      recv path in :class:`bed.client.BedConnection` (daemon went
+      away mid-session, dropped connection, post-handshake error).
+    Both render via :func:`bbsengine6.io.echo` with ``level="error"``
+    so no Python traceback reaches the operator.
     """
     if getattr(args, "direct", False):
         io.echo(_DIRECT_UNSUPPORTED_MSG, level="error")
@@ -335,6 +346,9 @@ def main_with_args(args) -> Optional[bool]:
         return False
     except EOFError:
         io.echo("{/all}{restorecursor}*EOF*")
+        return False
+    except BedUnavailable as e:
+        io.echo(str(e), level="error")
         return False
     io.echo(f"unknown subcommand {sub!r}", level="error")
     return False

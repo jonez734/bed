@@ -10,6 +10,8 @@ with LOGIN if it does not already exist, granting it USAGE on the
 
 import sys
 
+import psycopg
+
 from bbsengine6 import database, io, module as bbsmodule
 from bbsengine6.startup import lib as startuplib
 
@@ -62,20 +64,64 @@ def ensure_startup(args):
     Idempotent: safe to call repeatedly.  Returns True on success, False
     on failure.  Non-interactive: does not parse arguments or call
     sys.exit.
+
+    Connection-level failures (database unreachable, missing database,
+    connection refused, OS-level socket errors, psycopg OperationalError
+    when the target database is missing) are caught at the top level
+    and rendered as a one-line friendly message via
+    :func:`bbsengine6.io.echo` with ``level="error"`` so the
+    ``bin/bed-startup`` shim exits cleanly with a useful message rather
+    than a Python traceback.
     """
-    result = startuplib.runmodule(args, "main")
+    try:
+        result = startuplib.runmodule(args, "main")
+    except (
+        ConnectionError,
+        TimeoutError,
+        OSError,
+        psycopg.OperationalError,
+    ) as exc:
+        io.echo(
+            f"bed-startup: cannot reach database: {exc}",
+            level="error",
+        )
+        return False
     if result is not True:
         io.echo("bbsengine6 startup failed, skipping bed role setup", level="error")
         return False
 
-    pool = database.getpool(args, dbname=args.databasename)
-    with database.connect(args, pool=pool) as conn:
-        ok = _ensure_bed_role(args, conn)
-        if not ok:
-            conn.rollback()
-            io.echo("bed role setup failed", level="error")
-            return False
-        conn.commit()
+    try:
+        pool = database.getpool(args, dbname=args.databasename)
+    except (
+        ConnectionError,
+        TimeoutError,
+        OSError,
+        psycopg.OperationalError,
+    ) as exc:
+        io.echo(
+            f"bed-startup: cannot build database pool: {exc}",
+            level="error",
+        )
+        return False
+    try:
+        with database.connect(args, pool=pool) as conn:
+            ok = _ensure_bed_role(args, conn)
+            if not ok:
+                conn.rollback()
+                io.echo("bed role setup failed", level="error")
+                return False
+            conn.commit()
+    except (
+        ConnectionError,
+        TimeoutError,
+        OSError,
+        psycopg.OperationalError,
+    ) as exc:
+        io.echo(
+            f"bed-startup: database connection failed: {exc}",
+            level="error",
+        )
+        return False
     # conn released; casino.startup.main opens its own pool/conn lifecycle.
 
     casino_result = bbsmodule.runmodule(args, "casino.startup.main")

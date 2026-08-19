@@ -52,6 +52,7 @@ from bbsengine6.message import access as _message_access
 from bbsengine6.message import render_template
 
 from bed import _version as bed_version
+from bed.client.exceptions import BedUnavailable
 from bed.tools import _routing
 from bed.tools import _token
 
@@ -866,6 +867,9 @@ def main_with_args(args: Any) -> Optional[bool]:
         return False
     except EOFError:
         io.echo("{/all}{restorecursor}*EOF*")
+        return False
+    except BedUnavailable as e:
+        io.echo(str(e), level="error")
         return False
 
 

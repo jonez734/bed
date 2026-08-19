@@ -35,6 +35,7 @@ from bbsengine6.bank import BankService
 from bbsengine6.bank import access as _bank_access
 
 from bed import _version as bed_version
+from bed.client.exceptions import BedUnavailable
 from bed.tools import _routing
 from bed.tools import _token
 
@@ -952,6 +953,8 @@ def main_with_args(args) -> None:
         io.echo("{/all}{restorecursor}*INTR*")
     except EOFError:
         io.echo("{/all}{restorecursor}*EOF*")
+    except BedUnavailable as e:
+        io.echo(str(e), level="error")
 
 
 def main() -> None:
