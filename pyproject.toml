@@ -46,7 +46,7 @@ script-files = [
     "bin/auth",
     "bin/bank",
     "bin/message",
-    "bin/ping",
+    "bin/bedping",
 ]
 
 [tool.setuptools.packages.find]
