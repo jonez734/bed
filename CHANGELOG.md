@@ -12,6 +12,53 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: ping-friendly-error pattern is now shared across all bin scripts
+
+The friendly "connection refused" / "host unreachable" / "timed out"
+rendering that `bedping` already produced is now driven by a single
+helper in `bbsengine6.net.ping` so every bbsengine6-based bin script
+renders the same one-line message via `bbsengine6.io.echo(level="error")`
+and exits non-zero without a Python traceback when the daemon is not
+listening.
+
+Changes in `bed`:
+
+* `bed.tools.ping` is now a thin module around the shared helper. It
+  re-exports `PingUnavailable` (class identity preserved:
+  `bed.tools.ping.PingUnavailable is bbsengine6.net.ping.PingUnavailable`)
+  and delegates the WebSocket connect to
+  `bbsengine6.net.ping.connect(host, port, prog="bedping")`. The
+  ping/auth round-trip is kept (the existing happy-path test still
+  sends both a ping and an auth frame). The `bin/bedping` shim is
+  unchanged.
+* `bed.tools.auth`, `bed.tools.bank`, and `bed.tools.message` now wrap
+  the `BedUnavailable`-raising dispatch in a top-level `try/except
+  BedUnavailable` and render the failure via
+  `bbsengine6.io.echo(level="error")`, returning a non-zero exit
+  status. Previously a stopped bed daemon produced a raw
+  `ConnectionRefusedError` traceback on `bed auth`, `bed bank`,
+  `bed message`.
+* `bed.startup.ensure_startup` wraps `startuplib.runmodule`,
+  `database.getpool`, and the `database.connect` block in
+  `try/except (ConnectionError, TimeoutError, OSError,
+  psycopg.OperationalError)`, rendering one-line friendly messages
+  via `bbsengine6.io.echo(level="error")` and returning `False` so
+  `bin/bed-startup` exits cleanly when Postgres is unreachable. The
+  internal handling inside `bbsengine6.startup.main` is unchanged;
+  this is defense-in-depth at the `ensure_startup` boundary.
+
+Tests: `src/bed/tests/test_ping_tool.py` patches
+`bbsengine6.net.ping.websockets` (where the connect actually happens
+now) and pins the friendly-error path on `ConnectionRefusedError`,
+`OSError`, `asyncio.TimeoutError`, and `WebSocketException`. The
+happy round-trip regression guard still exercises the ping/auth
+sequence end-to-end. The protocol-bug guard
+(`test_invalid_pong_is_not_silenced`) confirms only transport-level
+failures are swallowed — a wrong `{"type": "wat"}` reply still raises.
+
+The shared helper lives in `bbsengine6/py`; see the bbsengine6
+changelog for the helper itself.
+
 ### bed: strip setgid on `build/` before `python -m build`
 
 On SELinux-enforcing hosts (Fedora, RHEL) and inside `NoNewPrivs`
