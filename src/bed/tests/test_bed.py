@@ -4,10 +4,14 @@
 
 import argparse
 import asyncio
+import errno
 import importlib
 import json
 import os
+import shutil
+import socket
 import sys
+import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -540,15 +544,25 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
                 parser.parse_args()
 
     def test_config_file_overrides_autorestart(self):
-        """External config's bed.autorestart=false is reflected via get_autorestart_config."""
-        from bed.main import get_autorestart_config
+        """External config's bed.autorestart=false is reflected via get_restart_config."""
+        from bed.main import get_restart_config
 
         args = self._parse([])
-        cfg = {"bed": {"autorestart": False, "restart_delay": 7, "max_restarts": 2}}
-        autorestart, restart_delay, max_restarts = get_autorestart_config(args, cfg)
+        cfg = {
+            "bed": {
+                "autorestart": False,
+                "restart_delay": 7,
+                "max_restarts": 2,
+                "restart_on_bind_failure": True,
+            }
+        }
+        autorestart, restart_delay, max_restarts, restart_on_bind_failure = (
+            get_restart_config(args, cfg)
+        )
         self.assertFalse(autorestart)
         self.assertEqual(restart_delay, 7)
         self.assertEqual(max_restarts, 2)
+        self.assertTrue(restart_on_bind_failure)
 
     def test_config_file_bind_overrides_defaults(self):
         """bind.host/bind.port in the config fill in args when CLI omitted them."""
@@ -1499,6 +1513,356 @@ class TestSighupReload(unittest.IsolatedAsyncioTestCase):
             any("Config reload failed" in m for m in errors),
             f"missing reload-failed log; captured={captured}",
         )
+
+
+class TestRestartOnBindFailure(unittest.IsolatedAsyncioTestCase):
+    """bind-failure (EADDRINUSE / EACCES) classification.
+
+    Without these tests, a port-in-use failure makes ``bed`` exit 1
+    and systemd's ``Restart=on-failure`` keeps spinning the unit —
+    which the operator experiences as 'bed auto-restarted even
+    though I set autorestart=false'. The fix introduces a separate
+    ``restart_on_bind_failure`` config key and a special exit code
+    (2) that the systemd unit's ``RestartPreventExitStatus=2``
+    blocks.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.mkdtemp()
+        self._cfg_path = os.path.join(self._tmp, "bed.json")
+        with open(self._cfg_path, "w") as f:
+            f.write("{}")
+
+    def tearDown(self) -> None:
+        try:
+            shutil.rmtree(self._tmp, ignore_errors=True)
+        except Exception:
+            pass
+
+    def _bed_args(self, **overrides: Any) -> argparse.Namespace:
+        defaults = dict(
+            host="127.0.0.1",
+            port=0,
+            debug=False,
+            databasename="x",
+            databasehost="x",
+            databaseport=0,
+            databaseuser="x",
+            databasepassword="x",
+            bed_secret="",
+            bed_name="bed",
+            token_ttl=900,
+            token_persistence="memory",
+            credential_provider="password",
+            bed_instance_id=None,
+            config_file=self._cfg_path,
+            autorestart=False,
+            restart_delay=5,
+            max_restarts=10,
+            restart_on_bind_failure=False,
+        )
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    async def test_real_bind_collision_raises_eaddrinuse(self) -> None:
+        """Hold a port with a plain ``socket.socket`` (which does not
+        set ``SO_REUSEPORT``) and assert that ``WebSocketServer.start()``
+        on the same port raises ``OSError`` with ``errno == 98``.
+        This is the production path that ``main_async`` now classifies
+        as a permanent bind failure.
+
+        We can't use two ``WebSocketServer`` instances because
+        ``bbsengine6.net.transport`` sets both ``SO_REUSEADDR`` and
+        ``SO_REUSEPORT`` and two sockets happily co-bind on Linux.
+        A plain ``socket.socket`` (no SO_REUSEPORT) is the realistic
+        'something else owns the port' scenario."""
+        from bbsengine6.net import WebSocketServer
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(1)
+        port = sock.getsockname()[1]
+        try:
+            server = WebSocketServer(host="127.0.0.1", port=port)
+            with self.assertRaises(OSError) as cm:
+                await server.start()
+            self.assertEqual(
+                cm.exception.errno, errno.EADDRINUSE,
+                f"expected EADDRINUSE (98), got errno={cm.exception.errno}",
+            )
+        finally:
+            sock.close()
+
+    async def test_main_async_exits_2_on_eaddrinuse_when_restart_disabled(
+        self,
+    ) -> None:
+        """The default ``restart_on_bind_failure=false`` plus the
+        default ``autorestart=false``: a bind failure must trigger
+        ``sys.exit(2)`` and NOT enter the restart loop."""
+        bed_main = importlib.import_module("bed.main")
+        bed_instance = MagicMock()
+
+        async def fake_start_raises_eaddrinuse() -> None:
+            raise OSError(errno.EADDRINUSE, "Address already in use")
+
+        async def fake_stop() -> None:
+            return None
+
+        bed_instance.start = fake_start_raises_eaddrinuse
+        bed_instance.stop = fake_stop
+
+        with (
+            patch(
+                "sys.argv",
+                ["bed", "--config", self._cfg_path],
+            ),
+            patch.object(
+                bed_main.config, "load_config", return_value={}
+            ),
+            patch.object(
+                bed_main, "load_router_class", return_value=MagicMock()
+            ),
+            patch.object(bed_main, "ensure_startup", return_value=True),
+            patch.object(bed_main, "BED", return_value=bed_instance),
+            patch.object(bed_main.asyncio, "sleep") as mock_sleep,
+        ):
+            with self.assertRaises(SystemExit) as cm:
+                await bed_main.main_async()
+
+        self.assertEqual(
+            cm.exception.code, 2,
+            f"expected exit code 2, got {cm.exception.code}",
+        )
+        # The contract is that the loop saw a permanent bind failure
+        # and did NOT call asyncio.sleep to retry.
+        mock_sleep.assert_not_called()
+
+    async def test_main_async_exits_2_on_eacces_when_restart_disabled(
+        self,
+    ) -> None:
+        """EACCES (e.g. trying to bind a privileged port without root)
+        is treated as a permanent bind failure too."""
+        bed_main = importlib.import_module("bed.main")
+        bed_instance = MagicMock()
+
+        async def fake_start_raises_eacces() -> None:
+            raise PermissionError(errno.EACCES, "Permission denied")
+
+        async def fake_stop() -> None:
+            return None
+
+        bed_instance.start = fake_start_raises_eacces
+        bed_instance.stop = fake_stop
+
+        with (
+            patch(
+                "sys.argv",
+                ["bed", "--config", self._cfg_path],
+            ),
+            patch.object(
+                bed_main.config, "load_config", return_value={}
+            ),
+            patch.object(
+                bed_main, "load_router_class", return_value=MagicMock()
+            ),
+            patch.object(bed_main, "ensure_startup", return_value=True),
+            patch.object(bed_main, "BED", return_value=bed_instance),
+            patch.object(bed_main.asyncio, "sleep") as mock_sleep,
+        ):
+            with self.assertRaises(SystemExit) as cm:
+                await bed_main.main_async()
+
+        self.assertEqual(cm.exception.code, 2)
+        mock_sleep.assert_not_called()
+
+    async def test_main_async_retries_bind_failure_when_enabled(self) -> None:
+        """With ``restart_on_bind_failure=true``, the in-process loop
+        retries the bind (via asyncio.sleep) and respects ``max_restarts``
+        even though ``autorestart`` is false. ``restart_on_bind_failure``
+        is the gate for bind failures."""
+        bed_main = importlib.import_module("bed.main")
+        bed_instance = MagicMock()
+
+        attempt = {"n": 0}
+
+        async def fake_start_raises_eaddrinuse() -> None:
+            attempt["n"] += 1
+            raise OSError(errno.EADDRINUSE, "Address already in use")
+
+        async def fake_stop() -> None:
+            return None
+
+        bed_instance.start = fake_start_raises_eaddrinuse
+        bed_instance.stop = fake_stop
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "bed",
+                    "--config", self._cfg_path,
+                    "--restart-on-bind-failure",
+                    "--max-restarts", "2",
+                    "--restart-delay", "0",
+                ],
+            ),
+            patch.object(
+                bed_main.config, "load_config", return_value={}
+            ),
+            patch.object(
+                bed_main, "load_router_class", return_value=MagicMock()
+            ),
+            patch.object(bed_main, "ensure_startup", return_value=True),
+            patch.object(bed_main, "BED", return_value=bed_instance),
+            patch.object(
+                bed_main.asyncio, "sleep", new=AsyncMock(return_value=None)
+            ) as mock_sleep,
+        ):
+            await bed_main.main_async()
+
+        # max_restarts=2 means the loop is allowed at most 2 retries
+        # before giving up. start() raises on each attempt, so we
+        # expect exactly 3 invocations (initial + 2 retries).
+        self.assertEqual(
+            attempt["n"], 3,
+            f"expected 3 start() attempts (initial + 2 retries), "
+            f"got {attempt['n']}",
+        )
+        self.assertGreaterEqual(
+            mock_sleep.await_count, 2,
+            f"expected at least 2 sleep calls (between retries), "
+            f"got {mock_sleep.await_count}",
+        )
+
+    async def test_main_async_autorestart_true_still_exits_2_on_bind(self) -> None:
+        """Precedence rule: ``restart_on_bind_failure`` is the gate for
+        bind failures, NOT ``autorestart``. So even with general
+        ``autorestart=true``, a stuck port still exits 2 (the systemd
+        unit's ``RestartPreventExitStatus=2`` keeps the unit from
+        looping). This is the bug we are fixing: previously the
+        systemd-level Restart=on-failure would spin forever on a
+        permanent bind failure regardless of either knob."""
+        bed_main = importlib.import_module("bed.main")
+        bed_instance = MagicMock()
+
+        async def fake_start_raises_eaddrinuse() -> None:
+            raise OSError(errno.EADDRINUSE, "Address already in use")
+
+        async def fake_stop() -> None:
+            return None
+
+        bed_instance.start = fake_start_raises_eaddrinuse
+        bed_instance.stop = fake_stop
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "bed",
+                    "--config", self._cfg_path,
+                    "--autorestart",
+                    "--max-restarts", "0",
+                ],
+            ),
+            patch.object(
+                bed_main.config, "load_config", return_value={}
+            ),
+            patch.object(
+                bed_main, "load_router_class", return_value=MagicMock()
+            ),
+            patch.object(bed_main, "ensure_startup", return_value=True),
+            patch.object(bed_main, "BED", return_value=bed_instance),
+            patch.object(bed_main.asyncio, "sleep") as mock_sleep,
+        ):
+            with self.assertRaises(SystemExit) as cm:
+                await bed_main.main_async()
+
+        self.assertEqual(
+            cm.exception.code, 2,
+            "bind failure must exit 2 even when autorestart is on",
+        )
+        mock_sleep.assert_not_called()
+
+    def test_get_restart_config_defaults(self) -> None:
+        """``get_restart_config`` returns ``restart_on_bind_failure=False``
+        by default, regardless of whether ``autorestart`` is set."""
+        from bed.main import get_restart_config
+
+        args = argparse.Namespace(
+            autorestart=None,
+            restart_delay=None,
+            max_restarts=None,
+            restart_on_bind_failure=None,
+        )
+        cfg = {"bed": {"autorestart": True, "restart_delay": 30}}
+        autorestart, restart_delay, max_restarts, restart_on_bind_failure = (
+            get_restart_config(args, cfg)
+        )
+        self.assertTrue(autorestart)
+        self.assertEqual(restart_delay, 30)
+        self.assertEqual(max_restarts, 10)
+        self.assertFalse(
+            restart_on_bind_failure,
+            "restart_on_bind_failure must default to False even when "
+            "autorestart=True",
+        )
+
+    def test_get_restart_config_cli_overrides_config(self) -> None:
+        """``--restart-on-bind-failure`` on the command line wins over
+        the config file value."""
+        from bed.main import get_restart_config
+
+        args = argparse.Namespace(
+            autorestart=None,
+            restart_delay=None,
+            max_restarts=None,
+            restart_on_bind_failure=True,
+        )
+        cfg = {"bed": {"restart_on_bind_failure": False}}
+        _autorestart, _rd, _mr, robf = get_restart_config(args, cfg)
+        self.assertTrue(robf)
+
+    def test_sighup_applies_restart_on_bind_failure(self) -> None:
+        """SIGHUP with a new ``bed.restart_on_bind_failure`` updates the
+        loop-local ref so the next bind failure uses the new policy."""
+        from bed.main import _reload_config_and_apply
+        from bbsengine6.net.defaultrouter import DefaultRouter
+        from bed.main import BED
+
+        bed_main = importlib.import_module("bed.main")
+
+        args = argparse.Namespace(
+            host="127.0.0.1",
+            port=0,
+            debug=False,
+            databasename="x",
+            databasehost="x",
+            databaseport=0,
+            databaseuser="x",
+            databasepassword="x",
+            bed_secret="",
+            token_ttl=900,
+            token_persistence="memory",
+            credential_provider="password",
+            bed_instance_id=None,
+            config_file=self._cfg_path,
+        )
+        bed = BED(args, DefaultRouter)
+        bed.auth_service = None
+        new_cfg = {"bed": {"restart_on_bind_failure": True}}
+        ar_ref = [False]
+        rd_ref = [5]
+        mr_ref = [10]
+        robf_ref = [False]
+
+        with patch.object(
+            bed_main.config, "load_config", return_value=new_cfg
+        ):
+            _reload_config_and_apply(
+                args, bed, ar_ref, rd_ref, mr_ref, robf_ref
+            )
+
+        self.assertTrue(robf_ref[0])
 
 
 class TestSighupHandler(unittest.TestCase):
