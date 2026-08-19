@@ -8,6 +8,7 @@ import asyncio
 import errno
 import os
 import signal
+import socket
 import sys
 from typing import Any, Dict, List, Optional, Tuple, Type
 
@@ -511,6 +512,30 @@ class BED:
         persistence = getattr(self.args, "token_persistence", "memory")
         return persistence != "none" and not self._is_default_router()
 
+    def _final_binds(self) -> List[Tuple[str, int]]:
+        """Compute the ``List[Tuple[str, int]]`` that
+        ``WebSocketServer(binds=...)`` will receive at start() time.
+
+        Mirrors the precedence order in
+        :func:`_resolve_binds` but is a method so SIGHUP reload can
+        re-read ``self.args`` and pick up config-driven changes
+        without going through ``main_async`` again. Returns a list of
+        ``(host, port)`` tuples; never raises on a malformed arg.
+        """
+        cli_binds = getattr(self.args, "bind", None) or []
+        if cli_binds:
+            return [tuple(b) for b in cli_binds]
+        cfg_binds = getattr(self.args, "binds", None) or []
+        if cfg_binds:
+            return [tuple(b) for b in cfg_binds]
+        host = getattr(self.args, "host", "127.0.0.1") or "127.0.0.1"
+        port = getattr(self.args, "port", 8765) or 8765
+        try:
+            port_int = int(port)
+        except (TypeError, ValueError):
+            port_int = 8765
+        return [(host, port_int)]
+
     async def start(self) -> None:
         """Start the daemon.
 
@@ -549,8 +574,7 @@ class BED:
             await self._start_auth(db_args)
 
         self.server = WebSocketServer(
-            host=self.args.host,
-            port=self.args.port,
+            binds=list(self._final_binds()),
         )
 
         try:
@@ -769,7 +793,17 @@ class BED:
 
         self._running = True
 
-        io.echo(f"BED started on {self.args.host}:{self.args.port}")
+        bound_addrs = getattr(self.server, "_bound_addrs", None) or []
+        if len(bound_addrs) > 1:
+            binds_summary = ", ".join(
+                f"{fam} {host}:{port}" for fam, host, port in bound_addrs
+            )
+            io.echo(
+                f"BED started on {len(bound_addrs)} listeners: "
+                f"{binds_summary}"
+            )
+        else:
+            io.echo(f"BED started on {self.args.host}:{self.args.port}")
         if self.MessageRouterClass:
             io.echo(
                 f"Router: {self.MessageRouterClass.__module__}.{self.MessageRouterClass.__name__}",
@@ -1062,6 +1096,41 @@ def _reload_config_and_apply(
     structural_diffs.extend(
         _diff_config_section(args, new_config, "bind", BIND_FIELDS)
     )
+    # Multi-bind list shape (``bind: [...]``) is structural too. The
+    # legacy dict form is covered by ``_diff_config_section`` above; the
+    # list form is its own key, so compare the resolved ``args.binds``
+    # to what the freshly-loaded config would produce.
+    old_binds = list(getattr(args, "binds", None) or [])
+    if old_binds or isinstance(new_config.get("bind"), list):
+        new_binds_section = new_config.get("bind")
+        new_binds: List[Tuple[str, int]] = []
+        if isinstance(new_binds_section, list):
+            for entry in new_binds_section:
+                if not isinstance(entry, dict):
+                    continue
+                host_val = entry.get("host")
+                port_val = entry.get("port")
+                if (
+                    isinstance(host_val, str)
+                    and host_val
+                    and isinstance(port_val, int)
+                    and not isinstance(port_val, bool)
+                ):
+                    new_binds.append((host_val, port_val))
+        elif isinstance(new_binds_section, dict):
+            host_val = new_binds_section.get("host")
+            port_val = new_binds_section.get("port")
+            if (
+                isinstance(host_val, str)
+                and host_val
+                and isinstance(port_val, int)
+                and not isinstance(port_val, bool)
+            ):
+                new_binds.append((host_val, port_val))
+        if old_binds != new_binds:
+            structural_diffs.append(
+                ("binds", list(new_binds) if new_binds else old_binds)
+            )
     structural_diffs.extend(
         _diff_config_section(args, new_config, "bed", BED_NAME_FIELDS)
     )
@@ -1216,15 +1285,32 @@ async def main_async() -> None:
                     and getattr(e, "errno", None)
                     in (errno.EADDRINUSE, errno.EACCES)
                 )
+                # ``socket.gaierror`` (host did not resolve) and
+                # ``OSError`` from the resolve phase are treated the
+                # same as a permanent bind failure: a typo'd host name
+                # will not start working via in-process retry, so exit
+                # 2 unless the operator explicitly opted into retrying.
+                is_unresolvable_bind = isinstance(e, socket.gaierror)
+                is_permanent_bind_failure = (
+                    is_permanent_bind_failure or is_unresolvable_bind
+                )
 
                 if is_permanent_bind_failure and not current_restart_on_bind_failure:
                     await bed.stop()
-                    io.echo(
-                        f"BED refusing to restart on bind failure: {e}. "
-                        f"Free the port, run as a user with bind permission, "
-                        f"or set restart_on_bind_failure=true to override.",
-                        level="error",
-                    )
+                    if is_unresolvable_bind:
+                        io.echo(
+                            f"BED refusing to start: bind host did not "
+                            f"resolve: {e}. Check --bind / bind entries in "
+                            f"bed.json and /etc/hosts.",
+                            level="error",
+                        )
+                    else:
+                        io.echo(
+                            f"BED refusing to restart on bind failure: {e}. "
+                            f"Free the port, run as a user with bind permission, "
+                            f"or set restart_on_bind_failure=true to override.",
+                            level="error",
+                        )
                     sys.exit(2)
 
                 if (

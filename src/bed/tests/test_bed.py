@@ -2094,5 +2094,230 @@ class TestSighupHandler(unittest.TestCase):
         bed_main._reload_config_and_apply.assert_not_called()
 
 
+class TestBindMultiStart(unittest.IsolatedAsyncioTestCase):
+    """``BED.start()`` should pass ``args.binds`` through to the
+    underlying ``WebSocketServer`` and produce one listener per
+    resolved bind. These tests stub out DB + auth and drive the
+    daemon directly so we exercise the multi-bind code path without
+    needing a running PostgreSQL."""
+
+    def _make_args(self, **overrides):
+        """Build a MagicMock args namespace with the multi-bind
+        attributes populated, plus the DB+auth stubs BED.start()
+        expects."""
+        mock_args = MagicMock()
+        mock_args.databasename = "test"
+        mock_args.databasehost = "localhost"
+        mock_args.databaseport = 5432
+        mock_args.databaseuser = "test"
+        mock_args.databasepassword = "test"
+        mock_args.debug = False
+        mock_args.bed_name = "bed"
+        mock_args.config_file = "/dev/null"
+        mock_args.token_persistence = "none"
+        mock_args.credential_provider = "password"
+        mock_args.bed_secret = None
+        mock_args.bed_instance_id = None
+        mock_args.token_ttl = 900
+        mock_args.no_message_service = True
+        mock_args.no_bank_service = True
+        # Multi-bind attrs
+        mock_args.bind = None
+        mock_args.binds = None
+        mock_args.host = "127.0.0.1"
+        mock_args.port = 0
+        for k, v in overrides.items():
+            setattr(mock_args, k, v)
+        return mock_args
+
+    def _free_port(self):
+        import socket as _s
+        s = _s.socket(_s.AF_INET, _s.SOCK_STREAM)
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        return port
+
+    async def _drive_bed_with_binds(self, args):
+        """Run ``bed.start()`` in a task and stop it as soon as the
+        server is live. ``start()`` ends in
+        ``while self._running: await asyncio.sleep(1)`` so the test
+        cannot ``await bed.start()`` directly — the sleep loop would
+        hang forever. Instead we launch it as a task and schedule
+        ``bed.stop()`` to fire after a short delay, which lets us
+        inspect ``bed.server._bound_addrs`` between start and stop.
+        """
+        import asyncio as _asyncio
+        from bbsengine6.net.defaultrouter import DefaultRouter
+        from bed.main import BED
+
+        mock_pool = MagicMock()
+        mock_pool.connection.return_value.__enter__ = MagicMock(
+            return_value=MagicMock()
+        )
+        mock_pool.connection.return_value.__exit__ = MagicMock(
+            return_value=False
+        )
+        bed = BED(args, DefaultRouter)
+        start_task = _asyncio.create_task(
+            _run_with_mock_db(bed, mock_pool)
+        )
+        # Wait until the server is constructed and listening.
+        for _ in range(200):
+            if bed.server is not None and bed.server._bound_addrs:
+                break
+            await _asyncio.sleep(0.01)
+        else:
+            await bed.stop()
+            start_task.cancel()
+            try:
+                await start_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            raise AssertionError(
+                f"server never finished bind; "
+                f"_bound_addrs={bed.server._bound_addrs if bed.server else None}"
+            )
+        return bed, start_task
+
+    async def test_bed_start_opens_multiple_listeners(self):
+        """Two literal --bind entries become two listeners, both
+        reachable on their respective stacks."""
+        port = self._free_port()
+        args = self._make_args(
+            bind=[("127.0.0.1", port), ("::1", port)],
+        )
+        bed, start_task = await self._drive_bed_with_binds(args)
+        try:
+            assert bed.server is not None
+            assert len(bed.server._bound_addrs) == 2, (
+                f"expected 2 listeners, got: {bed.server._bound_addrs}"
+            )
+            import websockets as _ws
+            async with _ws.connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"type": "ping"}))
+                resp = json.loads(await ws.recv())
+                self.assertEqual(resp["type"], "pong")
+            async with _ws.connect(f"ws://[::1]:{port}/") as ws:
+                await ws.send(json.dumps({"type": "ping"}))
+                resp = json.loads(await ws.recv())
+                self.assertEqual(resp["type"], "pong")
+        finally:
+            await bed.stop()
+            try:
+                await start_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    async def test_bed_start_uses_args_binds_when_no_cli_bind(self):
+        """When CLI --bind is absent but args.binds was populated
+        from JSON (main_async's job), BED.start() uses it."""
+        port = self._free_port()
+        args = self._make_args(
+            bind=None,
+            binds=[("127.0.0.1", port)],
+        )
+        bed, start_task = await self._drive_bed_with_binds(args)
+        try:
+            self.assertEqual(len(bed.server._bound_addrs), 1)
+            self.assertEqual(bed.server._bound_addrs[0][1], "127.0.0.1")
+            self.assertEqual(bed.server._bound_addrs[0][2], port)
+        finally:
+            await bed.stop()
+            try:
+                await start_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    async def test_bed_start_falls_back_to_host_port(self):
+        """No --bind, no binds → legacy --host/--port single bind."""
+        port = self._free_port()
+        args = self._make_args(
+            bind=None,
+            binds=None,
+            host="127.0.0.1",
+            port=port,
+        )
+        bed, start_task = await self._drive_bed_with_binds(args)
+        try:
+            self.assertEqual(len(bed.server._bound_addrs), 1)
+        finally:
+            await bed.stop()
+            try:
+                await start_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    async def test_bed_start_unresolvable_bind_exits_2(self):
+        """A typo'd --bind host name is treated like a permanent bind
+        failure and propagates out of start(). The autorestart loop
+        in main_async is what converts that to sys.exit(2); here we
+        just verify start() raises a gaierror so the loop sees it."""
+        import socket as _s
+        from bbsengine6.net.defaultrouter import DefaultRouter
+        from bed.main import BED
+
+        args = self._make_args(
+            bind=[("definitely-not-a-real-host.invalid", 8765)],
+        )
+        mock_pool = MagicMock()
+        mock_pool.connection.return_value.__enter__ = MagicMock(
+            return_value=MagicMock()
+        )
+        mock_pool.connection.return_value.__exit__ = MagicMock(
+            return_value=False
+        )
+        with patch("bed.main.getpool", return_value=mock_pool):
+            bed = BED(args, DefaultRouter)
+            with self.assertRaises(_s.gaierror):
+                await bed.start()
+        # The server was never constructed (resolve fails first).
+        self.assertIsNone(bed.server)
+
+    def test_final_binds_precedence(self):
+        """``BED._final_binds`` returns the right list given each
+        precedence combination. Pure logic test, no event loop."""
+        from bbsengine6.net.defaultrouter import DefaultRouter
+        from bed.main import BED
+
+        cases = [
+            # (kwargs, expected)
+            (
+                {"bind": [("127.0.0.1", 9100)], "binds": None,
+                 "host": "ignored", "port": 0},
+                [("127.0.0.1", 9100)],
+            ),
+            (
+                {"bind": None, "binds": [("10.0.0.1", 9200)],
+                 "host": "ignored", "port": 0},
+                [("10.0.0.1", 9200)],
+            ),
+            (
+                {"bind": None, "binds": None, "host": "192.168.1.1",
+                 "port": 9300},
+                [("192.168.1.1", 9300)],
+            ),
+            (
+                {"bind": [("1", 1)], "binds": [("2", 2)], "host": "3",
+                 "port": 3},
+                [("1", 1)],  # CLI wins
+            ),
+        ]
+        for kwargs, expected in cases:
+            args = self._make_args(**kwargs)
+            bed = BED(args, DefaultRouter)
+            self.assertEqual(bed._final_binds(), expected)
+
+
+async def _run_with_mock_db(bed, mock_pool):
+    """Helper for ``TestBindMultiStart``: run ``bed.start()`` with
+    ``bed.main.getpool`` patched so the DB layer does not try to talk
+    to a real PostgreSQL. Used to drive the full BED.start() path
+    in tests that need to inspect ``bed.server._bound_addrs`` after
+    the WebSocketServer has been built and bound."""
+    with patch("bed.main.getpool", return_value=mock_pool):
+        await bed.start()
+
+
 if __name__ == "__main__":
     unittest.main()
