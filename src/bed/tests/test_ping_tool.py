@@ -262,8 +262,15 @@ class TestMainHappyPath:
     def test_ping_auth_round_trip_returns_zero(self, monkeypatch):
         port = _free_port()
 
-        # Stub input() so the script doesn't block on stdin.
-        monkeypatch.setattr("builtins.input", lambda *_a, **_k: "alice")
+        # Stub bbsengine6.io.inputstring so the script doesn't block on
+        # stdin. The post-fix ping tool reads the moniker through
+        # ``io.inputstring`` (matching every other bed CLI prompt) —
+        # no longer the raw ``builtins.input``.
+        monkeypatch.setattr(
+            ping_tool.io,
+            "inputstring",
+            MagicMock(return_value="alice"),
+        )
 
         # The fake WebSocket replies to ``ping`` with a pong and to
         # ``auth`` with a success envelope.
@@ -291,7 +298,11 @@ class TestMainHappyPath:
         must still raise — we only swallow connection failures, not
         protocol-level bugs."""
         port = _free_port()
-        monkeypatch.setattr("builtins.input", lambda *_a, **_k: "alice")
+        monkeypatch.setattr(
+            ping_tool.io,
+            "inputstring",
+            MagicMock(return_value="alice"),
+        )
 
         # Server replies with a wrong type. The script asserts on
         # ``type == "pong"``; that AssertionError must propagate so it

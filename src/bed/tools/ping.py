@@ -51,7 +51,9 @@ async def _ping_then_auth(host: str, port: int) -> None:
         pong = json.loads(await ws.recv())
         assert pong.get("type") == "pong", f"expected pong, got {pong!r}"
         print(f"<- {pong}")
-        moniker = input("moniker: ").strip()
+        moniker = io.inputstring(
+            "{var:promptcolor}moniker: {var:inputcolor}", ""
+        ).strip()
         auth = {"type": "auth", "moniker": moniker, "password": ""}
         await ws.send(json.dumps(auth))
         result = json.loads(await ws.recv())

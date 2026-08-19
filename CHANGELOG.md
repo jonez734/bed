@@ -12,6 +12,47 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: apply `{var:promptcolor}` / `{var:inputcolor}` to all CLI interactive prompts
+
+The `bed auth`, `bed bank`, and `bedping` console scripts read
+user input via `bbsengine6.io.inputstring`, `bbsengine6.io.inputpassword`,
+and `bbsengine6.io.inputinteger`. Eight prompts were missing the
+`{var:promptcolor}` / `{var:inputcolor}` markup that the rest of
+bed's CLI (and the established `bbsengine6.io` contract) expects,
+so the prompt and input area rendered without the skin's colors.
+All free-form prompts now include the color tags; the single
+`inputchoice` call (`bed bank` menu) was already correct.
+`bedping` is also migrated off Python's raw `input()` so it stops
+bypassing `bbsengine6.io` markup — it was the last remaining
+raw-`input()` call site in bed's CLI.
+
+* `bed/src/bed/tools/auth.py:198` — `io.inputstring("moniker: ")` →
+  `"{var:promptcolor}moniker: {var:inputcolor}"`.
+* `bed/src/bed/tools/auth.py:204` — `inputpassword("password: ")` →
+  `"{var:promptcolor}password: {var:inputcolor}"`; now passes
+  `args=args` so `inputpassword`'s `**kwargs` forwards the same
+  args context the door-mode loop uses.
+* `bed/src/bed/tools/bank.py:559, 581, 603, 607, 654, 678` — six
+  `io.inputinteger` / `io.inputstring` prompts wrapped in the
+  same markup. Prompt text lowercased (`"Amount to add: "` →
+  `"amount to add: "`) for consistency with the existing
+  `auth` prompts.
+* `bed/src/bed/tools/ping.py:54` — raw `input("moniker: ")` →
+  `io.inputstring("{var:promptcolor}moniker: {var:inputcolor}")`.
+
+Tests: `bed/src/bed/tests/test_ping_tool.py`
+`test_ping_auth_round_trip_returns_zero` and
+`test_invalid_pong_is_not_silenced` swap their `builtins.input`
+stub for a `ping_tool.io.inputstring` mock so the prompt is
+read through `bbsengine6.io` like every other bed CLI prompt.
+No regression assertions on color-tag presence — tests verify
+behavior only; color tags live exclusively in production code.
+
+The kwarg additions for the bank prompts (`args=args`) are
+deferred to `TODO.md` "Interactive prompts: pass `args=args` to
+bed CLI input calls" so this change stays focused on the
+color-tag bug and the `ping.py` migration.
+
 ### bed: ping-friendly-error pattern is now shared across all bin scripts
 
 The friendly "connection refused" / "host unreachable" / "timed out"

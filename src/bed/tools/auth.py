@@ -195,13 +195,17 @@ def auth_login(args) -> bool:
     _ensure_token_file_arg(args)
     moniker = (getattr(args, "moniker", None) or "").strip()
     if not moniker:
-        moniker = io.inputstring("moniker: ", "", args=args).strip()
+        moniker = io.inputstring(
+            "{var:promptcolor}moniker: {var:inputcolor}", "", args=args
+        ).strip()
     if not moniker:
         io.echo("moniker is required", level="error")
         return False
     password = (getattr(args, "password", None) or "").strip()
     if not password:
-        password = inputpassword("password: ").strip()
+        password = inputpassword(
+            "{var:promptcolor}password: {var:inputcolor}", args=args
+        ).strip()
     if not password:
         io.echo("password is required", level="error")
         return False

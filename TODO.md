@@ -2340,3 +2340,44 @@ targets.
 - `deploytool/src/deploytool/lib.py:189-198` — sub-target
   defaulting logic (first entry wins when no sub given).
 
+
+## Interactive prompts: pass `args=args` to bed CLI input calls
+
+### Problem
+
+`bed/tools/auth.py:204` and `bed/tools/bank.py:880` pass `args=args`
+to their `io.input*()` calls so the underlying `bbsengine6.io`
+prompt/screen pipeline sees the same args context as the door-mode
+loop. The eight other `io.input*()` call sites in `bed/tools/`
+got color-tag wrapping in the `### bed: apply {var:promptcolor} /
+{var:inputcolor}` fix but no `args=args`; they currently work
+because `inputstring`'s `**kwargs` doesn't require it, but they're
+inconsistent with the rest of bed's CLI and may miss screen-context
+features that future bbsengine6 versions add behind `args`.
+
+### Tasks
+
+- [ ] Add `args=args` to `bed/src/bed/tools/bank.py:559`
+      `io.inputinteger("...")` (`bank_add`).
+- [ ] Add `args=args` to `bed/src/bed/tools/bank.py:581`
+      `io.inputinteger("...")` (`bank_remove`).
+- [ ] Add `args=args` to `bed/src/bed/tools/bank.py:603`
+      `io.inputstring("...")` (`bank_transfer` — to-moniker prompt).
+- [ ] Add `args=args` to `bed/src/bed/tools/bank.py:607`
+      `io.inputinteger("...")` (`bank_transfer` — amount prompt).
+- [ ] Add `args=args` to `bed/src/bed/tools/bank.py:654`
+      `io.inputinteger("...")` (`bank_approve`).
+- [ ] Add `args=args` to `bed/src/bed/tools/bank.py:678`
+      `io.inputinteger("...")` (`bank_reject`).
+
+### Cross-references
+
+- `bed/src/bed/tools/bank.py:880` — `inputchoice` call that
+  already passes `args=args`; the canonical example.
+- `bed/src/bed/tools/auth.py:204` — `inputpassword` call that
+  passes `args=args` after the color-tag fix.
+- `bed/src/bed/tools/ping.py` — the new `io.inputstring` call
+  (post-fix) deliberately omits `args=args` because
+  `_ping_then_auth(host, port)` has no `args` namespace.
+- `bbsengine6/py/src/bbsengine6/io/inputinteger.py:4-19` —
+  `inputinteger` forwards `**kwargs` to `inputstring`.
