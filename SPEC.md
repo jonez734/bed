@@ -1,6 +1,6 @@
 # bed (BBS Engine Daemon) — Specification
 
-> **Status (2026-08-03):** v1 stable (daemon core, AuthService, MessageService, BankService, FHS install). v1.1 in flight (MessageService GA + cross-repo adoption). v2 design-only.
+> **Status (2026-08-19):** v1 stable (daemon core, AuthService, MessageService, BankService, FHS install, multi-bind). v1.1 in flight (MessageService GA + cross-repo adoption). v2 design-only.
 >
 > This file is the **entry point** for understanding `bed`. For per-item line numbers, see:
 >
@@ -10,7 +10,7 @@
 > - `bed/FHS.md` — FHS/UAPI compliance design
 > - `bbsengine6/TODO.md`, `bbsengine6/TODO-BOTTOMBAR.md` — engine-side dependencies
 >
-> Last updated: 2026-08-03
+> Last updated: 2026-08-19
 
 ---
 
@@ -111,9 +111,10 @@ Plus: `bed/tests/scripts/stop_bed.sh` (SIGTERM/SIGKILL test helper).
 
 | Feature | Module / File | Test | Notes |
 |---|---|---|---|
-| `BED` daemon class | `bed/src/bed/main.py:617` | `test_bed.py` | start/stop/restart, autorestart, restart_delay, max_restarts, restart_on_bind_failure |
-| CLI argparse | `bed/src/bed/lib.py:147-156` | `test_bed.py::TestConfigFlag` | --host, --port, --router, --config, --pidfile, --autorestart, --restart-on-bind-failure, --debug, --foreground |
-| Default host | `bed/src/bed/main.py` | n/a | `127.0.0.1` (was `localhost`, ambiguous for server bind) |
+| `BED` daemon class | `bed/src/bed/main.py:617` | `test_bed.py` | start/stop/restart, autorestart, restart_delay, max_restarts, restart_on_bind_failure, multi-bind (`--bind`, JSON `bind` list, `localhost` → dual-stack) |
+| CLI argparse | `bed/src/bed/lib.py:147-156` | `test_bed.py::TestConfigFlag` | --host, --port, --bind (repeatable), --router, --config, --pidfile, --autorestart, --restart-on-bind-failure, --debug, --foreground |
+| Default host | `bed/src/bed/main.py` | n/a | `127.0.0.1` (was `localhost`, ambiguous for server bind). Multi-bind available via `--bind` (CLI) or `bind: [...]` in `bed.json`; `localhost` in `--bind` resolves to both A and AAAA listeners. |
+| Multi-bind (dual-stack) | `bed/src/bed/lib.py` + `bed/src/bed/main.py` + `bbsengine6/net/transport.py` | `test_bed.py::TestBindMulti`, `TestBindMultiStart`, `test_transport_multibind.py` | One daemon can listen on multiple `(host, port)` pairs; each name-based entry fans out via `getaddrinfo(AF_UNSPEC)`. State shared across listeners. See `README.md` Multi-bind section. |
 | PID file (atomic) | `bed/src/bed/main.py:68-` | `test_bed.py::TestPidfile` | O_EXCL TOCTOU retry, stale-overwrite, live-collision exit 1 |
 | `bed.json` loader | `bed/src/bed/config.py:21-48` | `test_bed.py` | CLI > file > argparse default; BED_* env-var support; deep-merge |
 | Missing-config error | `bed/src/bed/main.py:336-345` | `test_bed.py` | Exits 1 with `Config file not found:` |
@@ -307,7 +308,32 @@ These items are currently bed-local but could/should move to bbsengine6 once the
 
 **Game side:** empyre (Phase 1 of empyre/TODO.md), casino, mistermcfeely/postoffice, murdermotel, zoid6, bbsengine6 bank service.
 
-### 6.6 v2.0 — Multi-Instance Load Balancing
+### 6.6 v1.5 — Multi-Bind (DONE)
+
+- One daemon listens on multiple `(host, port)` pairs via `--bind`
+  (repeatable) and the JSON `bind` list.
+- Each name-based entry resolves via `getaddrinfo(AF_UNSPEC)` so a
+  single `localhost` produces both IPv4 and IPv6 listeners.
+- State (services, session manager, channel state, pre/post
+  dispatch hooks) is shared across every listener — a service
+  registered once reaches every bind.
+- Partial-bind failure (EADDRINUSE on the second bind, EACCES on a
+  privileged port, `gaierror` on a typo'd host) closes already-
+  opened sockets before re-raising so no port is held by a half-
+  started daemon.
+- `restart_on_bind_failure` semantics extend to multi-bind; the
+  error message distinguishes "free the port" from "check
+  /etc/hosts".
+- SIGHUP reload detects bind-list changes as structural.
+
+Backend: `WebSocketServer(binds=...)` in `bbsengine6/net/transport.py`.
+CLI plumbing: `bed/src/bed/lib.py:_bind_spec` and the `--bind`
+argparse flag. Config plumbing: `bed/src/bed/main.py:_apply_bind_list_config`
+and `_resolve_binds`. Tests: `bbsengine6/py/tests/test_transport_multibind.py`
+(10) + `bed/src/bed/tests/test_bed.py::TestBindMulti` (15) +
+`TestBindMultiStart` (5).
+
+### 6.7 v2.0 — Multi-Instance Load Balancing
 
 **Path A (minimum viable, "no interactive password prompt on rebalance"):**
 - A1: shared signing key (`--bed-secret-source {file,env}`)
@@ -320,11 +346,11 @@ These items are currently bed-local but could/should move to bbsengine6 once the
 - Per-connection UUID (replace process-local `id(websocket)`)
 - `next_request_id` becomes `SELECT FOR UPDATE`
 
-**Prerequisites:** v1.0–v1.4 must be stable. Path A → Path B progression with sticky-sessions check first.
+**Prerequisites:** v1.0–v1.5 must be stable. Path A → Path B progression with sticky-sessions check first.
 
 **Detailed design:** see `bed/docs/BED_AUTH.md` v2 Roadmap section.
 
-### 6.7 Implementation order (per `bed/TODO.md:951-963`)
+### 6.8 Implementation order (per `bed/TODO.md:951-963`)
 
 The original 12-step implementation order from `bed/TODO.md` (note: items 1–3 are complete; items 4–12 are open):
 

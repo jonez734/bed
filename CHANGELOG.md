@@ -12,6 +12,50 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: multi-bind (`--bind` CLI + JSON `bind` list)
+
+Operators can now declare multiple listening addresses with one
+daemon. A single host name like `localhost` fans out to one IPv4
+listener and one IPv6 listener; explicit literals (`--bind 127.0.0.1`
++ `--bind ::1`) work too.
+
+* New CLI flag `--bind HOST:PORT`, repeatable. Bracketed IPv6
+  literals are supported (`--bind '[::1]:8765'`). Port range
+  `[1, 65535]` is enforced at parse time.
+* `bed.json` accepts `"bind": [{"host": "...", "port": ...}, ...]`
+  (canonical list shape) and the legacy `"bind": {"host": ...,
+  "port": ...}` dict shape.
+* Precedence: `--bind` CLI > JSON `bind` list > JSON `bind` dict >
+  `--host`/`--port` > argparse default. Documented in
+  `SPEC.md §3` and `README.md`.
+* `BED.start()` passes the resolved list to `WebSocketServer(binds=)`
+  in `bbsengine6`. State (services, channel state, session manager,
+  pre/post dispatch hooks) is shared across every listener, so a
+  service registered once reaches every bind.
+* Logging: a multi-bind start logs one line per listener with the
+  address family (`inet` / `inet6`) plus a summary line. The
+  single-bind case keeps the historical "BED started on HOST:PORT"
+  line shape so existing log scrapers keep working.
+* `restart_on_bind_failure` semantics extend to multi-bind: any of
+  the N binds failing with `EADDRINUSE`/`EACCES` (or a typo'd host
+  producing `gaierror`) triggers the exit-2 path. The error message
+  distinguishes "free the port" from "check /etc/hosts".
+* SIGHUP reload detects changes to the bind list as structural
+  (restart required).
+
+Files touched:
+
+- `src/bed/lib.py` — `_bind_spec()` argparse type, `--bind` flag.
+- `src/bed/main.py` — `_apply_bind_list_config()`, `_resolve_binds()`,
+  `BED._final_binds()`, multi-bind log line, `gaierror` handling.
+- `src/bed/tests/test_bed.py` — `TestBindMulti` (15 tests) and
+  `TestBindMultiStart` (5 tests).
+
+Dependency on `bbsengine6 >= 0.0.1.dev202608191019` for the new
+`binds=` keyword on `WebSocketServer`. Older bed installs against
+older bbsengine6 still work; the legacy `host=`/`port=` keyword
+remains the 1-element shortcut.
+
 ### bed: `restart_on_bind_failure` knob, exit 2 on EADDRINUSE/EACCES
 
 A permanent bind failure (port already in use, or permission denied)

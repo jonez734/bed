@@ -169,8 +169,11 @@ knobs, and threat model.
 ## CLI flags
 
 ```
---host HOST                default: 127.0.0.1
---port PORT                default: 8765
+--host HOST                default: 127.0.0.1 (sugar for a single --bind)
+--port PORT                default: 8765 (sugar for a single --bind)
+--bind HOST:PORT           repeatable; one listener per (host, port).
+                           A name like 'localhost' fans out to both
+                           IPv4 and IPv6 listeners.
 --router DOTTED.NAME       default: bbsengine6.net.defaultrouter.DefaultRouter
 --config PATH              REQUIRED (no fallback search)
 --bed-secret PATH          default: ~/.config/bed/bed.secret
@@ -189,6 +192,52 @@ knobs, and threat model.
 ```
 
 Run `bed --help` for the authoritative list.
+
+### Multi-bind
+
+A daemon can listen on more than one address at once. State (services,
+session manager, channel state, auth context) is shared across every
+listener so a service registered once reaches every bind.
+
+```bash
+# IPv4 + IPv6 on the same port, both stacks reachable:
+bed --bind 127.0.0.1:8765 --bind '[::1]:8765' ...
+
+# 'localhost' resolves to both A and AAAA so this is equivalent
+# to the explicit two-line form above (on hosts whose /etc/hosts
+# lists both 127.0.0.1 and ::1 for localhost):
+bed --bind localhost:8765 ...
+```
+
+Same shape via `bed.json`:
+
+```json
+{
+  "bind": [
+    {"host": "127.0.0.1", "port": 8765},
+    {"host": "::1",        "port": 8765}
+  ]
+}
+```
+
+The legacy `"bind": {"host": "...", "port": ...}` dict shape and the
+singleton `--host` / `--port` flags still work; precedence is
+`--bind` (CLI) > JSON `bind` list > JSON `bind` dict > `--host`/`--port`
+> argparse default (`127.0.0.1:8765`).
+
+A multi-bind start logs one line per listener plus a summary:
+
+```
+BED WebSocket listener: family=inet  host=127.0.0.1 port=8765
+BED WebSocket listener: family=inet6 host=::1       port=8765
+BED started on 2 listeners: inet 127.0.0.1:8765, inet6 ::1:8765
+```
+
+Any listener failing with `EADDRINUSE`/`EACCES` or a typo'd host
+(`gaierror`) is treated as a permanent bind failure: the daemon
+exits 2 unless `restart_on_bind_failure` is set. On partial-bind
+failure, the listeners that did open are closed before exit so no
+port is held by a half-started daemon.
 
 ## Configuration
 
