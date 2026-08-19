@@ -90,6 +90,26 @@ and builds wheels for all three into `/tmp` so they can be installed into the
 shared venv via `sudo -u $(VENV_OWNER) $(VENV_DIR)/bin/pip install` (the venv
 owner may not have access to the source tree).
 
+#### SELinux + setgid build trees
+
+On SELinux-enforcing hosts (Fedora, RHEL) running inside a
+`NoNewPrivs` container, the project tree (`/home/opencode/data/work`
+and its project subdirs) typically carries the setgid bit (mode
+`0o2775`). `python -m build` then fails with
+`Errno 1: Operation not permitted` because setuptools
+`bdist_wheel.egg2dist` calls `shutil.copystat(<egg-info>,
+<dist-info>)` and the source egg-info has mode `0o2775` (setgid
+inherited). The build process lacks `CAP_FSETID`, so the
+`os.chmod` of the freshly-created `<dist-info>/` raises EPERM.
+
+The `Makefile` defends against this with a `PREPARE_BUILD`
+helper that runs `mkdir -p <proj>/build && chmod g-s <proj>/build`
+before each `python -m build`, ensuring `<project>/build/` has
+mode `0o755` (no setgid) so every nested dir the build creates
+inherits no setgid and the `chmod 0o775` mirror succeeds. (See
+`CHANGELOG.md` under "Unreleased" for the full diagnosis.) The
+fix is automatic and needs no operator action.
+
 #### SELinux
 
 On systems with SELinux enforcing (Fedora, RHEL, CentOS), the venv binaries

@@ -12,6 +12,46 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: strip setgid on `build/` before `python -m build`
+
+On SELinux-enforcing hosts (Fedora, RHEL) and inside `NoNewPrivs`
+containers, `python -m build` failed with
+`Errno 1: Operation not permitted` when the source tree carried
+the setgid bit (mode `0o2775`). The failure originates in
+`shutil.copystat` (called from `setuptools.bdist_wheel.egg2dist`
+via `shutil.copytree(<pkg>.egg-info, <pkg>.dist-info)`): the final
+step `copystat(src_dir, dst_dir)` calls `os.chmod(dst,
+stat.S_IMODE(src.st_mode))`, and the source `<pkg>.egg-info/` has
+mode `0o2775` because setgid was inherited from the project tree.
+The build process lacks `CAP_FSETID`, so the `chmod` raises EPERM
+and the wheel build aborts.
+
+The `Makefile` now runs a `PREPARE_BUILD` helper before every
+`python -m build` invocation — `build`, `install-venv` (three
+sites), and `deploy-venv` (three sites). The helper is:
+
+```make
+PREPARE_BUILD = mkdir -p $(1)/build && chmod g-s $(1)/build
+```
+
+`chmod g-s` (not `chmod 0755`) is the right primitive because
+the build process lacks `CAP_FSETID`, so on a setgid parent only
+*stripping* the setgid bit is permitted; `chmod 0755` on an
+`0o2775` dir raises EPERM. Without this, setuptools
+`bdist_wheel` EPERMs in SELinux-enforcing + `NoNewPrivs`
+containers when `shutil.copystat` mirrors the in-tree
+`<pkg>.egg-info/` mode `0o2775` onto the freshly-created
+`<pkg>.dist-info/`.
+
+Affected targets:
+
+- `build`, `install-venv`, `deploy-venv` in `bed/Makefile`
+- `build` in `getdate_next/Makefile`
+
+(`bbsengine6/py/Makefile` has no `python -m build` target of its
+own; its wheel is built from `bed/Makefile`'s `install-venv` /
+`deploy-venv` calls.)
+
 ### bed: multi-bind (`--bind` CLI + JSON `bind` list)
 
 Operators can now declare multiple listening addresses with one

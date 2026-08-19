@@ -62,6 +62,7 @@ ensure-build-dir: ensure-repo
 	@stat -c '%a' /srv/repo/$(PROJECT)/ 2>/dev/null | grep -q '^2775$$' || sudo chmod 2775 /srv/repo/$(PROJECT)/
 
 build: version ensure-build-dir
+	$(call PREPARE_BUILD,$(CURDIR))
 	$(PYTHON) -m build --outdir $(OUTDIR)
 
 rename-sdist:
@@ -120,6 +121,15 @@ WHEEL_DIR = /tmp/$(PROJECT)-$$
 BBSENGINE_DIR = $(CURDIR)/../bbsengine6/py
 GETDATE_DIR = $(CURDIR)/../getdate_next
 
+# Make sure $(1)/build/ exists with mode 0755 (no setgid) before invoking
+# `python -m build`. `chmod g-s` is used (not `chmod 0755`) because the
+# process lacks CAP_FSETID, so only stripping the setgid bit is permitted
+# on a dir we own; `chmod 0755` on a 0o2775 dir raises EPERM. Without
+# this, setuptools bdist_wheel EPERMs in SELinux-enforcing + NoNewPrivs
+# containers when shutil.copystat mirrors the in-tree egg-info's mode
+# 0o2775 onto the freshly-created dist-info dir.
+PREPARE_BUILD = mkdir -p $(1)/build && chmod g-s $(1)/build
+
 install-venv:
 	@command -v sudo >/dev/null 2>&1 || { echo "Error: sudo required"; exit 1; }
 	@sudo -u $(VENV_OWNER) test -d "$(VENV_DIR)" || sudo -u $(VENV_OWNER) $(PYTHON) -m venv "$(VENV_DIR)"
@@ -129,9 +139,12 @@ install-venv:
 	mkdir -p $(WHEEL_DIR)
 	rm -f $(WHEEL_DIR)/*.whl
 	$(MAKE) -C $(BBSENGINE_DIR) version
+	$(call PREPARE_BUILD,$(GETDATE_DIR))
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(GETDATE_DIR)
+	$(call PREPARE_BUILD,$(BBSENGINE_DIR))
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(BBSENGINE_DIR)
 	$(MAKE) version
+	$(call PREPARE_BUILD,$(CURDIR))
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
 	sudo -u $(VENV_OWNER) $(VENV_DIR)/bin/pip install $(WHEEL_DIR)/*.whl
 	rm -rf $(WHEEL_DIR)
@@ -190,9 +203,12 @@ uninstall: uninstall-systemd uninstall-venv uninstall-tmpfiles uninstall-sysuser
 # no sudo is needed for the build either.
 deploy-venv:
 	$(MAKE) -C $(BBSENGINE_DIR) version
+	$(call PREPARE_BUILD,$(GETDATE_DIR))
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(GETDATE_DIR)
+	$(call PREPARE_BUILD,$(BBSENGINE_DIR))
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(BBSENGINE_DIR)
 	$(MAKE) version
+	$(call PREPARE_BUILD,$(CURDIR))
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
 	$(VIRTUAL_ENV)/bin/pip install $(WHEEL_DIR)/*.whl \
 		2>/dev/null || $(PYTHON) -m pip install $(WHEEL_DIR)/*.whl
