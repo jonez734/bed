@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "BED - BBS Engine Daemon"
 readme = "README.md"
 requires-python = ">=3.9,<3.13"
-license = {text = "gpl-2.0-or-greater"}
+license = "GPL-2.0-or-later"
 authors = [
     {name = "bbsengine.org", email = "bed@projects.zoidtechnologies.com"}
 ]
