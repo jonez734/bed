@@ -12,6 +12,42 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: `deploy-venv` honors `DEPLOY_EDITABLE`; `DEV` renamed to `EDITABLE`
+
+Part of the cross-monorepo Phase 1 work in `deploytool`'s
+`--editable` flag (see `deploytool/CHANGELOG.md` `[Unreleased]`).
+
+The Makefile's install-mode variable is renamed from `DEV` to
+`EDITABLE` (canonical, recommended) and now accepts three
+names with documented precedence:
+
+  1. `DEPLOY_EDITABLE=1` (set by `deploytool --editable`)
+  2. `EDITABLE=1` (canonical, recommended for direct `make`
+     invocations)
+  3. `DEV=1` (legacy alias, kept for one release)
+
+The cascade lives in a single `ifeq/else ifeq/else` block above
+`clean-egg-info` (`bed/Makefile:51-66`); all downstream
+references resolve to the canonical `$(EDITABLE)` variable.
+
+Behavior change vs. the previous `DEV=1` form: editable mode
+now installs into the **active** venv (the one that called
+`make deploy`), not into the per-service `/var/lib/bed/venv`.
+This matches the spirit of the dev/edit loop (test changes
+against the venv you're already in) and avoids surprising the
+operator with a separate install location during iteration.
+The change is documented in the comment block above the
+cascade (`bed/Makefile:39-50`).
+
+Verified: `make -n -C bed deploy-venv` → wheel build + active-venv
+install; `make -n -C bed deploy-venv EDITABLE=1`,
+`make -n -C bed deploy-venv DEPLOY_EDITABLE=1`, and
+`make -n -C bed deploy-venv DEV=1` all show
+`$(MAKE) -C src install` (which `bed/src/Makefile:24-25`
+resolves to `cd .. && pip install --no-cache-dir -e . &&
+rm -rf src/bed.egg-info`) followed by
+`bed installed into active venv in dev/editable mode`.
+
 ### bed: stop building `getdate_next`'s wheel; pip resolves it via bbsengine6's pyproject
 
 `bed/Makefile` `install-venv` and `deploy-venv` no longer build
