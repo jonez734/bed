@@ -31,21 +31,43 @@ help:
 	@echo "  install-etc        Install /etc/bed/ config from factory defaults"
 	@echo "  uninstall-etc      Remove installed config files"
 	@echo "  setup-db           Bootstrap database: bbsengine6 startup + bed role"
-	@echo "  deploy             Non-sudo: build wheels + pip install into active venv (alias for deploy-venv)"
-	@echo "  deploy DEV=1       Like deploy, but install bed editable from src/ (live edits)"
-	@echo "  deploy-venv        Non-sudo: build wheels + pip install into active venv"
-	@echo "  deploy-prod        Full prod install (sysusers + tmpfiles + venv + systemd + etc)"
-	@echo "  clean              Remove build artifacts"
-	@echo "  clean-egg-info     Remove in-tree *.egg-info/ dirs (defensive)"
+	@echo "  deploy                          Non-sudo: build wheels + pip install into active venv (alias for deploy-venv)"
+	@echo "  deploy EDITABLE=1               Like deploy, but install bed editable from src/ (live edits)"
+	@echo "  deploy DEPLOY_EDITABLE=1        Same as EDITABLE=1 (deploytool --editable sets this)"
+	@echo "  deploy DEV=1                    Same as EDITABLE=1 (legacy alias; will be removed in a future release)"
+	@echo "  deploy-venv                     Non-sudo: build wheels + pip install into active venv"
+	@echo "  deploy-prod                     Full prod install (sysusers + tmpfiles + venv + systemd + etc)"
+	@echo "  clean                           Remove build artifacts"
+	@echo "  clean-egg-info                  Remove in-tree *.egg-info/ dirs (defensive)"
 
-# `make deploy DEV=1` installs bed editable from src/ (live edits).
-# `make deploy`         installs bed from a freshly-built wheel.
-# DEV=1 is a no-op for `install-venv` / `deploy-prod` / `build` —
-# those paths always produce wheel artifacts. DEV is set on the make
-# command line via variable override (GNU make treats unknown flags
-# like --foo as errors before target parsing, so a CLI flag idiom is
-# not portable across make implementations).
-DEV ?=
+# `make deploy EDITABLE=1` installs bed editable from src/ (live edits).
+# `make deploy`             installs bed from a freshly-built wheel.
+# EDITABLE=1 is a no-op for `install-venv` / `deploy-prod` / `build` —
+# those paths always produce wheel artifacts. EDITABLE is set on the
+# make command line via variable override (GNU make treats unknown
+# flags like --foo as errors before target parsing, so a CLI flag idiom
+# is not portable across make implementations).
+#
+# Accepted names (in order of preference):
+#   EDITABLE=1          — canonical, recommended
+#   DEPLOY_EDITABLE=1   — set by `deploytool --editable`
+#   DEV=1               — legacy alias, kept for one release
+#
+# Behavior change vs. the previous DEV=1 form: editable mode installs
+# into the **active** venv (the one that called `make deploy`), not
+# into the per-service `/var/lib/bed/venv`. This matches the spirit of
+# the dev/edit loop (test changes against the venv you're already in)
+# and avoids surprising the operator with a separate install location
+# during iteration.
+ifeq ($(DEPLOY_EDITABLE),1)
+EDITABLE := 1
+else ifeq ($(EDITABLE),1)
+EDITABLE := 1
+else ifeq ($(DEV),1)
+EDITABLE := 1
+else
+EDITABLE :=
+endif
 
 # Wipe in-tree *.egg-info/ dirs that a prior `pip install -e .` may have
 # left behind. Such egg-infos bake absolute paths into SOURCES.txt and
@@ -240,8 +262,11 @@ uninstall: uninstall-systemd uninstall-venv uninstall-tmpfiles uninstall-sysuser
 # wheel is installed. To use local getdate_next source instead, run
 # `make -C $(CURDIR)/../getdate_next deploy-venv` before invoking
 # this target.
-# With `--dev`, bed is installed editable from src/ instead of from a
-# freshly-built wheel (see the DEV detection block above `clean-egg-info`).
+# With EDITABLE=1 (or DEPLOY_EDITABLE=1 from `deploytool --editable`,
+# or DEV=1 legacy alias), bed is installed editable from src/ instead
+# of from a freshly-built wheel. See the EDITABLE detection block
+# above `clean-egg-info` for accepted names and the venv-targeting
+# behavior change.
 deploy-venv: clean-egg-info
 	@mkdir -p $(WHEEL_DIR)
 	@rm -f $(WHEEL_DIR)/*.whl
@@ -249,7 +274,7 @@ deploy-venv: clean-egg-info
 	$(call PREPARE_BUILD,$(BBSENGINE_DIR))
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(BBSENGINE_DIR)
 	$(VIRTUAL_ENV)/bin/pip install $(WHEEL_DIR)/*.whl 2>/dev/null
-ifeq ($(DEV),1)
+ifeq ($(EDITABLE),1)
 	$(MAKE) -C src install
 else
 	$(MAKE) version
@@ -258,7 +283,7 @@ else
 	$(VIRTUAL_ENV)/bin/pip install $(WHEEL_DIR)/*.whl 2>/dev/null
 endif
 	-rm -rf $(WHEEL_DIR)
-	@echo "bed installed into active venv$(if $(DEV), in dev/editable mode)"
+	@echo "bed installed into active venv$(if $(EDITABLE), in dev/editable mode)"
 
 # Umbrella prod install: includes everything that needs sudo
 # AND the per-service venv. Reuses the existing install target.
