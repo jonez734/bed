@@ -295,6 +295,34 @@ to `usr/share/factory/etc/bed/bed.json`) disables `autorestart` so
 that systemd owns the restart loop. Set it to `true` for
 foreground-only deployments without systemd.
 
+### Exit codes
+
+`bed` distinguishes three failure modes at startup. The systemd
+unit (`daemon/bed.service`) is configured with
+`RestartPreventExitStatus=2 3` so neither of the recoverable ones
+loops the unit.
+
+| Code | Meaning |
+|------|---------|
+| `0`  | clean shutdown |
+| `1`  | general startup failure (config missing, JSON syntax error, router load failure, pidfile collision) |
+| `2`  | permanent bind failure (`EADDRINUSE` / `EACCES` / unresolvable host) with `restart_on_bind_failure=false` |
+| `3`  | transient FS / network error prevented loading the explicit config with `autorestart` off |
+
+A `3` is raised when `open()` on the explicit `--config` path (or
+the resolved `$BED_CONFIG` / `/etc/bed/bed.json`) fails with
+`PermissionError`, `socket.gaierror` (DNS / `ENOTFOUND`), `EIO`,
+`ESTALE` (stale NFS handle), `ETXTBSY`, `ENETUNREACH`,
+`EHOSTUNREACH`, `ECONNREFUSED`, or `ETIMEDOUT` -- AND the
+resolved `autorestart` is `False`. Resolution order matches the
+runtime policy in `get_restart_config`: CLI `--autorestart` wins,
+otherwise the value of `bed.autorestart` peek-read from the JSON,
+otherwise `False` (fail-safe). With `autorestart=True` the same
+errors emit a `level="warning"` and load the packaged default
+(`bed/data/bed.json`) instead. Operator errors (`FileNotFoundError`,
+`IsADirectoryError`, JSON syntax errors) always propagate (exit `1`)
+so a silent fallback never masks a real config bug.
+
 ### `restart_on_bind_failure`
 
 `bed` distinguishes two failure modes. When the listening port is

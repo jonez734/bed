@@ -12,6 +12,61 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: `load_config` honors `autorestart` on transient FS / network errors
+
+`bed.config.load_config` now distinguishes operator errors (which
+still propagate) from transient FS / network errors (which previously
+crashed the daemon unconditionally). The recoverable set is:
+
+* `socket.gaierror` (DNS resolution failure, e.g. ENOTFOUND)
+* `socket.timeout`
+* `PermissionError` / `OSError` with `errno == EACCES`
+* `OSError` with `errno` in `{EIO, ESTALE, ETXTBSY, ENETUNREACH,
+  EHOSTUNREACH, ECONNREFUSED, ETIMEDOUT}`
+
+When the primary path raises one of these, behavior depends on the
+resolved `autorestart` value at startup (CLI `--autorestart` wins,
+otherwise the value of `bed.autorestart` from a peek-read of the
+JSON, otherwise `False`):
+
+* `autorestart=True` -> `level="warning"` message naming the
+  original failure and the full absolute path of the fallback JSON
+  now in use, then load `bed/data/bed.json`.
+* `autorestart=False` -> `level="error"` message naming the
+  original failure and the full absolute path that failed, then
+  raise `ConfigIORecoverableError`; `main_async` exits with status
+  `3`. The systemd unit is updated to add `3` to
+  `RestartPreventExitStatus` so this does not loop.
+
+The SIGHUP reload path (`bed/src/bed/main.py:_reload_config_and_apply`)
+keeps its existing semantics: log the error and return; the daemon
+continues with the old config. A `ConfigIORecoverableError` raised
+on SIGHUP is treated the same as any other `OSError` -- it does
+NOT exit the daemon.
+
+The new exit code `3` is distinct from `2` (permanent bind failure
+without `restart_on_bind_failure`) and `1` (general load failure),
+so operators and monitoring can tell the three failure modes apart.
+
+Changes:
+
+* `bed/src/bed/config.py` -- new `_RECOVERABLE_ERRNOS` frozenset,
+  `_is_recoverable_load_error()` helper, `_peek_autorestart()` helper,
+  `ConfigIORecoverableError` exception class. `load_config()` gains a
+  keyword-only `autorestart=False` argument.
+* `bed/src/bed/main.py` -- `main_async` resolves `autorestart` via
+  CLI > peek > False before loading, passes it into
+  `config.load_config`, and catches `ConfigIORecoverableError` ->
+  `sys.exit(3)`. The SIGHUP handler's catch list gains
+  `ConfigIORecoverableError` so reload failures stay non-fatal.
+* `bed/src/bed/daemon/bed.service` -- `RestartPreventExitStatus=2 3`.
+* `bed/src/bed/tests/test_bed.py` -- `TestConfigLoadFallback` covers
+  both branches + every recoverable errno + operator-error
+  propagation. `TestPeekAutorestart` covers the peek helper. New
+  `TestMainAsyncConfigIOFallback` covers the `main_async` wiring
+  (exit 3, peek+CLI resolution). `TestSighupConfigIORecoverableFallback`
+  pins down SIGHUP keeps the old-config semantics.
+
 ### bed: `--config` resolves to wheel-shipped default when no flag is passed
 
 The `--config` CLI flag is now optional. When the operator omits it,
