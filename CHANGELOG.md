@@ -200,9 +200,12 @@ See `bed/FHS.md` "## Default config path" for the rationale and
 - `bed/Makefile:223-226` — `deploy: deploy-venv` (was
   `deploy: install`). Direct `make deploy` invocations now run
   the non-sudo `deploy-venv` path (build wheels for
-  `getdate_next` + `bbsengine6` + `bed`, then `pip install` into
-  the active venv) instead of the sudo umbrella `install`
-  chain. `make deploy-prod` remains the sudo path.
+  `bbsengine6` + `bed`, then `pip install` into the active
+  venv) instead of the sudo umbrella `install` chain.
+  `getdate_next` is no longer built inline — pip resolves
+  `getdate-next` as a transitive runtime dep of bbsengine6
+  via `bbsengine6/py/pyproject.toml`. `make deploy-prod`
+  remains the sudo path.
 - `bed/Makefile:34` — `help` text updated to reflect the new
   default.
 - This matches the parallel split in zoid6: `zoid6.tui` is
