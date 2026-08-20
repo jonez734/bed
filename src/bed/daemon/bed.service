@@ -20,8 +20,11 @@ Restart=on-failure
 RestartSec=5s
 
 # bed exits 2 on permanent bind failures (EADDRINUSE/EACCES) when
-# restart_on_bind_failure=false. Do not loop the unit on that case.
-RestartPreventExitStatus=2
+# restart_on_bind_failure=false, and exits 3 when a transient FS /
+# network error prevents loading the explicit config file with
+# autorestart off (see bed.config.ConfigIORecoverableError). Do not
+# loop the unit on either case.
+RestartPreventExitStatus=2 3
 
 # Cap any unclassified crash loop at 10 attempts per 5 minutes so the
 # operator notices the failure (unit enters 'failed' state) instead

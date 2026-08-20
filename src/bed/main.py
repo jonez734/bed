@@ -1038,7 +1038,11 @@ def _reload_config_and_apply(
     io.echo("Received SIGHUP, reloading config")
     try:
         new_config = config.load_config(args.config_file)
-    except (ValueError, OSError) as e:
+    except (ValueError, OSError, config.ConfigIORecoverableError) as e:
+        # SIGHUP keeps the established "reload if possible, otherwise
+        # stay up with the old config" semantics. The daemon is already
+        # running and the operator did not ask for a restart loop on
+        # config-reload failure, so we just log and return.
         io.echo(f"Config reload failed: {e}", level="error")
         return
 
@@ -1163,8 +1167,28 @@ async def main_async() -> None:
     args = parser.parse_args()
 
     args.config_file = resolve_config_path(args.config_file)
+    # Resolve the load-time autorestart policy BEFORE attempting the
+    # full load so we know whether a transient FS / network error
+    # on the config path should fall back to the packaged default or
+    # be treated as a fatal startup failure. Precedence matches
+    # ``get_restart_config`` below: CLI --autorestart wins; otherwise
+    # peek the JSON for bed.autorestart; otherwise False (fail-safe).
+    if args.autorestart is not None:
+        startup_autorestart = bool(args.autorestart)
+    else:
+        peeked = config._peek_autorestart(args.config_file)
+        startup_autorestart = peeked if peeked is not None else False
     try:
-        loaded_config = config.load_config(args.config_file)
+        loaded_config = config.load_config(
+            args.config_file, autorestart=startup_autorestart
+        )
+    except config.ConfigIORecoverableError:
+        # ``load_config`` already emitted the level="error" message
+        # naming the failure and the path. Exit with a distinct code
+        # so the systemd unit (RestartPreventExitStatus=2 3) blocks
+        # the loop and operators can tell this apart from exit 2
+        # (permanent bind failure) and exit 1 (general load failure).
+        sys.exit(3)
     except (ValueError, OSError) as e:
         io.echo(
             f"Failed to load config file {args.config_file}: {e}", level="error"
