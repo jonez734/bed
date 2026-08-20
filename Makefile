@@ -5,7 +5,7 @@ VERSION = $(shell date +%Y%m%d%H%M)
 PYTHON ?= python3.12
 RSYNC = rsync --chmod=F0644 --mkpath --archive --verbose
 
-.PHONY: all help clean build ensure-repo ensure-build-dir version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon setup-db deploy deploy-venv deploy-prod commit-version
+.PHONY: all help clean build ensure-repo ensure-build-dir version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon setup-db deploy deploy-venv deploy-prod commit-version clean-egg-info
 
 all: help
 
@@ -32,12 +32,32 @@ help:
 	@echo "  uninstall-etc      Remove installed config files"
 	@echo "  setup-db           Bootstrap database: bbsengine6 startup + bed role"
 	@echo "  deploy             Non-sudo: build wheels + pip install into active venv (alias for deploy-venv)"
+	@echo "  deploy DEV=1       Like deploy, but install bed editable from src/ (live edits)"
 	@echo "  deploy-venv        Non-sudo: build wheels + pip install into active venv"
 	@echo "  deploy-prod        Full prod install (sysusers + tmpfiles + venv + systemd + etc)"
 	@echo "  clean              Remove build artifacts"
+	@echo "  clean-egg-info     Remove in-tree *.egg-info/ dirs (defensive)"
 
-clean:
-	-rm -rf build dist
+# `make deploy DEV=1` installs bed editable from src/ (live edits).
+# `make deploy`         installs bed from a freshly-built wheel.
+# DEV=1 is a no-op for `install-venv` / `deploy-prod` / `build` —
+# those paths always produce wheel artifacts. DEV is set on the make
+# command line via variable override (GNU make treats unknown flags
+# like --foo as errors before target parsing, so a CLI flag idiom is
+# not portable across make implementations).
+DEV ?=
+
+# Wipe in-tree *.egg-info/ dirs that a prior `pip install -e .` may have
+# left behind. Such egg-infos bake absolute paths into SOURCES.txt and
+# poison any later `python -m build`, which trips the setuptools
+# "no absolute paths" guard with messages like:
+#   "setup script specifies an absolute path:
+#    /home/opencode/data/work/bed/src/bed/__init__.py"
+clean-egg-info:
+	-rm -rf *.egg-info src/*.egg-info
+
+clean: clean-egg-info
+	-rm -rf build dist build.stale.* build.old
 	-rm -rf *.egg-info
 	-find . -type d -name __pycache__ -exec rm -rf {} +
 	-find . -type d -name .pytest_cache -exec rm -rf {} +
@@ -61,7 +81,7 @@ ensure-build-dir: ensure-repo
 	@stat -c '%G' /srv/repo/$(PROJECT)/ 2>/dev/null | grep -qx repo || sudo chgrp repo /srv/repo/$(PROJECT)/
 	@stat -c '%a' /srv/repo/$(PROJECT)/ 2>/dev/null | grep -q '^2775$$' || sudo chmod 2775 /srv/repo/$(PROJECT)/
 
-build: version ensure-build-dir
+build: version clean-egg-info ensure-build-dir
 	$(call PREPARE_BUILD,$(CURDIR))
 	$(PYTHON) -m build --outdir $(OUTDIR)
 
@@ -119,18 +139,33 @@ VENV_GROUP ?= bed
 
 WHEEL_DIR = /tmp/$(PROJECT)-$$
 BBSENGINE_DIR = $(CURDIR)/../bbsengine6/py
-GETDATE_DIR = $(CURDIR)/../getdate_next
 
-# Make sure $(1)/build/ exists with mode 0755 (no setgid) before invoking
-# `python -m build`. `chmod g-s` is used (not `chmod 0755`) because the
-# process lacks CAP_FSETID, so only stripping the setgid bit is permitted
-# on a dir we own; `chmod 0755` on a 0o2775 dir raises EPERM. Without
-# this, setuptools bdist_wheel EPERMs in SELinux-enforcing + NoNewPrivs
-# containers when shutil.copystat mirrors the in-tree egg-info's mode
-# 0o2775 onto the freshly-created dist-info dir.
-PREPARE_BUILD = mkdir -p $(1)/build && chmod g-s $(1)/build
+# Make sure $(1)/build/ exists with mode 1775 (sticky + rwxrwxr-x) before
+# invoking `python -m build`. Mode 1775 is intentional:
+#   - sticky (t): only the owner of a file inside may delete/rename it,
+#     so concurrent builds under a shared group can't stomp each other.
+#   - setgid (s) is intentionally NOT set: setuptools' shutil.copystat
+#     mirrors build/'s mode onto the freshly-created dist-info dir, and
+#     a setgid'd dist-info EPERMs the subsequent bdist_wheel step in
+#     SELinux-enforcing + NoNewPrivs containers (we lack CAP_FSETID).
+#   - group write (g+w): any user in the build group can rebuild
+#     without needing to chown.
+# `chmod 1775` is used (rather than just `chmod g-s`) because it's
+# idempotent and pins the mode even when the source tree's umask would
+# otherwise drop the sticky bit on mkdir.
+#
+# If $(1)/build/ exists but is owned by a different user (e.g. left over
+# from a prior build run as a different uid), rename it out of the way
+# first. The parent dir is group-writable in this tree so the rename is
+# permitted even when we don't own the build/ contents. Without this,
+# the subsequent chmod fails with EPERM and the build aborts.
+PREPARE_BUILD = \
+	if [ -d $(1)/build ] && [ ! -O $(1)/build ]; then \
+		mv $(1)/build $(1)/build.stale.$$ 2>/dev/null || true; \
+	fi; \
+	mkdir -p $(1)/build && chmod 1775 $(1)/build
 
-install-venv:
+install-venv: clean-egg-info
 	@command -v sudo >/dev/null 2>&1 || { echo "Error: sudo required"; exit 1; }
 	@sudo -u $(VENV_OWNER) test -d "$(VENV_DIR)" || sudo -u $(VENV_OWNER) $(PYTHON) -m venv "$(VENV_DIR)"
 	sudo -u $(VENV_OWNER) $(VENV_DIR)/bin/pip install --upgrade pip
@@ -139,8 +174,6 @@ install-venv:
 	mkdir -p $(WHEEL_DIR)
 	rm -f $(WHEEL_DIR)/*.whl
 	$(MAKE) -C $(BBSENGINE_DIR) version
-	$(call PREPARE_BUILD,$(GETDATE_DIR))
-	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(GETDATE_DIR)
 	$(call PREPARE_BUILD,$(BBSENGINE_DIR))
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(BBSENGINE_DIR)
 	$(MAKE) version
@@ -196,24 +229,36 @@ uninstall-systemd:
 uninstall: uninstall-systemd uninstall-venv uninstall-tmpfiles uninstall-sysusers uninstall-etc
 	@echo "bed fully uninstalled"
 
-# Non-sudo: build wheels for getdate_next + bbsengine6 + bed, then
-# pip install into the active venv. Mirrors install-venv (lines 120-138)
-# minus the sudo -u $(VENV_OWNER) venv bootstrap (122-123) and the
-# SELinux relabel (135-137). WHEEL_DIR lives in /tmp (user-owned) so
-# no sudo is needed for the build either.
-deploy-venv:
+# Non-sudo: build wheels for bbsengine6 + bed, then pip install into
+# the active venv. Mirrors install-venv (lines 120-138) minus the
+# sudo -u $(VENV_OWNER) venv bootstrap (122-123) and the SELinux
+# relabel (135-137). WHEEL_DIR lives in /tmp (user-owned) so no sudo
+# is needed for the build either.
+# getdate_next is intentionally NOT built here. `bbsengine6/py/
+# pyproject.toml` declares `getdate-next` as a runtime dep and pip
+# resolves it (typically from PyPI) when the freshly-built bbsengine6
+# wheel is installed. To use local getdate_next source instead, run
+# `make -C $(CURDIR)/../getdate_next deploy-venv` before invoking
+# this target.
+# With `--dev`, bed is installed editable from src/ instead of from a
+# freshly-built wheel (see the DEV detection block above `clean-egg-info`).
+deploy-venv: clean-egg-info
+	@mkdir -p $(WHEEL_DIR)
+	@rm -f $(WHEEL_DIR)/*.whl
 	$(MAKE) -C $(BBSENGINE_DIR) version
-	$(call PREPARE_BUILD,$(GETDATE_DIR))
-	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(GETDATE_DIR)
 	$(call PREPARE_BUILD,$(BBSENGINE_DIR))
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(BBSENGINE_DIR)
+	$(VIRTUAL_ENV)/bin/pip install $(WHEEL_DIR)/*.whl 2>/dev/null
+ifeq ($(DEV),1)
+	$(MAKE) -C src install
+else
 	$(MAKE) version
 	$(call PREPARE_BUILD,$(CURDIR))
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
-	$(VIRTUAL_ENV)/bin/pip install $(WHEEL_DIR)/*.whl \
-		2>/dev/null || $(PYTHON) -m pip install $(WHEEL_DIR)/*.whl
+	$(VIRTUAL_ENV)/bin/pip install $(WHEEL_DIR)/*.whl 2>/dev/null
+endif
 	-rm -rf $(WHEEL_DIR)
-	@echo "bed installed into active venv (non-sudo)"
+	@echo "bed installed into active venv$(if $(DEV), in dev/editable mode)"
 
 # Umbrella prod install: includes everything that needs sudo
 # AND the per-service venv. Reuses the existing install target.
@@ -221,8 +266,8 @@ deploy-prod: install
 	@echo "bed installed (production)"
 
 # Non-sudo default — mirrors the `deploy-venv` shape (build wheels for
-# getdate_next + bbsengine6 + bed, then pip install into the active
-# venv). The sudo umbrella is `deploy-prod` (alias for `install`).
+# bbsengine6 + bed, then pip install into the active venv). The sudo
+# umbrella is `deploy-prod` (alias for `install`).
 deploy: deploy-venv
 
 commit-version:

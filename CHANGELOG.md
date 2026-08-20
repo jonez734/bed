@@ -12,6 +12,48 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: stop building `getdate_next`'s wheel; pip resolves it via bbsengine6's pyproject
+
+`bed/Makefile` `install-venv` and `deploy-venv` no longer build
+`getdate_next`'s wheel. The `GETDATE_DIR` variable and the
+`PREPARE_BUILD` + `python -m build --wheel` lines for
+`$(GETDATE_DIR)` were removed from both targets. They now build
+only `bbsengine6` + `bed` wheels and pip install them.
+
+The resolution model: `bbsengine6/py/pyproject.toml` declares
+`getdate-next` as a runtime dep, so pip resolves it (from PyPI by
+default) when the freshly-built bbsengine6 wheel is installed.
+`deploytool` no longer orchestrates a separate `getdate_next`
+install — the `OPTIONAL_DEPENDENCIES["bbsengine6"] = ["getdate_next"]`
+entry and the `--with-deps` CLI flag were removed.
+
+Same refactor applied to `zoid6/src/Makefile` (lines 27, 266-270)
+and `mistermcfeely/Makefile` (lines 80, 90) — both were building
+`getdate_next`'s wheel inline for the same reason; both no longer
+do.
+
+`getdate_next/Makefile deploy-venv` stays as the canonical local
+build target but is no longer invoked by deploytool. Developers
+testing local source changes run it manually before deploying
+anything that pulls in bbsengine6:
+
+```sh
+make -C ../getdate_next deploy-venv
+make -C bed deploy-venv   # bbsengine6.whl's pip install sees
+                          # getdate-next already satisfied
+```
+
+`casino` is unchanged: its `Makefile` has no inline getdate_next
+build (it relies on `pip install .` resolving `bbsengine6`, which
+transitively pulls `getdate-next`).
+
+`deploytool` sub-target chaining is now consistent end-to-end:
+every tui consumer reaches `bbsengine6.tui` through `bed.tui`
+(`casino.tui -> bed.tui -> bbsengine6.tui`,
+`zoid6.tui -> bed.tui -> bbsengine6.tui`). The explicit
+`("bbsengine6", "tui")` in `casino.tui`'s conditional deps was
+dropped — it's transitively redundant with `bed.tui`.
+
 ### bed: `load_config` honors `autorestart` on transient FS / network errors
 
 `bed.config.load_config` now distinguishes operator errors (which
