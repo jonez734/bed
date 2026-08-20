@@ -12,6 +12,28 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: `deploy` target is now non-sudo (alias for `deploy-venv`)
+
+- `bed/Makefile:223-226` — `deploy: deploy-venv` (was
+  `deploy: install`). Direct `make deploy` invocations now run
+  the non-sudo `deploy-venv` path (build wheels for
+  `getdate_next` + `bbsengine6` + `bed`, then `pip install` into
+  the active venv) instead of the sudo umbrella `install`
+  chain. `make deploy-prod` remains the sudo path.
+- `bed/Makefile:34` — `help` text updated to reflect the new
+  default.
+- This matches the parallel split in zoid6: `zoid6.tui` is
+  non-sudo (`make deploy-tui` → `install` → `pip install -e .`)
+  and `zoid6.prod` is the sudo umbrella (`make deploy-prod` →
+  `install-fhs`).
+- **Back-compat note**: callers that were doing `make deploy`
+  expecting the full prod install must update to
+  `make deploy-prod`. deploytool users were unaffected — the
+  auto-drop rule at `deploytool/src/deploytool/lib.py:296` had
+  already removed the implicit sudo path for `deploytool
+  deploy bed`. See `bed/TODO.md` "## `bed.venv` (non-sudo) /
+  `bed.prod` (sudo) deploy split" for the rationale.
+
 ### bed: apply `{var:promptcolor}` / `{var:inputcolor}` to all CLI interactive prompts
 
 The `bed auth`, `bed bank`, and `bedping` console scripts read
