@@ -91,6 +91,33 @@ Install the systemd unit and start the service:
 cd /path/to/bed/src && sudo make install-systemd && sudo systemctl restart bed
 ```
 
+#### Dev/editable install (no sudo, into the active venv)
+
+`make deploy-venv` (alias: `make deploy`) installs bed into the
+**active** venv — the one from which `make` was invoked. This is
+the canonical dev/edit loop target. By default it builds a fresh
+wheel for both `bbsengine6` and `bed` and installs them via
+`pip install`. Set any of the three accepted names to flip the
+install to editable mode:
+
+```bash
+make deploy EDITABLE=1              # canonical, recommended
+make deploy DEPLOY_EDITABLE=1       # set by `deploytool --editable`
+make deploy DEV=1                   # legacy alias (one release)
+```
+
+In editable mode, bed is installed via
+`$(MAKE) -C src install` (which `bed/src/Makefile:24-25` resolves
+to `cd .. && pip install --no-cache-dir -e . && rm -rf src/bed.egg-info`).
+Source-tree edits are picked up on next interpreter start without
+a rebuild. Behavior change vs. the previous `DEV=1` form: editable
+mode now installs into the **active** venv, not
+`/var/lib/bed/venv`.
+
+The `EDITABLE`/`DEPLOY_EDITABLE`/`DEV` precedence and rationale are
+documented in the comment block above `clean-egg-info` in
+`bed/Makefile:39-50`.
+
 #### Prerequisites
 
 `make install-venv` (called by `make install`) requires `build`,
