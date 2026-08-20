@@ -1226,52 +1226,81 @@ table→owner-moniker translation in its methods). Both subclass
 
 ## CLI `--config` flag
 
-`bed` accepts a `--config PATH` argument. **The default value is the
-`bed.json` shipped in the bed package's `data/` subdirectory**
-(`bed/data/bed.json`, resolved via `bed.config.get_package_data_path`).
-Passing `--config` overrides the default and points bed at an external
-JSON file. The file's keys are deep-merged on top of the packaged
-defaults, and the result is consulted during startup.
+`bed` accepts an optional `--config PATH` argument. When the operator
+omits `--config`, `bed/_configpath.resolve_config_path()` walks this
+precedence (highest wins):
 
-**Status:** Implemented and tested. Argparse wiring in
-`bed/src/bed/lib.py:147-156`; merge + default-resolve in
-`bed/src/bed/main.py:332-355`; tests in
-`bed/src/bed/tests/test_bed.py:265-292` (`TestConfigFlag`).
+1. `--config <path>` on the command line (explicit)
+2. `$BED_CONFIG` environment variable
+3. `/etc/bed/bed.json` if the file exists (FHS-installed config from
+   `make install-etc`)
+4. The packaged default shipped inside the wheel
+   (`bed/data/bed.json`, resolved via `bed.config.get_package_data_path`)
+
+The packaged default is byte-identical to the FHS factory default
+(`bed/usr/share/factory/etc/bed/bed.json`), so resolving to the
+packaged default is semantically equivalent to "operator has not
+customised the config". The systemd unit
+(`bed/src/bed/daemon/bed.service`) keeps passing
+`--config /etc/bed/bed.json` so FHS hosts use the operator-edit
+surface; the fallback only fires for non-prod invocations
+(`bed --foreground`, `make deploy-venv`, `bed --debug`).
+
+`zoid6/main.py:_resolve_config_path()` applies the same pattern with
+`$ZOID6_CONFIG` → `/etc/zoid6/zoid6.json` → packaged
+`zoid6/data/zoid6.json`. The two resolvers stay structurally
+identical so a future refactor (e.g. promoting the resolver into
+`bbsengine6`) is mechanical.
+
+**Status:** Implemented and tested. Resolver in
+`bed/src/bed/_configpath.py`; argparse wiring in
+`bed/src/bed/lib.py:240-247` (`--config` is `required=False,
+default=None`); main entry point in `bed/src/bed/main.py:1158-1173`
+calls `resolve_config_path(args.config_file)` before loading;
+tests in `bed/src/bed/tests/test_bed.py::TestConfigFlag` (5 new
+tests cover each precedence rung and the no-flags integration
+path).
 
 ### Tasks
 
 - [X] **Argparse wiring.** `--config PATH` in
-      `bed/src/bed/lib.py:147-156` with help text pointing at
-      `bed.json` package data.
-- [X] **Default value.** Default points at
-      `bed.config.get_package_data_path("bed.json")`; see
-      `bed/src/bed/lib.py:16-20` (`_default_config_path`).
-- [X] **Deep-merge with packaged defaults.** `bed.config.load_config`
-      in `bed/src/bed/config.py:21-48` deep-merges the user file on
-      top of `load_bed_defaults()` and on top of `BED_*` env vars.
-- [X] **bind.* / database.* / auth.* precedence.** Config keys fill
-      in only when the corresponding CLI flag was not explicitly set
-      (detected by comparing parsed args to argparse defaults). See
-      `bed/src/bed/main.py:57-115` for the three appliers.
-- [X] **Missing-file error.** A bad `--config` path exits 1 with
-      `Config file not found: <path>` (no silent fallback). See
-      `bed/src/bed/main.py:336-345`.
-- [X] **Tests.** `bed/src/bed/tests/test_bed.py:265-...` covers
-      `test_config_flag_parses`,
-      `test_config_flag_default_is_packaged_bed_json`, and the
-      autorestart/bind/database override behavior.
+      `bed/src/bed/lib.py:240-247`, `required=False, default=None`.
+      Help text describes the fallback chain (`$BED_CONFIG` →
+      `/etc/bed/bed.json` → packaged default).
+- [X] **Resolver.** `bed/_configpath.resolve_config_path(explicit)`
+      in `bed/src/bed/_configpath.py`. `CONFIG_ENV = "BED_CONFIG"`,
+      `FHS_CONFIG = "/etc/bed/bed.json"`.
+- [X] **main_async hookup.** `bed/src/bed/main.py:main_async`
+      calls `resolve_config_path(args.config_file)` before
+      `config.load_config`. The pre-resolver
+      `if not os.path.isfile(args.config_file)` guard is dropped
+      because the resolver always returns an existing path.
+- [X] **Missing-file error.** A bad explicit `--config` path still
+      exits 1 with `Config file not found: <path>` (the resolver
+      does not paper over explicit paths).
+- [X] **Tests.** `bed/src/bed/tests/test_bed.py::TestConfigFlag`
+      gains `test_config_flag_default_is_none` (replacing
+      `test_config_flag_required`),
+      `test_resolve_config_path_explicit_wins`,
+      `test_resolve_config_path_env_wins_over_fhs_and_default`,
+      `test_resolve_config_path_fhs_wins_over_packaged_default`,
+      `test_resolve_config_path_falls_back_to_packaged_default`,
+      `test_main_async_resolves_packaged_default_when_no_config_flag`.
 - [X] **Documented in `bed/TODO.md`.** This section.
 
 ### Syntax
 ```
 bed --config /opt/zoid6/src/zoid6/data/bed.json --router zoid6.api.handler.MessageRouter
+# or, equivalently, with the resolver picking the packaged default:
+bed --router zoid6.api.handler.MessageRouter
 ```
 
 ### Priority order (highest wins)
-1. CLI flag (e.g. `--host`, `--no-autorestart`, `--databasename`).
-2. The file passed via `--config`.
-3. `BED_*` environment variables.
-4. Packaged `bed/src/bed/data/bed.json` defaults.
+1. `--config <path>` on the command line.
+2. `$BED_CONFIG` environment variable.
+3. `/etc/bed/bed.json` if present (FHS-installed config).
+4. Packaged `bed/src/bed/data/bed.json` (always present after
+   `pip install bed`).
 
 ### Recognized top-level keys
 - `bed.autorestart` (bool), `bed.restart_delay` (int), `bed.max_restarts` (int)
@@ -1294,10 +1323,11 @@ shell invocation) must pass `--router zoid6.api.handler.MessageRouter`
 to select the unified router.
 
 ### Missing / unreadable config file
-A missing `--config` path causes `bed` to exit 1 with
-`Config file not found: <path>`. There is no silent fallback to the
-packaged defaults — fail loud so the systemd unit catches the typo
-immediately.
+A missing explicit `--config` path (or a missing `$BED_CONFIG`
+value) causes `bed` to exit 1 with
+`Config file not found: <path>`. The packaged-default rung is never
+silent-fallback for an explicit path; the resolver only chooses
+between the three implicit rungs.
 
 ### Path resolution
 No `~` expansion, no `Path.resolve()`, no relative-path magic. Whatever
@@ -1319,7 +1349,7 @@ WorkingDirectory=/opt/zoid6
 `--no-autorestart` lets systemd own the restart loop; `bed` exits on
 crash and `Restart=on-failure` brings it back.
 
-Note: with the default `--config` now pointing at the packaged
+Note: with the resolver defaulting to the packaged
 `bed/data/bed.json`, the systemd unit does **not** need to pass
 `--config` at all to use bed's own defaults. A zoid6 deployment
 wanting the unified router still needs to pass
@@ -2274,10 +2304,16 @@ deploytool so the registry reflects the choice:
   `getdate_next`, `bbsengine6`, and `bed`, then `pip install`
   them into the **active venv**
   (`$(VIRTUAL_ENV)/bin/pip` or `python -m pip`). WHEEL_DIR is in
-  `/tmp` (user-owned), so no `sudo` is needed.
+  `/tmp` (user-owned), so no `sudo` is needed. The wheel ships the
+  packaged `bed/data/bed.json` default; the resolver
+  (`bed/_configpath.resolve_config_path`) makes `bed` (no
+  `--config`) boot from that default, so no `/etc/bed/bed.json`
+  install is required for non-prod.
 - `bed.prod` (explicit, sudo) — umbrella full prod install
   (sysusers + tmpfiles + per-service venv + systemd + /etc/bed).
-  Reuses the existing `install` target.
+  Reuses the existing `install` target. The systemd unit's
+  `ExecStart=… --config /etc/bed/bed.json` is the FHS prod path;
+  the resolver only short-circuits when the FHS file is absent.
 
 `deploy bed` (no sub) auto-expands to `tui + venv + prod`, but
 `prod` is dropped at `deploytool/src/deploytool/lib.py:296`

@@ -18,21 +18,36 @@ JSON-over-WebSocket, and lets the game own the wire protocol.
 
 ```bash
 pip install -e .
-# --config is REQUIRED — there is no fallback search.
+bed --router zoid6.api.handler.MonikerAuthRouter
+```
+
+`--config` is optional. When the operator omits it, `bed` walks this
+precedence (highest wins):
+
+1. `--config <path>` on the command line
+2. `$BED_CONFIG` environment variable
+3. `/etc/bed/bed.json` if present (FHS-installed config)
+4. The packaged default (`bed/data/bed.json` inside the wheel, always
+   present after `pip install bed`)
+
+This means a fresh `pip install -e .` is enough to run `bed` (no
+flags) against the packaged default; the FHS path
+(`/etc/bed/bed.json`) is only consulted when the operator runs
+`make install-etc` to drop the factory config there. The systemd unit
+at `src/bed/daemon/bed.service` still passes
+`--config /etc/bed/bed.json` so FHS hosts use the operator-edit
+surface; the fallback only fires for `bed --foreground`,
+`make deploy-venv`, and other non-prod invocations.
+
+For development with the FHS-installed config explicitly:
+
+```bash
 bed --config /etc/bed/bed.json --router zoid6.api.handler.MonikerAuthRouter
 ```
 
-For development without an FHS install, point `--config` at the packaged
-default:
-
-```bash
-bed --config "$(python -c 'import bed.data, os; print(os.path.dirname(bed.data.__file__) + "/bed.json")')" \
-    --router zoid6.api.handler.MonikerAuthRouter
-```
-
 The `zoid6` console script (from the [`zoid6`](../zoid6/) package)
-automatically resolves `/etc/zoid6/bed.json` → packaged default if no
-override is set, so most callers want:
+applies the same resolver (`$ZOID6_CONFIG` → `/etc/zoid6/zoid6.json`
+→ packaged), so most callers want:
 
 ```bash
 pip install -e . -e ../bbsengine6/py -e ../zoid6/src
@@ -195,7 +210,8 @@ knobs, and threat model.
                            A name like 'localhost' fans out to both
                            IPv4 and IPv6 listeners.
 --router DOTTED.NAME       default: bbsengine6.net.defaultrouter.DefaultRouter
---config PATH              REQUIRED (no fallback search)
+--config PATH              default: $BED_CONFIG > /etc/bed/bed.json > packaged
+                            (bed/data/bed.json in the wheel)
 --bed-secret PATH          default: ~/.config/bed/bed.secret
 --token-ttl SECONDS        default: 900
 --token-persistence MODE   default: memory  (none | memory | db)

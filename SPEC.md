@@ -69,7 +69,7 @@ Per the `BBSENGINE6_NOTIFYD_OVERVIEW.md` 2026-07-22 banner: *"The actual bbsengi
 
 ### 2.1 v1 stable features
 
-- WebSocket daemon core (start/stop/restart, PID file, `--config` mandatory)
+- WebSocket daemon core (start/stop/restart, PID file, `--config` optional with `BED_CONFIG`/`/etc/bed/bed.json`/packaged-default fallback)
 - Dynamic router loading (`--router FQCN`)
 - `AuthService` — bearer-token auth (HMAC-SHA256, 15-min TTL)
 - Token storage (`InMemoryTokenStore`, `DBTokenStore`, `none`)
@@ -117,6 +117,7 @@ Plus: `bed/tests/scripts/stop_bed.sh` (SIGTERM/SIGKILL test helper).
 | Multi-bind (dual-stack) | `bed/src/bed/lib.py` + `bed/src/bed/main.py` + `bbsengine6/net/transport.py` | `test_bed.py::TestBindMulti`, `TestBindMultiStart`, `test_transport_multibind.py` | One daemon can listen on multiple `(host, port)` pairs; each name-based entry fans out via `getaddrinfo(AF_UNSPEC)`. State shared across listeners. See `README.md` Multi-bind section. |
 | PID file (atomic) | `bed/src/bed/main.py:68-` | `test_bed.py::TestPidfile` | O_EXCL TOCTOU retry, stale-overwrite, live-collision exit 1 |
 | `bed.json` loader | `bed/src/bed/config.py:21-48` | `test_bed.py` | CLI > file > argparse default; BED_* env-var support; deep-merge |
+| `bed.json` path resolver | `bed/src/bed/_configpath.py` | `test_bed.py::TestConfigFlag` | Optional `--config`: `$BED_CONFIG` > `/etc/bed/bed.json` if present > packaged `bed/data/bed.json` (wheel default). Mirrors `zoid6/main.py:_resolve_config_path`. |
 | Missing-config error | `bed/src/bed/main.py:336-345` | `test_bed.py` | Exits 1 with `Config file not found:` |
 | Dynamic router loading | `bed/src/bed/main.py` | `test_bed.py` | `bbsengine6.module.load()` resolves FQCN (traceback on failure via `io.echo_traceback`, info-log on success); passes `args=None` to suppress the debug-reload branch so the long-running daemon never re-imports its router |
 | `AuthService` (bearer) | `bed/src/bed/api/auth.py:412` | `test_auth_service.py:744` | HMAC-SHA256, 15-min TTL, websocket_id binding, instance check |
@@ -197,7 +198,7 @@ These items are currently bed-local but could/should move to bbsengine6 once the
 
 | Gap | File | Status | Source |
 |---|---|---|---|
-| FHS default-config path drift | `bed/src/bed/config.py` | **resolved (commit `8124105`)** | `--config` is now `required=True`; `install-etc` deploys `/etc/bed/bed.json` |
+| FHS default-config path drift | `bed/src/bed/_configpath.py` + `bed/src/bed/config.py` | **resolved (two-step)** | Step 1 (`8124105`): `--config` became `required=True` so `/etc/bed/bed.json` typo exits loudly. Step 2 (this release): `--config` is **optional** and `bed/_configpath.resolve_config_path()` walks `$BED_CONFIG` > `/etc/bed/bed.json` if present > packaged default. FHS hosts still ship `/etc/bed/bed.json` via `install-etc`; non-FHS invocations (`deploy-venv`, `bed --foreground`) get the packaged default automatically. |
 | `bed.service` not passing `--config /etc/bed/bed.json` | `bed/src/bed/daemon/bed.service` | **resolved** | `bed.service` ships with `ExecStart=/var/lib/bed/venv/bin/bed --config /etc/bed/bed.json` |
 | End-to-end DB LISTEN tests | `bed/src/bed/tests/test_message_lib.py` (in bbsengine6) | deferred | `bed/TODO-message-service.md` Phase 7 |
 | `zoid6/src/zoid6/data/bed.json` not updated | `zoid6/src/zoid6/data/bed.json` | open | `bed/TODO-message-service.md` Phase 8 |
@@ -590,7 +591,7 @@ See `handbook/specs/index.md` for the full spec index. Critical specs:
 ### 11.1 Bed-side
 
 - **No bed auto-reconnect on disconnect (BBS side).** When the bed WebSocket disconnects, the BBS side does not auto-reconnect. This is a `bed`-package limitation documented in `bbsengine6/TODO.md` "Bed Disconnect: No Auto-Reconnect (Known Limitation, 2026-07-22)". Sites: `bed/src/bed/client/connection.py:252-273`, `bed/src/bed/client/messageservice.py:23-95`, `bed/src/bed/api/auth.py:236-296`.
-- **FHS default-config path drift.** `bed/config.py` still defaults to the packaged `bed.json`; the FHS design calls for `/etc/bed/bed.json` with packaged fallback. `bed/FHS.md` design is partially applied; see Section 5.2.
+- **FHS default-config path drift.** Resolved in two steps. Step 1 (`8124105`) made `--config` `required=True` so `/etc/bed/bed.json` typos fail loudly. Step 2 (this release) made `--config` optional and added `bed/_configpath.resolve_config_path()` so `bed` (no flags) walks `$BED_CONFIG` → `/etc/bed/bed.json` if present → the packaged default. FHS hosts continue to ship `/etc/bed/bed.json` via `install-etc`; the fallback only fires when the operator has not run `install-etc`. See `bed/FHS.md` "## Default config path".
 - **Linger tuning deferred.** WebSocket socket options (linger, keep-alive) are deferred to a future `## WebSocket socket options` section. `bed/TODO.md:2083`.
 - **Two-Makefile consolidation pending.** `bed/Makefile` and `bed/src/Makefile` differ in OUTDIR (`../dist/` vs `/srv/repo/bed/`); entry points and version label names need to be standardized. `bed/src/Makefile:50-51`.
 - **Single-instance auth only in v1.** Multi-instance load balancing (shared signing key, cross-node reconnect, shared session registry) is v2 design-only. See `bed/docs/BED_AUTH.md` v2 Roadmap.

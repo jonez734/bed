@@ -26,9 +26,10 @@ and UAPI Linux File System Hierarchy specification.
 ### 3. Update `src/bed/daemon/bed.service`
 - Add `--config /etc/bed/bed.json` to `ExecStart`
 
-### 4. Update `src/bed/config.py`
-- Change default config path to `/etc/bed/bed.json`
-- Keep `bed/data/bed.json` as fallback if `/etc/bed/bed.json` doesn't exist
+### 4. Update `src/bed/config.py` + `src/bed/_configpath.py`
+- `bed.config.load_config` reads an explicit path (no fallback search inside the loader).
+- `bed/_configpath.resolve_config_path` walks `BED_CONFIG` → `/etc/bed/bed.json` if present → packaged `bed/data/bed.json` (wheel-shipped default).
+- `bed.main.main_async` calls `resolve_config_path(args.config_file)` so the systemd unit can keep passing `--config /etc/bed/bed.json` while `bed` (no flags) falls back to the packaged default.
 
 ### 5. Update `Makefile`
 - Change `install-systemd` destination from `/etc/systemd/system/` to `/usr/lib/systemd/system/`
@@ -120,8 +121,8 @@ and `websockets` as runtime dependencies. Consumers of `bed` (`zoid6`, games,
 
 | Project | File | Change |
 |---|---|---|
-| bed | `src/bed/config.py` | Default config path to `/etc/bed/bed.json` |
-| bed | `src/bed/daemon/bed.service` | Add `--config` flag |
+| bed | `src/bed/_configpath.py` (new) + `src/bed/config.py` + `src/bed/main.py` + `src/bed/lib.py` | `resolve_config_path()` walks `$BED_CONFIG` → `/etc/bed/bed.json` if present → packaged default; `--config` is now optional |
+| bed | `src/bed/daemon/bed.service` | `--config /etc/bed/bed.json` (FHS prod, unchanged) |
 | bed | `src/bed/daemon/bed.tmpfiles` | Add `/etc/bed` entry |
 | bed | `Makefile` | Add `install-etc`, fix `install-systemd` |
 | bed | `src/Makefile` | Same as root Makefile |

@@ -12,6 +12,66 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: `--config` resolves to wheel-shipped default when no flag is passed
+
+The `--config` CLI flag is now optional. When the operator omits it,
+`bed` walks this precedence (highest wins):
+
+1. `--config <path>` on the command line (existing behavior)
+2. `$BED_CONFIG` environment variable
+3. `/etc/bed/bed.json` if present (FHS-installed config from
+   `make install-etc`)
+4. The packaged default shipped in the wheel
+   (`bed/data/bed.json`, always present after `pip install bed`)
+
+The systemd unit (`bed/src/bed/daemon/bed.service`) keeps passing
+`--config /etc/bed/bed.json` so FHS hosts continue to use the
+operator-edit surface. The fallback only fires for non-prod
+invocations (`bed --foreground`, `make deploy-venv`, `bed --debug`,
+anywhere `install-etc` has not been run).
+
+This makes `bed` (no flags) a complete zero-config dev-mode
+invocation, mirrors the existing `zoid6/main.py:_resolve_config_path`
+resolver (`$ZOID6_CONFIG` → `/etc/zoid6/zoid6.json` → packaged), and
+removes the last "sudo required to write `/etc/bed/bed.json`" coupling
+between the wheel install and a usable default. The fallback chain
+lands without breaking the FHS story: the factory default
+(`bed/usr/share/factory/etc/bed/bed.json`) is byte-identical to the
+packaged default (`bed/src/bed/data/bed.json`), so resolving to the
+packaged default is semantically equivalent to "operator has not
+customised the config".
+
+Changes:
+
+* `bed/src/bed/_configpath.py` (new) — `resolve_config_path()`,
+  `CONFIG_ENV = "BED_CONFIG"`, `FHS_CONFIG = "/etc/bed/bed.json"`.
+* `bed/src/bed/lib.py` — `--config` is `required=False, default=None`
+  (was `required=True`); help text describes the fallback chain.
+* `bed/src/bed/main.py` — `main_async` calls `resolve_config_path()`
+  before loading; the explicit `if not os.path.isfile(args.config_file)`
+  guard is dropped (the resolver always returns an existing path).
+* `bed/src/bed/tests/test_bed.py` — `test_config_flag_required` is
+  replaced by `test_config_flag_default_is_none`; four new
+  `test_resolve_config_path_*` tests cover each precedence rung and
+  a `test_main_async_resolves_packaged_default_when_no_config_flag`
+  integration test confirms `bed` (no flags) walks the resolver
+  through to the packaged default without exiting on a missing
+  `--config` path.
+
+Back-compat note: callers that were relying on `--config`'s
+`required=True` to fail loud on a missing flag now get the packaged
+default silently. Two operator-visible behaviours shift:
+
+* `bed` (no `--config`) used to exit 1 with
+  `Config file not found: None`; it now boots from the packaged
+  default.
+* Operators who explicitly pass `--config /nonexistent.json` still
+  see the same `Config file not found` exit-1 path (the resolver
+  does not paper over explicit paths).
+
+See `bed/FHS.md` "## Default config path" for the rationale and
+`bed/TODO.md` "## CLI `--config` flag" for the precedence table.
+
 ### bed: `deploy` target is now non-sudo (alias for `deploy-venv`)
 
 - `bed/Makefile:223-226` — `deploy: deploy-venv` (was
