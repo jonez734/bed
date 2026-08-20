@@ -2252,10 +2252,10 @@ awaits `self.server.stop()` and releases the port.
 
 ### Problem
 
-`bed/Makefile:183` `deploy: install` runs the full production
+`bed/Makefile:223` `deploy: install` runs the full production
 install — sysusers, tmpfiles, venv, systemd, /etc/bed. All five
-steps contain `sudo` commands (`bed/Makefile:95, 104, 122-123,
-133, 136-137, 151-152, 167-170`).
+steps contain `sudo` commands (`bed/Makefile:99-100, 108-109,
+134-149, 167-168, 182-186`).
 
 When `deploytool deploy casino.tui` pulls in `bed` as a
 transitive dep
@@ -2270,7 +2270,7 @@ or `systemd-sysusers`/`systemd-tmpfiles` host setup.
 Split `bed`'s deploy into two named paths, both registered with
 deploytool so the registry reflects the choice:
 
-- `bed.venv` (default, non-sudo) — build wheels for
+- `bed.venv` / `bed.tui` (default, non-sudo) — build wheels for
   `getdate_next`, `bbsengine6`, and `bed`, then `pip install`
   them into the **active venv**
   (`$(VIRTUAL_ENV)/bin/pip` or `python -m pip`). WHEEL_DIR is in
@@ -2279,38 +2279,46 @@ deploytool so the registry reflects the choice:
   (sysusers + tmpfiles + per-service venv + systemd + /etc/bed).
   Reuses the existing `install` target.
 
-`deploy bed` (no sub) defaults to `bed.venv` since it's the
-first entry in `TARGETS` (per `lib.py:189-198`). `deploy
+`deploy bed` (no sub) auto-expands to `tui + venv + prod`, but
+`prod` is dropped at `deploytool/src/deploytool/lib.py:296`
+unless explicit, so the default path is non-sudo. `deploy
 bed.prod` is explicit. `deploytool deploy casino.tui`'s
-transitive `bed` dep now resolves to `bed.venv` automatically.
+transitive `bed` dep resolves to `bed.venv` (via the
+`MAKE_TARGET_ALIASES[("bed", "tui")] = "venv"` alias at
+`lib.py:113`).
 
-The existing `deploy: install` (line 183) is preserved for back-
-compat — anyone running `make deploy` directly still gets the
-full prod install. New operators should prefer the named sub-
-targets.
+`bed/Makefile:223` `deploy` was previously an alias for
+`install` (sudo). Resolved 2026-08-20: `deploy` is now
+`deploy-venv` (non-sudo). Direct `make deploy` invocations
+that previously got the full prod install now get the active-
+venv install — call `make deploy-prod` (sudo) instead for
+the umbrella install.
 
 ### Tasks
 
-- [ ] Add `bed/Makefile` `deploy-venv` target (non-sudo, see
+- [x] Add `bed/Makefile` `deploy-venv` target (non-sudo, see
       body in the plan above). Mirrors `install-venv`
-      (`bed/Makefile:120-138`) minus the `sudo -u $(VENV_OWNER)`
-      venv bootstrap (122-123) and the SELinux relabel
-      (135-137). Add to `.PHONY` (line 8) and `help` block
-      (lines 16-34).
-- [ ] Add `bed/Makefile` `deploy-prod: install` target (full
+      (`bed/Makefile:133-154`) minus the `sudo -u $(VENV_OWNER)`
+      venv bootstrap (135) and the SELinux relabel
+      (151-153). Add to `.PHONY` (line 8) and `help` block
+      (lines 34-36).
+- [x] Add `bed/Makefile` `deploy-prod: install` target (full
       prod install). Add to `.PHONY` (line 8) and `help` block
-      (lines 16-34).
-- [ ] Pin `casino.tui`'s `bed` dep explicitly. Change
+      (lines 34-36).
+- [x] Pin `casino.tui`'s `bed` dep explicitly. Change
       `deploytool/src/deploytool/lib.py:81` from
       `"tui": ["bed"]` to
       `"tui": [("bbsengine6", "tui"), "bed"]` so bbsengine6's
       www deploy is dropped (per the bbsengine6.tui fix from
       the prior turn) and `bed` resolves to `bed.venv` (the
       default).
-- [ ] Register `"bed": ["venv", "prod"]` in
-      `deploytool/src/deploytool/lib.py:96-105` `TARGETS`.
-- [ ] Verify with `deploytool --dry-run`:
-      - `bed` → `[bed.venv]` (default first sub).
+- [x] Register `"bed": ["tui", "venv", "prod"]` in
+      `deploytool/src/deploytool/lib.py:96-107` `TARGETS`.
+- [x] Change `bed/Makefile:223` `deploy: install` →
+      `deploy: deploy-venv` so direct `make deploy` is
+      non-sudo. `make deploy-prod` remains the sudo path.
+- [x] Verify with `deploytool --dry-run`:
+      - `bed` → `[bed.tui]` (aliased to `deploy-venv`).
       - `bed.venv` → `[bed.venv]` (explicit).
       - `bed.prod` → `[bed.prod]` (full prod install).
       - `casino.tui` → `[bbsengine6.tui, bed.venv, casino.tui]`
@@ -2321,24 +2329,27 @@ targets.
 - [ ] Real-run smoke test: `deploytool deploy bed.prod` (with
       sudo) exits 0 and `systemctl status bed` shows the
       service loaded.
-- [ ] Back-compat smoke test: `make deploy` (direct invocation,
-      not via deploytool) still runs the full prod install
-      (Q2.A preserved).
+- [ ] Back-compat smoke test: any caller that was doing
+      `make deploy` expecting the full prod install must be
+      updated to `make deploy-prod`. (Search the meta-repo for
+      `make deploy\b` references that touch `bed/` directly.)
 
 ### Cross-references
 
-- `bed/Makefile:120-138` — existing `install-venv` body that
+- `bed/Makefile:133-154` — existing `install-venv` body that
   `deploy-venv` mirrors (sans `sudo`).
-- `bed/Makefile:159` — existing `install` body that
-  `deploy-prod` reuses (Q3.B umbrella).
-- `bed/Makefile:183` — existing `deploy: install` preserved
-  for back-compat (Q2.A).
+- `bed/Makefile:175-176` — existing `install` body that
+  `deploy-prod` reuses.
+- `bed/Makefile:223-226` — `deploy: deploy-venv` (was
+  `deploy: install`); non-sudo default.
 - `deploytool/src/deploytool/lib.py:74-90` — companion
   `CONDITIONAL_DEPENDENCIES["casino"]["tui"]` change.
-- `deploytool/src/deploytool/lib.py:96-105` — `TARGETS` entry
-  that registers the new sub-targets.
-- `deploytool/src/deploytool/lib.py:189-198` — sub-target
-  defaulting logic (first entry wins when no sub given).
+- `deploytool/src/deploytool/lib.py:96-107` — `TARGETS` entry
+  that registers the sub-targets.
+- `deploytool/src/deploytool/lib.py:112-114` —
+  `MAKE_TARGET_ALIASES` maps `bed.tui` to `bed.venv`.
+- `deploytool/src/deploytool/lib.py:294-303` — final pass drops
+  auto-expanded `prod` subs unless explicit.
 
 
 ## Interactive prompts: pass `args=args` to bed CLI input calls
