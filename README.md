@@ -100,10 +100,16 @@ cd /path/to/bed/src && sudo make install-systemd && sudo systemctl restart bed
 pip install --user build setuptools wheel
 ```
 
-It also expects local sibling repos (`../bbsengine6/py`, `../getdate_next`)
-and builds wheels for all three into `/tmp` so they can be installed into the
-shared venv via `sudo -u $(VENV_OWNER) $(VENV_DIR)/bin/pip install` (the venv
-owner may not have access to the source tree).
+It also expects the local sibling repo `../bbsengine6/py` and builds
+wheels for `bbsengine6` and `bed` itself into `/tmp` so they can be
+installed into the shared venv via
+`sudo -u $(VENV_OWNER) $(VENV_DIR)/bin/pip install` (the venv owner
+may not have access to the source tree). `getdate_next` is no
+longer built inline — pip resolves `getdate-next` as a transitive
+runtime dep of `bbsengine6` (declared in `bbsengine6/py/pyproject.toml`).
+Run `make -C ../getdate_next deploy-venv` manually before
+`install-venv` if you want to use local getdate_next source instead
+of the PyPI version.
 
 #### SELinux + setgid build trees
 

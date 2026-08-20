@@ -54,6 +54,32 @@ every tui consumer reaches `bbsengine6.tui` through `bed.tui`
 `("bbsengine6", "tui")` in `casino.tui`'s conditional deps was
 dropped — it's transitively redundant with `bed.tui`.
 
+### bed: chain `egg-info` cleanup into the `src/Makefile install` shell
+
+`bed/src/Makefile install`'s second recipe line was
+`rm -rf src/bed.egg-info`, which ran in a fresh shell after the
+first line's `cd ..`. Because each Make recipe line is its own
+shell, the `cd` from line 1 didn't carry to line 2, so line 2 ran
+with `$(CURDIR) == bed/src/` (correct), but `src/bed.egg-info`
+relative to the package source dir was being removed on every
+install — fine on a clean tree, but a race + stray directory if
+the prior `pip install -e .` had already cleaned it up, and the
+intent was to chain both into one shell that ran after the
+`pip install -e .` returned from the parent dir.
+
+The two lines are now chained into one shell so the order is
+deterministic and the cleanup is part of the same logical step:
+
+```make
+install: clean-egg-info
+	cd .. && $(PIP) install --no-cache-dir -e . \
+		&& rm -rf src/bed.egg-info
+```
+
+`clean-egg-info` is unchanged (still `find . -name '*.egg-info'
+-type d -exec rm -rf {} +`) and runs before the chained shell, so
+the install starts from a tree with no leftover egg-info.
+
 ### bed: `load_config` honors `autorestart` on transient FS / network errors
 
 `bed.config.load_config` now distinguishes operator errors (which

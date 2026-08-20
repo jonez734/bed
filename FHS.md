@@ -96,9 +96,13 @@ and `websockets` as runtime dependencies. Consumers of `bed` (`zoid6`, games,
   installs the bed wheel as part of `install-venv`.
 
 ### 2. Install behavior
-- `bed/Makefile` `install-venv` builds wheels for `../bbsengine6/py`,
-  `../getdate_next`, and `bed` itself, then installs them into
-  `/var/lib/bed/venv` via `sudo -u bed /var/lib/bed/venv/bin/pip install`.
+- `bed/Makefile` `install-venv` builds wheels for `../bbsengine6/py` and
+  `bed` itself, then installs them into `/var/lib/bed/venv` via
+  `sudo -u bed /var/lib/bed/venv/bin/pip install`. `getdate_next` is NOT
+  built inline — pip resolves `getdate-next` as a transitive runtime dep
+  of `bbsengine6` (declared in `bbsengine6/py/pyproject.toml`). To use
+  local getdate_next source, run `make -C ../getdate_next deploy-venv`
+  before invoking `install-venv`.
 - `zoid6/src/Makefile` `install-venv` builds the `bed` wheel and installs it
   into `/var/lib/zoid6/venv` alongside the zoid6 wheel, so `import bed` works
   inside the zoid6 daemon.
