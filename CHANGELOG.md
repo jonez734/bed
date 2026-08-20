@@ -47,6 +47,55 @@ make -C bed deploy-venv   # bbsengine6.whl's pip install sees
 build (it relies on `pip install .` resolving `bbsengine6`, which
 transitively pulls `getdate-next`).
 
+### getdate_next: upgrade `PREPARE_BUILD` to match `bed`'s (foreign-owned rename + `chmod 1775`)
+
+`getdate_next/Makefile`'s `PREPARE_BUILD` helper only had the
+original partial fix from this changelog's
+"bed: strip setgid on `build/` before `python -m build`" entry:
+`mkdir -p build && chmod g-s build`. Two issues remained:
+
+1. **Foreign-owned `build/` EPERMs the chmod.** When a prior build
+   ran as a different uid (e.g. left over from a CI run as
+   `minotaur`'s deploy user), the leftover `build/` is owned by
+   that uid and the unprivileged `chmod` fails with `EPERM`. This
+   is the failure mode the `deploy getdate_next` invocation on
+   2026-08-20 hit. `bed/Makefile`'s `PREPARE_BUILD` already
+   handled this by renaming a not-owned-by-us `build/` to
+   `build.stale.$$` first; `getdate_next/Makefile` did not.
+2. **`chmod g-s` is umask-dependent.** On a source tree whose
+   umask drops the sticky bit on `mkdir`, `chmod g-s` produces a
+   non-sticky `build/` — and then a concurrent rebuild in the
+   shared group can stomp files inside. `chmod 1775` pins the
+   mode idempotently.
+
+`getdate_next/Makefile`'s `PREPARE_BUILD` was rewritten to match
+`bed/Makefile`'s (sans the `$(1)` parameterization, since
+`getdate_next` only has its own `build/`):
+
+```make
+PREPARE_BUILD = \
+	if [ -d build ] && [ ! -O build ]; then \
+		mv build build.stale.$$ 2>/dev/null || true; \
+	fi; \
+	mkdir -p build && chmod 1775 build
+```
+
+Rationale comment block above the definition was also copied from
+`bed/Makefile` verbatim so future readers see the same
+SELinux+NoNewPrivs / `CAP_FSETID` / `shutil.copystat` chain of
+causes that justifies dropping the setgid bit on `build/`.
+
+`deploytool/tests/test_deploy_bed_tui.py` already pins both
+behaviours (`chmod 1775` present, `chmod g-s` absent, foreign-
+owned rename present) — its assertions are text-based on
+`PREPARE_BUILD` and pass for `bed`. A parallel
+`test_deploy_getdate_next_tui.py` was added to pin the same
+invariants on `getdate_next/Makefile`.
+
+Tracked in `zoid6/TODO.md` ("`getdate_next` — has a stub at
+`getdate_next/Makefile:32` ... Upgrade to match the bed
+pattern."); that checkbox is now ticked.
+
 `deploytool` sub-target chaining is now consistent end-to-end:
 every tui consumer reaches `bbsengine6.tui` through `bed.tui`
 (`casino.tui -> bed.tui -> bbsengine6.tui`,
