@@ -2391,5 +2391,472 @@ async def _run_with_mock_db(bed, mock_pool):
         await bed.start()
 
 
+def _patch_open_primary_fails(primary, exc):
+    """Context manager: ``open(primary, ...)`` raises ``exc`` while every
+    other path's ``open`` is real. Used by ``TestConfigLoadFallback`` to
+    simulate a recoverable failure on the explicit config path."""
+    real_open = open
+    primary_abs = os.path.realpath(primary)
+
+    def _fake_open(path, *args, **kwargs):
+        if os.path.realpath(str(path)) == primary_abs:
+            raise exc
+        return real_open(path, *args, **kwargs)
+
+    return patch("builtins.open", side_effect=_fake_open)
+
+
+def _capture_io():
+    """Return (captured_list, capture_fn) suitable for patching io.echo.
+    capture_fn records (level, message) tuples on the captured list."""
+    captured: list = []
+
+    def _capture(msg, level="info"):
+        captured.append((level, msg))
+        return None
+
+    return captured, _capture
+
+
+class TestConfigLoadFallback(unittest.TestCase):
+    """``bed.config.load_config`` honors ``autorestart`` when the explicit
+    config path raises a transient FS / network error.
+
+    With ``autorestart=True`` the packaged default
+    (``bed/data/bed.json``) is loaded and a ``level="warning"`` message
+    names the original failure and the absolute path of the fallback.
+    With ``autorestart=False`` a ``level="error"`` message names the
+    failure and the path that failed, then
+    :class:`bed.config.ConfigIORecoverableError` is raised so the
+    caller can ``sys.exit(3)``. Operator errors (``FileNotFoundError``,
+    ``IsADirectoryError``, JSON syntax errors) always propagate so a
+    silent fallback never masks a real config bug.
+    """
+
+    def test_load_config_falls_back_when_autorestart_true(self):
+        """autorestart=True + PermissionError(EACCES) -> warn + load packaged default."""
+        from bed import config
+
+        tmp = tempfile.mkdtemp()
+        primary = os.path.join(tmp, "primary.json")
+        with open(primary, "w") as f:
+            f.write("{}")
+        fallback_path = str(config.get_package_data_path("bed.json"))
+        captured, capture_io = _capture_io()
+
+        with patch("bed.config.io.echo", capture_io), \
+             _patch_open_primary_fails(
+                 primary, PermissionError(errno.EACCES, "Permission denied")
+             ):
+            cfg = config.load_config(primary, autorestart=True)
+
+        self.assertIn("bed", cfg)
+        warnings = [m for lvl, m in captured if lvl == "warning"]
+        self.assertTrue(
+            any("falling back to default JSON at" in m for m in warnings),
+            f"missing fallback warning; captured={captured}",
+        )
+        self.assertTrue(
+            any(fallback_path in m for m in warnings),
+            f"fallback warning missing full path; captured={captured}",
+        )
+        self.assertTrue(
+            any(primary in m for m in warnings),
+            f"fallback warning missing original path; captured={captured}",
+        )
+
+    def test_load_config_fatal_when_autorestart_false(self):
+        """autorestart=False + PermissionError(EACCES) -> error + ConfigIORecoverableError."""
+        from bed import config
+
+        tmp = tempfile.mkdtemp()
+        primary = os.path.join(tmp, "primary.json")
+        with open(primary, "w") as f:
+            f.write("{}")
+        fallback_path = str(config.get_package_data_path("bed.json"))
+        captured, capture_io = _capture_io()
+
+        with patch("bed.config.io.echo", capture_io), \
+             _patch_open_primary_fails(
+                 primary, PermissionError(errno.EACCES, "Permission denied")
+             ):
+            with self.assertRaises(config.ConfigIORecoverableError):
+                config.load_config(primary, autorestart=False)
+
+        errors = [m for lvl, m in captured if lvl == "error"]
+        self.assertTrue(
+            any("autorestart is off" in m for m in errors),
+            f"missing autorestart-off error message; captured={captured}",
+        )
+        self.assertTrue(
+            any(primary in m for m in errors),
+            f"error message missing original path; captured={captured}",
+        )
+        self.assertFalse(
+            any(fallback_path in m for m in errors),
+            f"error message should NOT name the fallback path; captured={captured}",
+        )
+
+    def test_load_config_fatal_when_autorestart_false_on_each_errno(self):
+        """Every errno in ``_RECOVERABLE_ERRNOS`` produces ConfigIORecoverableError
+        when autorestart=False."""
+        from bed import config
+
+        tmp = tempfile.mkdtemp()
+        primary = os.path.join(tmp, "primary.json")
+        with open(primary, "w") as f:
+            f.write("{}")
+
+        for err_code in sorted(config._RECOVERABLE_ERRNOS):
+            with self.subTest(errno=errno.errorcode.get(err_code, err_code)):
+                captured, capture_io = _capture_io()
+                with patch("bed.config.io.echo", capture_io), \
+                     _patch_open_primary_fails(
+                         primary, OSError(err_code, f"errno {err_code}")
+                     ):
+                    with self.assertRaises(config.ConfigIORecoverableError):
+                        config.load_config(primary, autorestart=False)
+                self.assertTrue(
+                    any("autorestart is off" in m for lvl, m in captured
+                        if lvl == "error"),
+                    f"missing error message for errno {err_code}",
+                )
+
+    def test_load_config_falls_back_on_gaierror(self):
+        """socket.gaierror (DNS / ENOTFOUND) + autorestart=True -> warn + fallback."""
+        from bed import config
+
+        tmp = tempfile.mkdtemp()
+        primary = os.path.join(tmp, "primary.json")
+        with open(primary, "w") as f:
+            f.write("{}")
+        captured, capture_io = _capture_io()
+
+        with patch("bed.config.io.echo", capture_io), \
+             _patch_open_primary_fails(
+                 primary, socket.gaierror(-2, "Name or service not known")
+             ):
+            cfg = config.load_config(primary, autorestart=True)
+
+        self.assertIn("bed", cfg)
+        warnings = [m for lvl, m in captured if lvl == "warning"]
+        self.assertTrue(
+            any("gaierror" in m for m in warnings),
+            f"missing gaierror name in fallback warning; captured={captured}",
+        )
+
+    def test_load_config_propagates_filenotfound(self):
+        """FileNotFoundError is NOT recoverable; must propagate regardless of autorestart."""
+        from bed import config
+
+        with self.assertRaises(FileNotFoundError):
+            config.load_config(
+                "/nonexistent/path/that/does/not/exist.json",
+                autorestart=True,
+            )
+        with self.assertRaises(FileNotFoundError):
+            config.load_config(
+                "/nonexistent/path/that/does/not/exist.json",
+                autorestart=False,
+            )
+
+    def test_load_config_propagates_json_decode_error(self):
+        """Truncated JSON is NOT recoverable; must propagate regardless of autorestart."""
+        from bed import config
+
+        tmp = tempfile.mkdtemp()
+        bad = os.path.join(tmp, "bad.json")
+        with open(bad, "w") as f:
+            f.write("{")
+        with self.assertRaises(json.JSONDecodeError):
+            config.load_config(bad, autorestart=True)
+        with self.assertRaises(json.JSONDecodeError):
+            config.load_config(bad, autorestart=False)
+
+
+class TestPeekAutorestart(unittest.TestCase):
+    """``bed.config._peek_autorestart`` reads ``bed.autorestart`` from the
+    config file WITHOUT performing path expansion, env merge, or
+    override merge. Returns ``None`` (treated as 'unknown') on any
+    I/O or JSON parse error so the caller defaults to autorestart=False."""
+
+    def test_peek_autorestart_returns_true(self):
+        from bed import config
+
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "bed.json")
+        with open(path, "w") as f:
+            json.dump({"bed": {"autorestart": True}}, f)
+        self.assertIs(config._peek_autorestart(path), True)
+
+    def test_peek_autorestart_returns_false_when_absent(self):
+        from bed import config
+
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "bed.json")
+        with open(path, "w") as f:
+            json.dump({"bed": {}}, f)
+        self.assertIs(config._peek_autorestart(path), False)
+
+    def test_peek_autorestart_returns_false_when_explicit(self):
+        from bed import config
+
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "bed.json")
+        with open(path, "w") as f:
+            json.dump({"bed": {"autorestart": False}}, f)
+        self.assertIs(config._peek_autorestart(path), False)
+
+    def test_peek_autorestart_returns_false_when_bed_missing(self):
+        from bed import config
+
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "bed.json")
+        with open(path, "w") as f:
+            json.dump({}, f)
+        self.assertIs(config._peek_autorestart(path), False)
+
+    def test_peek_autorestart_returns_none_on_io_error(self):
+        from bed import config
+
+        self.assertIsNone(config._peek_autorestart("/nonexistent/path.json"))
+
+    def test_peek_autorestart_returns_none_on_bad_json(self):
+        from bed import config
+
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "bed.json")
+        with open(path, "w") as f:
+            f.write("{")
+        self.assertIsNone(config._peek_autorestart(path))
+
+    def test_peek_autorestart_returns_false_for_non_bool_value(self):
+        """A typo'd value (e.g. 'yes') fails closed to False, matching
+        ``get_restart_config``'s default of False when the JSON key is
+        absent or non-boolean."""
+        from bed import config
+
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "bed.json")
+        with open(path, "w") as f:
+            json.dump({"bed": {"autorestart": "yes"}}, f)
+        self.assertIs(config._peek_autorestart(path), False)
+
+
+class TestMainAsyncConfigIOFallback(unittest.IsolatedAsyncioTestCase):
+    """``bed.main.main_async`` resolves ``autorestart`` (CLI > peek > False)
+    before calling ``config.load_config``, and exits with status 3 when a
+    recoverable I/O error fires through with ``autorestart`` resolved to
+    False."""
+
+    async def test_main_async_exits_3_when_autorestart_off_and_load_recoverable(self):
+        """CLI autorestart=None, peek=None -> autorestart=False -> exit 3.
+
+        Drives the actual recoverable-error branch in ``load_config`` by
+        patching ``open`` to raise ``PermissionError(EACCES)`` on the
+        explicit config path; ``main_async`` then exits 3 with the
+        ``autorestart is off`` message captured."""
+        from bed import config
+        bed_main = importlib.import_module("bed.main")
+        captured, capture_io = _capture_io()
+
+        primary = "/some/path.json"
+        with patch("sys.argv", ["bed", "--config", primary]), \
+             patch.object(config, "_peek_autorestart", return_value=None), \
+             _patch_open_primary_fails(
+                 primary, PermissionError(errno.EACCES, "Permission denied")
+             ), \
+             patch("bed.main.io.echo", capture_io), \
+             patch("bed.config.io.echo", capture_io), \
+             patch.object(bed_main, "load_router_class", return_value=MagicMock()):
+            with self.assertRaises(SystemExit) as cm:
+                await bed_main.main_async()
+
+        self.assertEqual(
+            cm.exception.code, 3,
+            "exit code 3 expected for autorestart-off recoverable failure",
+        )
+        errors = [m for lvl, m in captured if lvl == "error"]
+        self.assertTrue(
+            any("autorestart is off" in m for m in errors),
+            f"missing autorestart-off error in main_async; captured={captured}",
+        )
+
+    async def test_main_async_exits_3_when_peek_says_false(self):
+        """CLI autorestart=None, peek returns False -> autorestart=False -> exit 3.
+
+        Same setup as above but with ``_peek_autorestart`` returning
+        ``False`` (key absent or false in JSON)."""
+        from bed import config
+        bed_main = importlib.import_module("bed.main")
+        captured, capture_io = _capture_io()
+
+        primary = "/some/path.json"
+        with patch("sys.argv", ["bed", "--config", primary]), \
+             patch.object(config, "_peek_autorestart", return_value=False), \
+             _patch_open_primary_fails(
+                 primary, PermissionError(errno.EACCES, "Permission denied")
+             ), \
+             patch("bed.main.io.echo", capture_io), \
+             patch("bed.config.io.echo", capture_io), \
+             patch.object(bed_main, "load_router_class", return_value=MagicMock()):
+            with self.assertRaises(SystemExit) as cm:
+                await bed_main.main_async()
+        self.assertEqual(cm.exception.code, 3)
+        errors = [m for lvl, m in captured if lvl == "error"]
+        self.assertTrue(
+            any("autorestart is off" in m for m in errors),
+            f"missing autorestart-off error; captured={captured}",
+        )
+
+    async def test_main_async_passes_autorestart_true_when_cli_flag_set(self):
+        """--autorestart on CLI wins over peek=None; load_config is called
+        with autorestart=True."""
+        from bed import config
+        bed_main = importlib.import_module("bed.main")
+        seen_kwargs: list = []
+
+        def _fake_load(path, *args, **kwargs):
+            seen_kwargs.append(kwargs)
+            return {"bed": {"autorestart": True}, "debug": False}
+
+        with patch("sys.argv", ["bed", "--autorestart", "--config", "/some/path.json"]), \
+             patch.object(config, "_peek_autorestart", return_value=None), \
+             patch.object(config, "load_config", side_effect=_fake_load), \
+             patch("bed.main.io.echo", _capture_io()[1]), \
+             patch.object(bed_main, "load_router_class", return_value=MagicMock()), \
+             patch.object(bed_main, "ensure_startup", return_value=False):
+            with self.assertRaises(SystemExit):
+                await bed_main.main_async()
+
+        self.assertTrue(seen_kwargs, "load_config was never called")
+        self.assertTrue(
+            seen_kwargs[0].get("autorestart") is True,
+            f"expected autorestart=True; got {seen_kwargs}",
+        )
+
+    async def test_main_async_uses_peeked_true_when_cli_unset(self):
+        """CLI autorestart=None, peek returns True -> load_config called with autorestart=True."""
+        from bed import config
+        bed_main = importlib.import_module("bed.main")
+        seen_kwargs: list = []
+
+        def _fake_load(path, *args, **kwargs):
+            seen_kwargs.append(kwargs)
+            return {"bed": {"autorestart": True}, "debug": False}
+
+        with patch("sys.argv", ["bed", "--config", "/some/path.json"]), \
+             patch.object(config, "_peek_autorestart", return_value=True), \
+             patch.object(config, "load_config", side_effect=_fake_load), \
+             patch.object(bed_main, "load_router_class", return_value=MagicMock()), \
+             patch.object(bed_main, "ensure_startup", return_value=False):
+            with self.assertRaises(SystemExit):
+                await bed_main.main_async()
+
+        self.assertTrue(seen_kwargs, "load_config was never called")
+        self.assertTrue(
+            seen_kwargs[0].get("autorestart") is True,
+            f"expected autorestart=True from peek; got {seen_kwargs}",
+        )
+
+
+class TestSighupConfigIORecoverableFallback(unittest.IsolatedAsyncioTestCase):
+    """SIGHUP reload keeps the established 'reload if possible, otherwise
+    stay up with the old config' semantics. A ``ConfigIORecoverableError``
+    raised by ``config.load_config`` (transient I/O error during reload)
+    is logged and swallowed so the daemon keeps running with the
+    previous config -- it does NOT propagate to sys.exit(3)."""
+
+    def _bed(self):
+        from bbsengine6.net.defaultrouter import DefaultRouter
+        from bed.main import BED
+        return BED(self._bed_args(), DefaultRouter)
+
+    def _bed_args(self, **overrides):
+        defaults = dict(
+            host="127.0.0.1",
+            port=0,
+            debug=False,
+            databasename="x",
+            databasehost="x",
+            databaseport=0,
+            databaseuser="x",
+            databasepassword="x",
+            bed_secret="",
+            bed_name="bed",
+            token_ttl=900,
+            token_persistence="memory",
+            credential_provider="password",
+            bed_instance_id=None,
+            config_file="/dev/null",
+            autorestart=False,
+            restart_delay=5,
+            max_restarts=10,
+            restart_on_bind_failure=False,
+        )
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    async def test_sighup_swallows_config_io_recoverable_error(self):
+        """A ``ConfigIORecoverableError`` raised by ``load_config`` during
+        SIGHUP is logged and the reload path returns silently (no exit).
+
+        ``TestSighupHandler`` may have replaced ``bed.main._reload_config_and_apply``
+        with a ``MagicMock``; we rebind the module attribute to the
+        original function so the reload path actually runs."""
+        import importlib
+
+        from bed import config
+
+        bed = self._bed()
+        bed.auth_service = None
+        args = self._bed_args(config_file="/some/path.json")
+        ar_ref = [False]
+        rd_ref = [5]
+        mr_ref = [10]
+        captured, capture_io = _capture_io()
+
+        bed_main = importlib.import_module("bed.main")
+        if isinstance(bed_main._reload_config_and_apply, MagicMock):
+            bed_main._reload_config_and_apply = (
+                TestSighupConfigIORecoverableFallback._real_reload_fn()
+            )
+
+        with patch.object(bed_main.io, "echo", capture_io), \
+             patch.object(
+                 bed_main.config,
+                 "load_config",
+                 side_effect=config.ConfigIORecoverableError("simulated"),
+             ):
+            bed_main._reload_config_and_apply(
+                args, bed, ar_ref, rd_ref, mr_ref
+            )
+
+        errors = [m for lvl, m in captured if lvl == "error"]
+        self.assertTrue(
+            any("Config reload failed" in m for m in errors),
+            f"missing reload-failed log; captured={captured}",
+        )
+
+    @staticmethod
+    def _real_reload_fn():
+        """Recover the real ``_reload_config_and_apply`` after another
+        test class monkey-patched it on the module. We re-import the
+        module fresh, capture the real function, then drop the import
+        so the rest of the test session sees the same module object
+        as before."""
+        import sys
+
+        mod_name = "bed.main"
+        saved = sys.modules.pop(mod_name, None)
+        try:
+            importlib.invalidate_caches()
+            fresh = importlib.import_module(mod_name)
+            return fresh._reload_config_and_apply
+        finally:
+            if saved is not None:
+                sys.modules[mod_name] = saved
+
+
 if __name__ == "__main__":
     unittest.main()
