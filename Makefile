@@ -31,7 +31,7 @@ help:
 	@echo "  install-etc        Install /etc/bed/ config from factory defaults"
 	@echo "  uninstall-etc      Remove installed config files"
 	@echo "  setup-db           Bootstrap database: bbsengine6 startup + bed role"
-	@echo "  deploy             Full prod install (legacy; alias for deploy-prod)"
+	@echo "  deploy             Non-sudo: build wheels + pip install into active venv (alias for deploy-venv)"
 	@echo "  deploy-venv        Non-sudo: build wheels + pip install into active venv"
 	@echo "  deploy-prod        Full prod install (sysusers + tmpfiles + venv + systemd + etc)"
 	@echo "  clean              Remove build artifacts"
@@ -220,7 +220,10 @@ deploy-venv:
 deploy-prod: install
 	@echo "bed installed (production)"
 
-deploy: install
+# Non-sudo default — mirrors the `deploy-venv` shape (build wheels for
+# getdate_next + bbsengine6 + bed, then pip install into the active
+# venv). The sudo umbrella is `deploy-prod` (alias for `install`).
+deploy: deploy-venv
 
 commit-version:
 	git add src/$(PROJECT)/_version.py
