@@ -22,7 +22,7 @@ ETC_DIR = /etc/bed
 .PHONY: install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-systemd uninstall-systemd install-etc uninstall-etc
 
 install: version
-	cd .. && $(PIP) install --no-cache-dir -e .
+	cd .. && $(PIP) install --no-cache-dir -e . && rm -rf src/bed.egg-info
 
 rename-sdist:
 	@for f in $(OUTDIR)/*.tar.gz; do \
