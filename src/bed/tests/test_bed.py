@@ -532,16 +532,19 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
             args = parser.parse_args()
         self.assertEqual(args.config_file, "/tmp/bed.json")
 
-    def test_config_flag_required(self):
-        """Omitting --config causes an error (required=True)."""
+    def test_config_flag_default_is_none(self):
+        """Omitting --config leaves args.config_file=None so the
+        resolver can walk $BED_CONFIG > /etc/bed/bed.json > packaged
+        default. (Was required=True; relaxed so the resolver can
+        short-circuit and 'bed' (no flags) works out of the box.)"""
         import argparse
         from bed.main import buildargs
 
         parser = argparse.ArgumentParser(description="BED - BBS Engine Daemon")
         buildargs(parser)
-        with self.assertRaises(SystemExit):
-            with patch("sys.argv", ["bed"]):
-                parser.parse_args()
+        with patch("sys.argv", ["bed"]):
+            args = parser.parse_args()
+        self.assertIsNone(args.config_file)
 
     def test_config_file_overrides_autorestart(self):
         """External config's bed.autorestart=false is reflected via get_restart_config."""
@@ -623,6 +626,75 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(SystemExit) as cm:
                 asyncio.run(bed_main.main_async())
             self.assertEqual(cm.exception.code, 1)
+
+    def test_resolve_config_path_explicit_wins(self):
+        """Explicit --config always wins, even when $BED_CONFIG /
+        /etc/bed/bed.json / packaged default are all available."""
+        from bed._configpath import resolve_config_path
+
+        with patch.dict(os.environ, {"BED_CONFIG": "/from/env.json"}, clear=False):
+            self.assertEqual(
+                resolve_config_path("/from/cli.json"), "/from/cli.json"
+            )
+
+    def test_resolve_config_path_env_wins_over_fhs_and_default(self):
+        """$BED_CONFIG wins when --config is not provided."""
+        from bed._configpath import resolve_config_path
+
+        with patch.dict(os.environ, {"BED_CONFIG": "/from/env.json"}, clear=False):
+            self.assertEqual(resolve_config_path(None), "/from/env.json")
+
+    def test_resolve_config_path_fhs_wins_over_packaged_default(self):
+        """When --config is unset and $BED_CONFIG is unset, an
+        /etc/bed/bed.json file on disk wins over the packaged default."""
+        import tempfile
+
+        from bed._configpath import FHS_CONFIG, resolve_config_path
+
+        tmp = tempfile.mkdtemp()
+        fhs = os.path.join(tmp, "bed.json")
+        with open(fhs, "w") as f:
+            f.write("{}")
+        env = {k: v for k, v in os.environ.items() if k != "BED_CONFIG"}
+        with patch.dict(os.environ, env, clear=True), patch(
+            "bed._configpath.FHS_CONFIG", fhs
+        ):
+            self.assertEqual(resolve_config_path(None), fhs)
+
+    def test_resolve_config_path_falls_back_to_packaged_default(self):
+        """With no --config, no $BED_CONFIG, and no /etc/bed/bed.json,
+        the resolver returns the packaged default shipped inside the
+        wheel. The packaged default is byte-identical to the FHS
+        factory, so this is semantically equivalent to "operator has
+        not customised the config"."""
+        import tempfile
+
+        from bed._configpath import resolve_config_path
+
+        env = {k: v for k, v in os.environ.items() if k != "BED_CONFIG"}
+        with patch.dict(os.environ, env, clear=True), patch(
+            "bed._configpath.FHS_CONFIG", "/nonexistent/etc/bed/bed.json"
+        ):
+            path = resolve_config_path(None)
+        self.assertTrue(os.path.isfile(path))
+        self.assertTrue(path.endswith("bed.json"))
+        self.assertIn("bed", path)
+        self.assertIn("data", path)
+
+    def test_main_async_resolves_packaged_default_when_no_config_flag(self):
+        """`bed` (no flags) runs main_async and resolves the
+        packaged default without exiting on a missing --config path."""
+        from unittest.mock import MagicMock
+
+        bed_main = importlib.import_module("bed.main")
+
+        with (
+            patch("sys.argv", ["bed"]),
+            patch.object(bed_main, "load_router_class", return_value=MagicMock()),
+        ):
+            with self.assertRaises(SystemExit) as cm:
+                asyncio.run(bed_main.main_async())
+            self.assertNotEqual(cm.exception.code, 2)
 
     def test_load_config_reads_external_file(self):
         """config.load_config reads an explicit config file."""

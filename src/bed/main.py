@@ -19,6 +19,7 @@ from bbsengine6.module import load as bbs_module_load
 from bbsengine6.net import WebSocketServer
 
 from . import config, lib
+from ._configpath import resolve_config_path
 from .api import (
     AuthService,
     BankService,
@@ -1161,9 +1162,7 @@ async def main_async() -> None:
     buildargs(parser)
     args = parser.parse_args()
 
-    if not os.path.isfile(args.config_file):
-        io.echo(f"Config file not found: {args.config_file}", level="error")
-        sys.exit(1)
+    args.config_file = resolve_config_path(args.config_file)
     try:
         loaded_config = config.load_config(args.config_file)
     except (ValueError, OSError) as e:

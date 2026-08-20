@@ -240,10 +240,12 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
     parentparser.add_argument(
         "--config",
         dest="config_file",
-        required=True,
+        required=False,
+        default=None,
         type=_config_path_type,
-        help="Path to a JSON config file (required). Supports ~ and $VAR. "
-        "No fallback search is performed — the path must be provided explicitly.",
+        help="Path to a JSON config file. Optional: when omitted, "
+        "$BED_CONFIG > /etc/bed/bed.json > the packaged default "
+        "(bed/data/bed.json inside the wheel). Supports ~ and $VAR.",
     )
     parentparser.add_argument(
         "--no-message-service",
