@@ -103,7 +103,7 @@ ensure-build-dir: ensure-repo
 	@stat -c '%G' /srv/repo/$(PROJECT)/ 2>/dev/null | grep -qx repo || sudo chgrp repo /srv/repo/$(PROJECT)/
 	@stat -c '%a' /srv/repo/$(PROJECT)/ 2>/dev/null | grep -q '^2775$$' || sudo chmod 2775 /srv/repo/$(PROJECT)/
 
-build: version clean-egg-info ensure-build-dir
+build: clean version ensure-build-dir
 	$(call PREPARE_BUILD,$(CURDIR))
 	$(PYTHON) -m build --outdir $(OUTDIR)
 
