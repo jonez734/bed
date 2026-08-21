@@ -12,6 +12,55 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### test(bed): create-member + bed-auth login integration tests
+
+New file `bed/src/bed/tests/test_member_create_and_bed_auth.py`
+exercises the create-member -> bed-auth-login round-trip in 5 tests,
+all marked `pytest.mark.integration`:
+
+- `test_a1_create_via_member_setpassword` — insert fresh
+  `engine.__member` row, set the password through
+  `bbsengine6.member.setpassword` (the public API the
+  `console.member.add` flow uses), then round-trip the plaintext
+  through `bbsengine6.member.checkpassword` to prove
+  `crypt(plain, gen_salt('bf'))` matches.
+- `test_a2_create_via_raw_crypt_sql` — same shape but inserts with
+  `password = crypt('pw', gen_salt('bf'))` inline (the path
+  `test_blackjack_flow.py` uses directly), again asserting
+  `checkpassword` returns True.
+- `test_b1_login_via_prompts_setpassword_path` — drives
+  `bed.tools.auth.auth_login(args)` end-to-end against an in-process
+  bed server using the real `PasswordCredentialProvider` (which
+  calls `bbsengine6.member.checkpassword` for real); without
+  `--moniker` / `--password` on the args, the CLI prompts via
+  `bbsengine6.io.inputstring` and `bbsengine6.util.inputpassword`
+  (patched). The token file is written mode 0600 and the server's
+  token store carries a matching record for the freshly-created
+  member.
+- `test_b2_login_via_prompts_raw_crypt_sql_path` — same e2e flow
+  but recreates the member via the `(a.2)` raw `crypt()` SQL path
+  so the e2e covers both create paths symmetrically.
+- `test_b3_login_via_explicit_flags_setpassword_path` — drives
+  `auth_login` with explicit `--moniker` / `--password` flags; no
+  prompting. Still walks the full
+  `BedAuthServiceClient -> bed WebSocket -> AuthService ->
+  PasswordCredentialProvider -> member.checkpassword` path.
+
+Each test uses a unique `alice_<label>_<secrets.token_hex(3)>`
+moniker so reruns against a dirty DB self-heal. The four
+DB-backed tests `skipTest(...)` when `engine.__member` is not
+reachable. The XDG-tmpdir / singleton-reset scaffolding mirrors
+the pattern in `test_auth_tool_integration.py:_AuthToolTestBase`
+(setting `XDG_RUNTIME_DIR` to a tmpdir so the default token-file
+path lands there, calling `authservice.reset_auth_client()` in
+setUp and `_drop_bed_connection_singleton(args)` in tearDown).
+
+The in-process bed server is kept in a daemon thread with its own
+asyncio loop (mirrors
+`bed/src/bed/tests/_auth_helpers.py:BedServerContext`); shutdown
+cancels every task on the loop instead of awaiting
+`WebSocketServer.stop()` so the close-handshake never hangs.
+
 ### bed: regression test pinning `{var:promptcolor}` / `{var:inputcolor}` on auth prompts
 
 New `bed/src/bed/tests/test_auth_prompt_markup.py` captures the
