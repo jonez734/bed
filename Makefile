@@ -172,9 +172,15 @@ BBSENGINE_DIR = $(CURDIR)/../bbsengine6/py
 #     SELinux-enforcing + NoNewPrivs containers (we lack CAP_FSETID).
 #   - group write (g+w): any user in the build group can rebuild
 #     without needing to chown.
-# `chmod 1775` is used (rather than just `chmod g-s`) because it's
-# idempotent and pins the mode even when the source tree's umask would
-# otherwise drop the sticky bit on mkdir.
+# The chmod is expressed as `chmod g-s,+t` (drop the setgid bit the
+# parent dir inherited onto the freshly-mkdir'd build/, then add the
+# sticky bit). The numeric form `chmod 1775` is functionally equivalent
+# but fails on BTRFS+SELinux setups where the parent directory's
+# setgid bit blocks the owner from clearing it via the numeric mode
+# (`chmod: Operation not permitted` on a dir the caller owns). The
+# symbolic form works because the kernel only restricts numeric-mode
+# changes that would remove the inherited setgid bit; `g-s` is
+# permitted regardless of where the bit came from.
 #
 # If $(1)/build/ exists but is owned by a different user (e.g. left over
 # from a prior build run as a different uid), rename it out of the way
@@ -185,7 +191,7 @@ PREPARE_BUILD = \
 	if [ -d $(1)/build ] && [ ! -O $(1)/build ]; then \
 		mv $(1)/build $(1)/build.stale.$$ 2>/dev/null || true; \
 	fi; \
-	mkdir -p $(1)/build && chmod 1775 $(1)/build
+	mkdir -p $(1)/build && chmod g-s,+t $(1)/build
 
 install-venv: clean-egg-info
 	@command -v sudo >/dev/null 2>&1 || { echo "Error: sudo required"; exit 1; }
@@ -267,7 +273,7 @@ uninstall: uninstall-systemd uninstall-venv uninstall-tmpfiles uninstall-sysuser
 # of from a freshly-built wheel. See the EDITABLE detection block
 # above `clean-egg-info` for accepted names and the venv-targeting
 # behavior change.
-deploy-venv: clean-egg-info
+deploy-venv: clean clean-egg-info
 	@mkdir -p $(WHEEL_DIR)
 	@rm -f $(WHEEL_DIR)/*.whl
 	$(MAKE) -C $(BBSENGINE_DIR) version
