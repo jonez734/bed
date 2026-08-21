@@ -12,6 +12,35 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: pass `args=args` to remaining bank CLI input calls
+
+The six `io.inputinteger` / `io.inputstring` calls in `bed bank`
+(`bank_add`, `bank_remove`, `bank_transfer` to-moniker + amount,
+`bank_approve`, `bank_reject`) had the
+`{var:promptcolor}…{var:inputcolor}` color-tag markup added in
+`fix(bed): apply {var:promptcolor}/{var:inputcolor} to all CLI
+interactive prompts` but were deliberately deferred on the
+`args=args` half so that commit stayed focused on the color-tag
+bug and the `bedping` migration off raw `input()`.
+
+They now match the rest of bed's CLI (`auth.py` `inputpassword`,
+`bank.py` `inputchoice`):
+
+* `bed/src/bed/tools/bank.py:559` — `bank_add` `io.inputinteger`.
+* `bed/src/bed/tools/bank.py:583` — `bank_remove` `io.inputinteger`.
+* `bed/src/bed/tools/bank.py:607` — `bank_transfer` to-moniker
+  `io.inputstring`.
+* `bed/src/bed/tools/bank.py:613` — `bank_transfer` amount
+  `io.inputinteger`.
+* `bed/src/bed/tools/bank.py:662` — `bank_approve` `io.inputinteger`.
+* `bed/src/bed/tools/bank.py:688` — `bank_reject` `io.inputinteger`.
+
+`bed/TODO.md` "## Interactive prompts: pass `args=args` to bed CLI
+input calls" tasks are now all `[x]`. No behaviour change for
+callers that don't read args-context-dependent screen state; the
+underlying `bbsengine6.io` `**kwargs` already forwarded `args` when
+supplied, so this is a consistency fix, not a bug fix.
+
 ### bed: `build` depends on full `clean` (not just `clean-egg-info`)
 
 `bed/Makefile:106` `build` target promoted from

@@ -556,7 +556,9 @@ def bank_balance(args, moniker: str, **kwargs) -> bool:
 
 
 def bank_add(args, moniker: str, **kwargs) -> bool:
-    amount = io.inputinteger("{var:promptcolor}amount to add: {var:inputcolor}")
+    amount = io.inputinteger(
+        "{var:promptcolor}amount to add: {var:inputcolor}", args=args
+    )
     if amount is None or amount <= 0:
         io.echo("Invalid amount.", level="error")
         _mark_balance_dirty()
@@ -578,7 +580,9 @@ def bank_add(args, moniker: str, **kwargs) -> bool:
 
 
 def bank_remove(args, moniker: str, **kwargs) -> bool:
-    amount = io.inputinteger("{var:promptcolor}amount to withdraw: {var:inputcolor}")
+    amount = io.inputinteger(
+        "{var:promptcolor}amount to withdraw: {var:inputcolor}", args=args
+    )
     if amount is None or amount <= 0:
         io.echo("Invalid amount.", level="error")
         _mark_balance_dirty()
@@ -600,11 +604,15 @@ def bank_remove(args, moniker: str, **kwargs) -> bool:
 
 
 def bank_transfer(args, moniker: str, **kwargs) -> bool:
-    to_moniker = io.inputstring("{var:promptcolor}transfer to moniker: {var:inputcolor}")
+    to_moniker = io.inputstring(
+        "{var:promptcolor}transfer to moniker: {var:inputcolor}", args=args
+    )
     if not to_moniker:
         io.echo("No moniker entered.", level="error")
         return False
-    amount = io.inputinteger("{var:promptcolor}amount: {var:inputcolor}")
+    amount = io.inputinteger(
+        "{var:promptcolor}amount: {var:inputcolor}", args=args
+    )
     if amount is None or amount <= 0:
         io.echo("Invalid amount.", level="error")
         return False
@@ -651,7 +659,9 @@ def bank_pending(args, moniker: str, is_sysop: bool = False, **kwargs) -> bool:
 
 
 def bank_approve(args, moniker: str, **kwargs) -> bool:
-    transfer_id = io.inputinteger("{var:promptcolor}transfer id to approve: {var:inputcolor}")
+    transfer_id = io.inputinteger(
+        "{var:promptcolor}transfer id to approve: {var:inputcolor}", args=args
+    )
     if transfer_id is None:
         io.echo("Invalid ID.", level="error")
         return False
@@ -675,7 +685,9 @@ def bank_approve(args, moniker: str, **kwargs) -> bool:
 
 
 def bank_reject(args, moniker: str, **kwargs) -> bool:
-    transfer_id = io.inputinteger("{var:promptcolor}transfer id to reject: {var:inputcolor}")
+    transfer_id = io.inputinteger(
+        "{var:promptcolor}transfer id to reject: {var:inputcolor}", args=args
+    )
     if transfer_id is None:
         io.echo("Invalid ID.", level="error")
         return False

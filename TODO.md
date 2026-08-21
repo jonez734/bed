@@ -2437,17 +2437,17 @@ features that future bbsengine6 versions add behind `args`.
 
 ### Tasks
 
-- [ ] Add `args=args` to `bed/src/bed/tools/bank.py:559`
+- [x] Add `args=args` to `bed/src/bed/tools/bank.py:559`
       `io.inputinteger("...")` (`bank_add`).
-- [ ] Add `args=args` to `bed/src/bed/tools/bank.py:581`
+- [x] Add `args=args` to `bed/src/bed/tools/bank.py:581`
       `io.inputinteger("...")` (`bank_remove`).
-- [ ] Add `args=args` to `bed/src/bed/tools/bank.py:603`
+- [x] Add `args=args` to `bed/src/bed/tools/bank.py:603`
       `io.inputstring("...")` (`bank_transfer` — to-moniker prompt).
-- [ ] Add `args=args` to `bed/src/bed/tools/bank.py:607`
+- [x] Add `args=args` to `bed/src/bed/tools/bank.py:607`
       `io.inputinteger("...")` (`bank_transfer` — amount prompt).
-- [ ] Add `args=args` to `bed/src/bed/tools/bank.py:654`
+- [x] Add `args=args` to `bed/src/bed/tools/bank.py:654`
       `io.inputinteger("...")` (`bank_approve`).
-- [ ] Add `args=args` to `bed/src/bed/tools/bank.py:678`
+- [x] Add `args=args` to `bed/src/bed/tools/bank.py:678`
       `io.inputinteger("...")` (`bank_reject`).
 
 ### Cross-references
