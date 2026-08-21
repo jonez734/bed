@@ -45,20 +45,13 @@ class TestPingServiceHandle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reply["name"], "mybbs")
         self.assertEqual(reply["version"], _version.__version__)
 
-    async def test_pong_echoes_client_timestamp(self):
-        """A client-supplied timestamp is echoed so probes can measure
-        round-trip latency. Missing timestamp stays None (not 0)."""
-        svc = self._service("bed")
-        reply = await svc.handle_message(
-            server=None,
-            websocket=None,
-            path="/",
-            message={"type": "ping", "timestamp": 12345.678},
-        )
-        self.assertEqual(reply["timestamp"], 12345.678)
+    async def test_pong_timestamp_is_server_utcnow(self):
+        """The pong always carries the server's UTC time at the moment
+        of construction, regardless of whether the client sent one.
+        Result is an ISO-8601 string parseable by ``datetime.fromisoformat``."""
+        from datetime import datetime, timedelta
 
-    async def test_pong_timestamp_is_none_when_absent(self):
-        """No client timestamp -> pong.timestamp is None (not 0)."""
+        before = datetime.utcnow() - timedelta(seconds=1)
         svc = self._service("bed")
         reply = await svc.handle_message(
             server=None,
@@ -66,7 +59,29 @@ class TestPingServiceHandle(unittest.IsolatedAsyncioTestCase):
             path="/",
             message={"type": "ping"},
         )
-        self.assertIsNone(reply["timestamp"])
+        after = datetime.utcnow() + timedelta(seconds=1)
+        parsed = datetime.fromisoformat(reply["timestamp"])
+        self.assertGreaterEqual(parsed, before)
+        self.assertLessEqual(parsed, after)
+
+    async def test_pong_timestamp_ignores_client_timestamp(self):
+        """A client-supplied timestamp is not echoed; the server's own
+        UTC time wins so the wire value is always accurate."""
+        from datetime import datetime, timedelta
+
+        before = datetime.utcnow() - timedelta(seconds=1)
+        svc = self._service("bed")
+        reply = await svc.handle_message(
+            server=None,
+            websocket=None,
+            path="/",
+            message={"type": "ping", "timestamp": 12345.678},
+        )
+        after = datetime.utcnow() + timedelta(seconds=1)
+        self.assertNotEqual(reply["timestamp"], 12345.678)
+        parsed = datetime.fromisoformat(reply["timestamp"])
+        self.assertGreaterEqual(parsed, before)
+        self.assertLessEqual(parsed, after)
 
     async def test_non_ping_message_returns_none(self):
         """PingService ignores non-ping messages; other services in the
@@ -132,6 +147,7 @@ class TestPingOverWire(unittest.IsolatedAsyncioTestCase):
 
     async def test_ping_pong_carries_name_and_version(self):
         import socket
+        from datetime import datetime, timedelta
         from bbsengine6.net import WebSocketServer
         from bbsengine6.net.defaultrouter import DefaultRouter
 
@@ -152,13 +168,17 @@ class TestPingOverWire(unittest.IsolatedAsyncioTestCase):
 
         await server.start()
         try:
+            before = datetime.utcnow() - timedelta(seconds=1)
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
-                await ws.send(json.dumps({"type": "ping", "timestamp": 42.0}))
+                await ws.send(json.dumps({"type": "ping"}))
                 reply = json.loads(await ws.recv())
-                self.assertEqual(reply["type"], "pong")
-                self.assertEqual(reply["name"], "mybbs")
-                self.assertIn("version", reply)
-                self.assertEqual(reply["timestamp"], 42.0)
+            after = datetime.utcnow() + timedelta(seconds=1)
+            self.assertEqual(reply["type"], "pong")
+            self.assertEqual(reply["name"], "mybbs")
+            self.assertIn("version", reply)
+            parsed = datetime.fromisoformat(reply["timestamp"])
+            self.assertGreaterEqual(parsed, before)
+            self.assertLessEqual(parsed, after)
         finally:
             await server.stop()
 

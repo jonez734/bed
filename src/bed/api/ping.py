@@ -15,10 +15,11 @@
 #     S -> C  {"type": "pong",
 #              "name": "<bed_name>",
 #              "version": "<bed.__version__>",
-#              "timestamp": <echoed from request>}
+#              "timestamp": <server utcnow, ISO-8601>}
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from bbsengine6.session import SessionManager
@@ -31,8 +32,13 @@ class PingService(BaseService):
 
     The ``name`` is the per-instance bed name set via ``--bed-name`` or
     ``bed.name`` in bed.json. The ``version`` is :data:`bed.__version__`
-    (the wheel's ``_version.py`` datestamp/githash). A client ``timestamp``
-    is echoed back when present so probes can measure round-trip latency.
+    (the wheel's ``_version.py`` datestamp/githash). The ``timestamp``
+    is the server's UTC time at the moment the pong is constructed, so
+    the wire reply always carries an accurate, parseable ISO-8601
+    timestamp regardless of whether the client included one in the
+    request (which the binary ``PongPacket`` flow does for RTT, but
+    the JSON ``*-ping`` shims (``bedping`` / ``casino-ping`` /
+    ``zoid6-ping``) do not).
     """
 
     HANDLED_TYPES = ("ping",)
@@ -64,5 +70,5 @@ class PingService(BaseService):
             "type": "pong",
             "name": self.name,
             "version": __version__,
-            "timestamp": message.get("timestamp"),
+            "timestamp": datetime.utcnow().isoformat(),
         }
