@@ -12,6 +12,30 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: `build` depends on full `clean` (not just `clean-egg-info`)
+
+`bed/Makefile:106` `build` target promoted from
+`build: version clean-egg-info ensure-build-dir` to
+`build: clean version ensure-build-dir`, matching the pattern
+shipped in `zoid6/src/Makefile:132-133`. Before this change,
+`bed/Makefile:81` `clean` was only invoked by `release`
+(umbrella), not by `build` itself, so `bed/build/`,
+`bed/dist/`, `bed/build.stale.*/`, `bed/build.old/`, and the
+pytest/ruff/mypy cache dirs could survive across invocations.
+The egg-info SOURCES.txt failure mode is still addressed by
+`clean-egg-info` (which `clean` includes), so no behavior
+change for that vector — this is purely an expansion to wipe
+the full wheel-artifact set before each `python -m build`.
+
+`install-venv` (`bed/Makefile:190`) and `deploy-venv`
+(`bed/Makefile:270`) still depend on `clean-egg-info` rather
+than full `clean` — they invoke `python -m build` against
+`$(BBSENGINE_DIR)` and `$(CURDIR)` with their own
+`PREPARE_BUILD` calls in front, and `clean` would also wipe
+`build/` mid-flow (which `PREPARE_BUILD` is designed to
+re-establish). Keeping `clean-egg-info` there preserves the
+existing prep-then-build ordering.
+
 ### bed: `deploy-venv` honors `DEPLOY_EDITABLE`; `DEV` renamed to `EDITABLE`
 
 Part of the cross-monorepo Phase 1 work in `deploytool`'s
