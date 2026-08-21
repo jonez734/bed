@@ -12,6 +12,27 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: regression test pinning `{var:promptcolor}` / `{var:inputcolor}` on auth prompts
+
+New `bed/src/bed/tests/test_auth_prompt_markup.py` captures the
+prompt string passed into `bbsengine6.io.inputstring` (for
+`moniker:`) and `bbsengine6.util.inputpassword` (for `password:`)
+from `bed auth login`, and asserts each prompt contains both
+`{var:promptcolor}` and `{var:inputcolor}` and ends in
+`{var:inputcolor}` so user keystrokes render in the input color.
+A third test pins that the input helpers don't fire at all when
+`--moniker` / `--password` are pre-populated, so the markup
+isn't accidentally re-run on every code path.
+
+This is a markup-presence regression pin, not a behavioral test.
+Color tags live exclusively in production code (`bed/tools/auth.py`
+per `57a62d9`); without this pin a future "simplify" PR could
+strip the markup without breaking any behavioral assertion. Mirrors
+the mock-swap pattern in `tests/test_ping_tool.py` for the
+`bedping` migration.
+
+Tests: 3 new, all passing.
+
 ### bed: pass `args=args` to remaining bank CLI input calls
 
 The six `io.inputinteger` / `io.inputstring` calls in `bed bank`
