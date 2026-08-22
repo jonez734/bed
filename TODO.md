@@ -338,6 +338,57 @@ mistermcfeely, murdermotel, zoid6. See individual TODOs for the wording.
 
 ---
 
+## Password column hardening — back-reference to zoid6
+
+`bed`'s `_handle_auth` (`bed/src/bed/api/auth.py:281`) calls
+`credential_provider.authenticate(...)` →
+`PasswordCredentialProvider.authenticate` →
+`bbsengine6.member.checkpassword` → bcrypt round-trip against
+`engine.member.password`. The 2026-08-22 incident showed that the
+round-trip silently returns no rows when the column holds a
+legacy MD5-crypt hash (`$1$`, 34 chars) instead of bcrypt
+(`$2a$` / `$2b$` / `$2y$`, 60 chars), and the operator only sees
+the same `Invalid moniker or password` envelope as a wrong
+password — no hint that the column is the problem.
+
+The credential-side follow-ups (runtime `audit_password_hash`
+in `member.checkpassword`, the `$2[abxy]$` CHECK constraint
+on `engine.__member`, the bulk migration of legacy `$1$`
+rows, the writer-identification sweep, the stale editable-
+install `.pth` cleanup) are owned by zoid6:
+
+> See `zoid6/TODO.md` "Password column hardening — legacy
+> MD5-crypt migration (@since 20260822)" — four checkboxes
+> covering audit, writer identification, runtime diagnostic
+> logging, and .pth cleanup.
+
+What `bed` owns on this side:
+
+- `_handle_auth` already returns a structured error envelope
+  with `code=bad_credentials` and `recoverable=False`; no
+  schema-layer changes are needed there.
+- `AuthService._mint_record` doesn't touch
+  `engine.__member.password`; token issuance is unaffected
+  by the column's format.
+- The bearer-token flow above (token TTL, refresh, revoke)
+  is downstream of the credential check, so once
+  `audit_password_hash` is wired into `checkpassword` (the
+  zoid6-owned item), the bed server's auth log will carry
+  the `level="warning"` line for any legacy-MD5 row that
+  survives the migration — operator-visible at default
+  verbosity, no `--debug` flag required.
+
+Cross-ref:
+- `bbsengine6/TODO.md` "[x] member auth hot path" — the
+  upstream migration to `cur.execute(sql, params)` form
+  for the auth queries; the audit logs the column's health
+  but the round-trip is what `checkpassword` decides on.
+- `zoid6/TODO.md` "Password column hardening" — owner of
+  the runtime audit, the CHECK constraint, and the
+  migration workflow.
+
+---
+
 ## `menu` — single-pick option list, server-side hotkeys
 
 ### Why `bed` owns this
