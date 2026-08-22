@@ -338,7 +338,7 @@ mistermcfeely, murdermotel, zoid6. See individual TODOs for the wording.
 
 ---
 
-## Password column hardening — back-reference to zoid6
+## Password column hardening — back-reference to zoid6 (closed)
 
 `bed`'s `_handle_auth` (`bed/src/bed/api/auth.py:281`) calls
 `credential_provider.authenticate(...)` →
@@ -351,18 +351,18 @@ legacy MD5-crypt hash (`$1$`, 34 chars) instead of bcrypt
 the same `Invalid moniker or password` envelope as a wrong
 password — no hint that the column is the problem.
 
-The credential-side follow-ups (runtime `audit_password_hash`
-in `member.checkpassword`, the `$2[abxy]$` CHECK constraint
-on `engine.__member`, the bulk migration of legacy `$1$`
-rows, the writer-identification sweep, the stale editable-
-install `.pth` cleanup) are owned by zoid6:
+**Status (closed 2026-08-22).** The three credential-side items
+in `zoid6/TODO.md` "Password column hardening — legacy MD5-crypt
+migration" have landed:
 
 > See `zoid6/TODO.md` "Password column hardening — legacy
-> MD5-crypt migration (@since 20260822)" — four checkboxes
-> covering audit, writer identification, runtime diagnostic
-> logging, and .pth cleanup.
+> MD5-crypt migration (@since 20260822)" — three checkboxes
+> ticked (audit, writer identification, runtime diagnostic
+> logging). The stale editable-install `.pth` cleanup is in
+> a separate section ("Clean up stale editable-install `.pth`
+> files") because it's a venv-hygiene issue, not a schema one.
 
-What `bed` owns on this side:
+What `bed` owns on this side — and what didn't change:
 
 - `_handle_auth` already returns a structured error envelope
   with `code=bad_credentials` and `recoverable=False`; no
@@ -371,21 +371,36 @@ What `bed` owns on this side:
   `engine.__member.password`; token issuance is unaffected
   by the column's format.
 - The bearer-token flow above (token TTL, refresh, revoke)
-  is downstream of the credential check, so once
-  `audit_password_hash` is wired into `checkpassword` (the
-  zoid6-owned item), the bed server's auth log will carry
-  the `level="warning"` line for any legacy-MD5 row that
-  survives the migration — operator-visible at default
-  verbosity, no `--debug` flag required.
+  is downstream of the credential check. `audit_password_hash`
+  is now wired into `checkpassword` (closed in
+  `bbsengine6/py/src/bbsengine6/member/lib.py`), so the bed
+  server's auth log carries the `level="warning"` line for any
+  legacy-MD5 row that survives the migration — operator-
+  visible at default verbosity, no `--debug` flag required.
+
+**Open follow-up for `bed`**: none. The original TODO body
+predicted that the runtime audit would surface in the bed
+auth log; that prediction has been verified by the new
+`bbsengine6/py/tests/test_member_audit_password_hash.py`
+`TestCheckpasswordCallsAudit::test_checkpassword_invokes_audit_on_md5_hash_and_continues`
+test (which exercises the same `bbsengine6.member.checkpassword`
+call site that `bed._handle_auth` uses). No bed-side code
+change is required to surface the diagnostic.
 
 Cross-ref:
-- `bbsengine6/TODO.md` "[x] member auth hot path" — the
-  upstream migration to `cur.execute(sql, params)` form
-  for the auth queries; the audit logs the column's health
-  but the round-trip is what `checkpassword` decides on.
-- `zoid6/TODO.md` "Password column hardening" — owner of
-  the runtime audit, the CHECK constraint, and the
-  migration workflow.
+- `bbsengine6/TODO.md` "[x] member auth hot path" + "[x] See
+  zoid6 Password column hardening" — the upstream migrations
+  to `cur.execute(sql, params)` form and the runtime audit /
+  CHECK constraint that closes the gap.
+- `bbsengine6/CHANGELOG.md` "[Unreleased] member + sql: password
+  column hardening" — the implementation diff for the audit +
+  CHECK + tests.
+- `casino/TODO.md` "Test fixture migration: `gen_salt('md5')`
+  → `gen_salt('bf')` (@since 20260822)" — casino-side
+  follow-up: 9 test fixtures still seed `$1$` hashes that
+  the new CHECK constraint will reject once applied to the
+  test DB. Affects the same `bbsengine6.member.checkpassword`
+  call path `bed` exercises.
 
 ---
 
