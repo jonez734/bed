@@ -336,6 +336,26 @@ class AuthService(BaseService):
         except TokenError as e:
             return error_envelope(e.code, str(e), recoverable=False)
 
+        # Expiry is checked BEFORE the store lookup so a token whose
+        # clock has run out surfaces as token_expired even when the
+        # in-memory store's lazy-GC has already purged the record
+        # (which would otherwise mask the expiry as token_revoked).
+        # Mirrors casino/api/_auth.py and bed/api/message.py.
+        claims_expires_at = float(claims.get("expires_at") or 0.0)
+        if claims_expires_at <= self._now():
+            try:
+                self.token_store.delete(token)
+            except Exception:
+                pass
+            existing = self.sessions.get_by_session(claims.get("session_id", ""))
+            if existing is not None:
+                existing.pending_request = None
+            return error_envelope(
+                CODE_TOKEN_EXPIRED,
+                "Token has expired",
+                recoverable=True,
+            )
+
         store_record = self.token_store.get(token)
         if store_record is None:
             existing = self.sessions.get_by_session(claims.get("session_id", ""))
@@ -354,23 +374,25 @@ class AuthService(BaseService):
                 "Token was issued by a different bed instance",
                 recoverable=False,
             )
-        if store_record.expires_at <= self._now():
-            self.token_store.delete(token)
-            return error_envelope(
-                CODE_TOKEN_EXPIRED,
-                "Token has expired",
-                recoverable=True,
-            )
 
         live_state = self.sessions.get_by_websocket(new_websocket_id)
         err = self._authorize("reconnect", claims, live_state)
         if err is not None:
             return err
 
+        pool = getattr(self.args, "pool", None)
+        balance: Optional[int] = None
+        try:
+            from bbsengine6 import member as _bbs_member
+            balance = _bbs_member.getcredits(
+                self.args, membermoniker=store_record.moniker, pool=pool
+            )
+        except Exception:
+            balance = None
         info = MemberInfo(
             moniker=store_record.moniker,
             is_sysop=store_record.is_sysop,
-            balance=None,
+            balance=balance,
             loginid=store_record.loginid,
         )
         state = self.sessions.bind(
@@ -414,6 +436,23 @@ class AuthService(BaseService):
         except TokenError as e:
             return error_envelope(e.code, str(e), recoverable=False)
 
+        # Expiry is checked BEFORE the store lookup so a token whose
+        # clock has run out surfaces as token_expired even when the
+        # in-memory store's lazy-GC has already purged the record
+        # (which would otherwise mask the expiry as token_revoked).
+        # Mirrors casino/api/_auth.py and bed/api/message.py.
+        claims_expires_at = float(claims.get("expires_at") or 0.0)
+        if claims_expires_at <= self._now():
+            try:
+                self.token_store.delete(token)
+            except Exception:
+                pass
+            return error_envelope(
+                CODE_TOKEN_EXPIRED,
+                "Token has expired; please reconnect",
+                recoverable=True,
+            )
+
         store_record = self.token_store.get(token)
         if store_record is None:
             return error_envelope(
@@ -427,13 +466,6 @@ class AuthService(BaseService):
                 CODE_INSTANCE_MISMATCH,
                 "Token was issued by a different bed instance",
                 recoverable=False,
-            )
-        if store_record.expires_at <= self._now():
-            self.token_store.delete(token)
-            return error_envelope(
-                CODE_TOKEN_EXPIRED,
-                "Token has expired; please reconnect",
-                recoverable=True,
             )
 
         live_state = self.sessions.get_by_websocket(websocket_id)
@@ -524,6 +556,7 @@ class AuthService(BaseService):
             "session_id": record.session_id,
             "token": record.token,
             "expires_at": _iso_from_ts(record.expires_at),
+            "balance": int(info.balance) if info.balance is not None else 0,
             "replayed": pending,
         }
         if pending is not None:
