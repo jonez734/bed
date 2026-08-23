@@ -259,8 +259,32 @@ class TestAuthServiceExpiry(unittest.IsolatedAsyncioTestCase):
         resp = await service.handle_message(
             None, _FakeWebSocket(), "/", {"type": "reconnect", "token": token}
         )
-        self.assertIn(resp["code"], (CODE_TOKEN_EXPIRED, CODE_TOKEN_REVOKED))
-        self.assertFalse(resp["recoverable"]) if resp["code"] == CODE_TOKEN_REVOKED else self.assertTrue(resp["recoverable"])
+        # Expiry is checked against the signed claims BEFORE the
+        # store lookup, so a lazy-GC-evicted token still surfaces
+        # as token_expired rather than being masked as token_revoked.
+        self.assertEqual(resp["code"], CODE_TOKEN_EXPIRED)
+        self.assertTrue(resp["recoverable"])
+        self.assertIsNone(store.get(token))
+
+    async def test_expired_token_rejected_on_refresh(self) -> None:
+        clock = [0.0]
+        store = InMemoryTokenStore(now_factory=lambda: clock[0])
+        service = _build_service(token_store=store, clock=lambda: clock[0])
+        ws = _FakeWebSocket()
+        auth = await service.handle_message(
+            None, ws, "/", {"type": "auth", "moniker": "a", "password": "p"}
+        )
+        token = auth["token"]
+        rec = store.get(token)
+        self.assertIsNotNone(rec)
+
+        clock[0] = rec.expires_at + 1
+
+        resp = await service.handle_message(
+            None, ws, "/", {"type": "auth_refresh", "token": token}
+        )
+        self.assertEqual(resp["code"], CODE_TOKEN_EXPIRED)
+        self.assertTrue(resp["recoverable"])
         self.assertIsNone(store.get(token))
 
     async def test_token_invalid_signature(self) -> None:

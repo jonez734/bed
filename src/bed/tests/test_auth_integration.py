@@ -215,12 +215,10 @@ class TestAuthWireEndToEnd(unittest.IsolatedAsyncioTestCase):
         import websockets
 
         # Pin "now" so the issued token is fresh on login, then jump
-        # the clock past expiry for the reconnect attempt. The
-        # in-process token store evicts on ``get()`` so the
-        # reconnect handler sees ``store_record is None`` and answers
-        # ``token_revoked``. The DB store filters by ``expires_at >
-        # now()`` and the same code path runs. Both outcomes are
-        # valid; the contract is "expired tokens are rejected".
+        # the clock past expiry for the reconnect attempt. Expiry is
+        # checked against the signed claims BEFORE the store lookup,
+        # so the answer is token_expired even when the in-process
+        # store's lazy-GC has already purged the record.
         now = [1_000_000.0]
 
         def clock():
@@ -242,7 +240,8 @@ class TestAuthWireEndToEnd(unittest.IsolatedAsyncioTestCase):
                     ws2, {"type": "reconnect", "token": token}
                 )
             self.assertEqual(reply["type"], "error")
-            self.assertIn(reply["code"], ("token_revoked", "token_expired"))
+            self.assertEqual(reply["code"], "token_expired")
+            self.assertTrue(reply.get("recoverable", False))
         finally:
             await server.stop()
 
