@@ -12,6 +12,38 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bbsengine6.startup: chk_member_password_bcrypt is now installed automatically
+
+The 2026-08-22 password column hardening in `bbsengine6` (constraint
+`chk_member_password_bcrypt` on `engine.__member.password`) previously
+required an operator to manually run `psql \\i bbsengine6.sql` against
+the target DB after the first bootstrap. `bbsengine6.startup` did not
+load the umbrella `bbsengine6.sql` file — its stage loops only load
+individual SQL files via `database.importsql()` driven by the
+checkclass / checkfunction lists, neither of which references
+`manage_password_format.sql`.
+
+This follow-up wires the install + audit into `bbsengine6.startup`
+itself (new `bbsengine6.backend.checkpasswordformat` module + new
+`constraintexists` helper, both shipped in the same bbsengine6
+release). For bed this means:
+
+* No more "first-boot re-run `psql \\i bbsengine6.sql`" step in the
+  deploy playbook.
+* The audit runs on every `bbsengine6.startup`, so a fresh DB that
+  somehow has a legacy `$1$` hash (e.g. imported from a pre-hardening
+  backup) is flagged at the first bed start instead of at the first
+  auth attempt.
+* The `audit_password_hash` per-auth diagnostic (already wired into
+  `bbsengine6.member.checkpassword`) is now belt-and-braces: the
+  constraint rejects bad writes, the audit surfaces any rows that
+  slipped through before the constraint landed.
+
+Cross-ref: `bbsengine6/CHANGELOG.md` [Unreleased] "Follow-ups
+(this release)", `zoid6/CHANGELOG.md` [Unreleased] "feat(bbsengine6
+.startup): install chk_member_password_bcrypt + audit at every
+bootstrap".
+
 ### test(bed): create-member + bed-auth login integration tests
 
 New file `bed/src/bed/tests/test_member_create_and_bed_auth.py`
