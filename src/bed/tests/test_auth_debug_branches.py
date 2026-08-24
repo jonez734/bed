@@ -58,6 +58,9 @@ class _FakeWebSocket:
 
 
 def _debug_args() -> argparse.Namespace:
+    # ``debug`` is no longer consulted by the instrumentation; kept
+    # on the namespace only for backwards compatibility with any
+    # downstream code that reads it through ``args.debug``.
     return argparse.Namespace(debug=True, pool=None)
 
 
@@ -79,20 +82,29 @@ def _build_service(
 
 
 class _EchoCollector:
-    """Collects the level=\"debug\" lines auth.py emits while
-    driving the handlers. Anything else is silently dropped --
-    re-emitting through the real ``bbsengine6.io.echo`` would
-    re-enter the patch and recurse because the function object
-    is the same one being shadowed.
+    """Collects the diagnostic lines auth.py / token_store.py emit
+    while driving the handlers. The lines are tagged by message
+    prefix (``AuthService.debug:`` and ``InMemoryTokenStore.debug:``)
+    and are emitted unconditionally -- there is no ``--debug`` gate
+    any more -- so we filter on the prefix instead of on the
+    ``level=`` kwarg.
+
+    Anything else is silently dropped. Re-emitting through the real
+    ``bbsengine6.io.echo`` would re-enter the patch and recurse
+    because the function object is the same one being shadowed.
     """
+
+    DIAG_PREFIXES = (
+        "AuthService.debug:",
+        "InMemoryTokenStore.debug:",
+    )
 
     def __init__(self) -> None:
         self.lines: List[str] = []
 
     def __call__(self, message: str, *, level: str = "info") -> None:
-        if level == "debug":
+        if any(message.startswith(p) for p in self.DIAG_PREFIXES):
             self.lines.append(message)
-        # non-debug lines are dropped on purpose; see class docstring.
 
 
 class AuthDebugBranchTests(unittest.IsolatedAsyncioTestCase):

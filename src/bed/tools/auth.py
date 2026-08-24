@@ -235,21 +235,20 @@ def auth_login(args) -> bool:
     # the token-file mtime + 8-char token prefix is enough to confirm
     # the file under the operator's nose is the one bed just minted
     # (vs. a stale file from a previous run / a different instance).
-    if getattr(args, "debug", False):
-        try:
-            import hashlib as _hl
-            import os as _os
-            import time as _time
-            st = _os.stat(args.token_file)
-            io.echo(
-                f"auth_login.debug: token_file={args.token_file} "
-                f"mtime={_time.strftime('%Y-%m-%dT%H:%M:%S', _time.gmtime(st.st_mtime))}Z "
-                f"size={st.st_size} "
-                f"token_sha256_prefix={_hl.sha256(token.encode('utf-8')).hexdigest()[:8]}",
-                level="debug",
-            )
-        except OSError as e:
-            io.echo(f"auth_login.debug: stat failed: {e}", level="debug")
+    # No level kwarg -- operator log surface, not debug-only.
+    try:
+        import hashlib as _hl
+        import os as _os
+        import time as _time
+        st = _os.stat(args.token_file)
+        io.echo(
+            f"auth_login.debug: token_file={args.token_file} "
+            f"mtime={_time.strftime('%Y-%m-%dT%H:%M:%S', _time.gmtime(st.st_mtime))}Z "
+            f"size={st.st_size} "
+            f"token_sha256_prefix={_hl.sha256(token.encode('utf-8')).hexdigest()[:8]}",
+        )
+    except OSError as e:
+        io.echo(f"auth_login.debug: stat failed: {e}")
     return True
 
 

@@ -78,11 +78,13 @@ class InMemoryTokenStore:
     Optional `now_factory` lets a test inject a fake clock so expiry can
     be triggered deterministically. Production code should leave it None.
 
-    Debug logging: every mutating method emits one ``io.echo(level=debug)``
-    line tagged ``InMemoryTokenStore.debug`` so an operator running BED
-    with ``--debug`` can read off the exact mutation sequence that lead
-    up to a ``token_revoked`` reply. The helper is silent when ``debug``
-    is False; production sees no change.
+    Mutation logging: every mutating method emits one ``io.echo`` line
+    tagged ``InMemoryTokenStore.debug`` so an operator reading a
+    ``token_revoked`` reply can grep the bed log for the exact mutation
+    sequence (put / get_miss / get_hit / get_lazy_gc / delete /
+    gc_expired) and read off which path produced the failure. No level
+    kwarg -- bbsengine6's ``io.echo`` defaults surface this in the
+    operator's normal log stream.
     """
 
     def __init__(
@@ -94,6 +96,9 @@ class InMemoryTokenStore:
         self._records: Dict[str, TokenRecord] = {}
         self._lock = threading.Lock()
         self._now_factory = now_factory
+        # Kept on the constructor for API parity with earlier
+        # revisions of this module; not used to gate logging any
+        # more (the operator wants the lines unconditionally).
         self._debug_enabled = bool(debug)
 
     def _now(self) -> float:
@@ -102,12 +107,7 @@ class InMemoryTokenStore:
         return _now_ts()
 
     def _dbg(self, op: str, token: str = "", **extra: Any) -> None:
-        """Emit one debug line, no-op when ``debug`` is False. Avoid
-        building the string when the operator did not opt into debug
-        so non-debug server hot paths stay allocation-free.
-        """
-        if not self._debug_enabled:
-            return
+        """Emit one log line. No level kwarg -- see class docstring."""
         from bbsengine6 import io
         fields = [
             f"op={op}",
@@ -117,7 +117,7 @@ class InMemoryTokenStore:
             fields.append(f"tok={_record_token_hash(token)}")
         for k, v in extra.items():
             fields.append(f"{k}={v}")
-        io.echo("InMemoryTokenStore.debug: " + " ".join(fields), level="debug")
+        io.echo("InMemoryTokenStore.debug: " + " ".join(fields))
 
     def put(self, record: TokenRecord) -> None:
         with self._lock:

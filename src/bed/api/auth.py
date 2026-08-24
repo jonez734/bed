@@ -118,27 +118,26 @@ def _debug_branch(
     token: str,
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Emit one debug log line identifying which branch an auth
-    handler took.
+    """Emit one log line identifying which branch an auth handler
+    took.
 
-    The handler dispatch only fires when ``args.debug`` is True so
-    production operators see nothing. The ``branch`` token is a
-    short, greppable label (e.g. ``EXPIRED``, ``REVOKED``,
-    ``INSTANCE_MISMATCH``, ``OK``, ``GARBLED``) chosen to be unique
-    in this module so a single grep on the bed log pins down the
-    failing path.
+    The ``branch`` token is a short, greppable label (e.g.
+    ``EXPIRED``, ``REVOKED``, ``INSTANCE_MISMATCH``, ``OK``,
+    ``GARBLED``) chosen to be unique in this module so a single
+    grep on the bed log pins down the failing path.
 
     ``token`` is hashed before logging (see :func:`_token_hash`) so
     an operator reading the log can correlate "this token was on
     the wire" across lines without recovering the bearer secret.
+
+    No level kwarg: bbsengine6's ``io.echo`` defaults are loud
+    enough to surface this in the operator's normal log stream.
     """
-    if not getattr(args, "debug", False):
-        return
     fields = [f"op={op}", f"branch={branch}", f"tok={_token_hash(token)}"]
     if extra:
         for k, v in extra.items():
             fields.append(f"{k}={v}")
-    io.echo("AuthService.debug: " + " ".join(fields), level="debug")
+    io.echo("AuthService.debug: " + " ".join(fields))
 
 
 def _b64encode(raw: bytes) -> str:
