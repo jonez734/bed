@@ -1,4 +1,4 @@
-"""Connect to a BED WebSocket, send a ping, prompt for a moniker, then exit.
+"""Send a ``ping`` to a running BED WebSocket, print the ``pong``, exit.
 
 The connection layer is shared with :mod:`bbsengine6.net.ping` so the
 ``bedping`` shim, ``bbsengine6-ping``, ``casino-ping``, and
@@ -11,13 +11,16 @@ If the daemon is not listening, renders a one-line friendly message
 via ``bbsengine6.io.echo(level="error")`` and returns ``1`` from
 :func:`main` so the ``bin/bedping`` shim exits non-zero without a
 Python traceback.
+
+``bedping`` is intentionally credential-free: the daemon's
+:class:`bed.api.ping.PingService` replies to ``{"type":"ping"}``
+without an ``auth`` round-trip, so the client just sends the frame,
+prints the ``pong`` envelope, and exits.
 """
 
 from __future__ import annotations
 
-import argparse
 import asyncio
-import json
 import sys
 
 from bbsengine6 import io
@@ -28,7 +31,6 @@ from bbsengine6 import io
 from bbsengine6.net.ping import (  # noqa: F401
     PingUnavailable,
     connect,
-    main as _helper_main,
     send_ping,
 )
 
@@ -36,52 +38,40 @@ from bbsengine6.net.ping import (  # noqa: F401
 _PROG = "bedping"
 
 
-async def _ping_then_auth(host: str, port: int) -> None:
-    """Open the WS, send ping, prompt for moniker, send auth.
-
-    Uses :func:`bbsengine6.net.ping.connect` so connection-level
-    failures share the :class:`PingUnavailable` path with the
-    generic helper. The ``prog="bedping"`` keyword flows into
-    :class:`PingUnavailable` so the rendered error reads
-    ``bedping: cannot connect to ws://host:port/ ...``.
-    """
-    ws = await connect(host, port, prog=_PROG)
-    try:
-        await ws.send(json.dumps({"type": "ping"}))
-        pong = json.loads(await ws.recv())
-        assert pong.get("type") == "pong", f"expected pong, got {pong!r}"
-        print(f"<- {pong}")
-        moniker = io.inputstring(
-            "{var:promptcolor}moniker: {var:inputcolor}", ""
-        ).strip()
-        auth = {"type": "auth", "moniker": moniker, "password": ""}
-        await ws.send(json.dumps(auth))
-        result = json.loads(await ws.recv())
-        print(f"<- {result}")
-    finally:
-        try:
-            await ws.close()
-        except Exception:
-            pass
-
-
 def main() -> int:
     """CLI entry point invoked by ``bin/bedping``.
 
-    Parses ``--host`` / ``--port`` (defaults: ``localhost`` / ``8765``),
-    runs :func:`_ping_then_auth`, catches :class:`PingUnavailable`
-    and emits a friendly one-line error via
-    :func:`bbsengine6.io.echo` with ``level="error"``.
+    Parses ``--host`` / ``--port`` / ``--path`` / ``--timeout`` via
+    :func:`bbsengine6.net.ping.build_parser` (defaults: ``localhost``
+    / ``8765`` / ``/`` / ``5.0``), runs :func:`send_ping`, prints the
+    ``pong`` envelope on success, and on :class:`PingUnavailable`
+    emits a friendly one-line error via :func:`bbsengine6.io.echo`
+    with ``level="error"`` and returns ``1``.
     """
-    p = argparse.ArgumentParser(prog=_PROG)
-    p.add_argument("--host", default="localhost")
-    p.add_argument("--port", type=int, default=8765)
+    from bbsengine6.net.ping import build_parser
+
+    p = build_parser(prog=_PROG)
     args = p.parse_args()
     try:
-        asyncio.run(_ping_then_auth(args.host, args.port))
+        result = asyncio.run(
+            send_ping(
+                args.host,
+                args.port,
+                path=args.path,
+                timeout=args.timeout,
+                prog=_PROG,
+            )
+        )
     except PingUnavailable as exc:
         io.echo(str(exc), level="error")
         return 1
+    # Protocol-level guard: the shared ``send_ping`` returns whatever
+    # JSON the server replies with. A wrong ``type`` is a server-side
+    # bug, not a transport failure, so it must propagate (visible to
+    # the operator) rather than be silently swallowed into the
+    # "connection refused" branch.
+    assert result.get("type") == "pong", f"expected pong, got {result!r}"
+    print(f"<- {result}")
     return 0
 
 
