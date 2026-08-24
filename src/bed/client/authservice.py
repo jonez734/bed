@@ -108,6 +108,7 @@ class BedAuthServiceClient:
             "session_id": reply.get("session_id", ""),
             "token": reply.get("token", ""),
             "expires_at": reply.get("expires_at", ""),
+            "balance": int(reply.get("balance", 0) or 0),
             "replayed": reply.get("replayed"),
         }
         if env["replayed"] is not None:
