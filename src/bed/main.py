@@ -912,10 +912,18 @@ class BED:
             raise
 
         persistence = getattr(self.args, "token_persistence", "memory")
+        # Plumbing the ``debug`` flag through to InMemoryTokenStore is
+        # what lights up the ``InMemoryTokenStore.debug`` log lines on
+        # every store mutation. With it off (the default), the store
+        # is allocation-free on the hot path -- the dbg helper is a
+        # single bool check. Operators investigating
+        # ``token_revoked`` anomalies re-run with ``bed --debug`` and
+        # see the exact put/get/delete sequence.
+        store_debug = bool(getattr(self.args, "debug", False))
         if persistence == "db":
             self.token_store = DBTokenStore(db_args)
         else:
-            self.token_store = InMemoryTokenStore()
+            self.token_store = InMemoryTokenStore(debug=store_debug)
 
         provider = get_provider(getattr(self.args, "credential_provider", "password"))
         ttl = int(getattr(self.args, "token_ttl", 900) or 900)

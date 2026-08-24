@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 from dataclasses import dataclass, field
@@ -55,6 +56,18 @@ class TokenStore(Protocol):
     def gc_expired(self, now: Optional[float] = None) -> int: ...
 
 
+def _record_token_hash(token: str) -> str:
+    """8-char SHA-256 prefix for a token. See ``bed.api.auth._token_hash``
+    for the rationale (correlate across log lines without leaking the
+    bearer secret). The two helpers are intentionally identical so a
+    single ``tok=`` field can be diffed across the auth.py and
+    token_store.py debug output.
+    """
+    if not token:
+        return "<empty>"
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:8]
+
+
 class InMemoryTokenStore:
     """In-process Dict[token, TokenRecord], guarded by a threading.Lock.
 
@@ -64,35 +77,81 @@ class InMemoryTokenStore:
 
     Optional `now_factory` lets a test inject a fake clock so expiry can
     be triggered deterministically. Production code should leave it None.
+
+    Debug logging: every mutating method emits one ``io.echo(level=debug)``
+    line tagged ``InMemoryTokenStore.debug`` so an operator running BED
+    with ``--debug`` can read off the exact mutation sequence that lead
+    up to a ``token_revoked`` reply. The helper is silent when ``debug``
+    is False; production sees no change.
     """
 
-    def __init__(self, now_factory: Optional[Any] = None) -> None:
+    def __init__(
+        self,
+        now_factory: Optional[Any] = None,
+        *,
+        debug: bool = False,
+    ) -> None:
         self._records: Dict[str, TokenRecord] = {}
         self._lock = threading.Lock()
         self._now_factory = now_factory
+        self._debug_enabled = bool(debug)
 
     def _now(self) -> float:
         if self._now_factory is not None:
             return float(self._now_factory())
         return _now_ts()
 
+    def _dbg(self, op: str, token: str = "", **extra: Any) -> None:
+        """Emit one debug line, no-op when ``debug`` is False. Avoid
+        building the string when the operator did not opt into debug
+        so non-debug server hot paths stay allocation-free.
+        """
+        if not self._debug_enabled:
+            return
+        from bbsengine6 import io
+        fields = [
+            f"op={op}",
+            f"size={len(self._records)}",
+        ]
+        if token:
+            fields.append(f"tok={_record_token_hash(token)}")
+        for k, v in extra.items():
+            fields.append(f"{k}={v}")
+        io.echo("InMemoryTokenStore.debug: " + " ".join(fields), level="debug")
+
     def put(self, record: TokenRecord) -> None:
         with self._lock:
+            existed = record.token in self._records
             self._records[record.token] = record
+            self._dbg(
+                "put",
+                token=record.token,
+                **{"overwrote": existed, "expires_at": record.expires_at},
+            )
 
     def get(self, token: str) -> Optional[TokenRecord]:
         with self._lock:
             rec = self._records.get(token)
             if rec is None:
+                self._dbg("get_miss", token=token)
                 return None
-            if rec.expires_at <= self._now():
+            now_ts = self._now()
+            if rec.expires_at <= now_ts:
                 self._records.pop(token, None)
+                self._dbg(
+                    "get_lazy_gc",
+                    token=token,
+                    **{"expires_at": rec.expires_at, "now": now_ts},
+                )
                 return None
+            self._dbg("get_hit", token=token)
             return rec
 
     def delete(self, token: str) -> bool:
         with self._lock:
-            return self._records.pop(token, None) is not None
+            present = self._records.pop(token, None) is not None
+            self._dbg("delete", token=token, **{"present": present})
+            return present
 
     def gc_expired(self, now: Optional[float] = None) -> int:
         if now is None:
@@ -101,6 +160,10 @@ class InMemoryTokenStore:
             expired = [t for t, r in self._records.items() if r.expires_at <= now]
             for t in expired:
                 self._records.pop(t, None)
+            self._dbg(
+                "gc_expired",
+                **{"count": len(expired), "now": now},
+            )
         return len(expired)
 
     def __len__(self) -> int:
