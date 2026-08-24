@@ -12,6 +12,39 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### bed: `bedping` is now a pure liveness probe
+
+`bed/tools/ping.py` no longer prompts for a moniker or sends an
+`auth` frame. `bedping` opens the WebSocket, sends
+`{"type":"ping"}`, prints the `pong` envelope, and exits. The
+daemon's `PingService` (`bed/api/ping.py:30-74`) is the canonical
+handler — it requires no credentials and returns
+`{type, name, version, timestamp}`.
+
+Before this change `bedping` finished the ping with a `moniker:`
+prompt and then sent an `auth` frame; the daemon replied
+`missing_credentials` because the script never asked for a
+password. The credential round-trip belonged to `bed auth login`,
+not to a liveness probe.
+
+`argparse` is now driven by
+`bbsengine6.net.ping.build_parser(prog="bedping")` so `--host`,
+`--port`, `--path`, `--timeout`, `--help`, and `--version` match
+`bbsengine6-ping`, `casino-ping`, and `zoid6-ping` exactly. The
+friendly "cannot connect…" error path and the `PingUnavailable`
+class re-export are unchanged; `bed/tools/ping.py:39-65` (the
+`_ping_then_auth` function) is deleted. A `type == "pong"`
+assertion stays in `main()` so a malformed server reply still
+raises instead of being swallowed into the connection-failed
+branch.
+
+Tests: `bed/src/bed/tests/test_ping_tool.py`
+`test_ping_auth_round_trip_returns_zero` is renamed to
+`test_ping_round_trip_returns_zero` and trimmed to a single
+`ping`/`pong` round-trip (no `auth` frame, no `inputstring`
+monkeypatch); `test_invalid_pong_is_not_silenced` is unchanged.
+13/13 tests pass.
+
 ### bbsengine6.startup: chk_member_password_bcrypt is now installed automatically
 
 The 2026-08-22 password column hardening in `bbsengine6` (constraint
