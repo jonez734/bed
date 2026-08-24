@@ -302,6 +302,13 @@ def auth_revoke(args) -> bool:
     reply = asyncio.run(svc.revoke(token))
     if not reply.get("ok"):
         _render_soft_failure(reply)
+        code = reply.get("code") or "unknown"
+        if code == "token_revoked":
+            _truncate_token_file(args.token_file)
+            io.echo(
+                f"local token file {args.token_file} truncated "
+                "(token already gone from server)",
+            )
         return False
     io.echo("token revoked")
     _truncate_token_file(args.token_file)

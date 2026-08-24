@@ -1029,6 +1029,10 @@ def test_auth_revoke_propagates_failure_does_not_truncate(tmp_path):
 
 
 def test_auth_revoke_already_deleted_soft_failure(tmp_path):
+    """Server reports ``token_revoked`` (token already gone from the
+    store): the local token file is also unusable, so we truncate it
+    so downstream tools (casino, etc.) don't keep trying to use it.
+    """
     tool = _import_tool()
     path = str(tmp_path / "tok")
     with open(path, "w") as f:
@@ -1043,6 +1047,33 @@ def test_auth_revoke_already_deleted_soft_failure(tmp_path):
     assert ok is False
     rendered = "\n".join(c.args[0] for c in echo.call_args_list)
     assert "token_revoked" in rendered
+    assert "truncated" in rendered
+    assert not os.path.exists(path)
+
+
+def test_auth_revoke_transport_failure_keeps_token_file(tmp_path):
+    """A transport-level failure (``bed_unavailable``) means we don't
+    know whether the token is still valid on the server. The local file
+    is left alone so a still-valid token isn't lost.
+    """
+    tool = _import_tool()
+    path = str(tmp_path / "tok")
+    with open(path, "w") as f:
+        f.write("still-good\n")
+    os.chmod(path, 0o600)
+    args = _make_args(subcommand="revoke", token=None, token_file=path)
+    client = _make_client_mock(revoke={"ok": False, "code": "bed_unavailable", "message": "down"})
+    with patch.object(tool, "_auth_service", return_value=client), \
+         patch.object(tool.io, "echo") as echo:
+        ok = tool.auth_revoke(args)
+
+    assert ok is False
+    rendered = "\n".join(c.args[0] for c in echo.call_args_list)
+    assert "bed_unavailable" in rendered
+    assert "truncated" not in rendered
+    assert os.path.exists(path)
+    with open(path) as f:
+        assert f.read().strip() == "still-good"
 
 
 # ---------------------------------------------------------------------
