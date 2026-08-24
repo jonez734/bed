@@ -39,5 +39,10 @@
       "surrender_multiplier": 0.5,
       "_comment_surrender_multiplier": "Forfeit fraction on late surrender; 0.5 matches Las Vegas Strip / Atlantic City / Macau standard (Wizard of Odds, Vegas Advantage)."
     }
+  },
+  "websocket": {
+    "ping_interval": 60,
+    "ping_timeout": 600,
+    "_comment": "WebSocket keepalive (seconds), forwarded to websockets.serve(). The websockets library default of 20s/20s is too aggressive for terminal clients (casino_client, etc.) whose main loop interleaves blocking stdin reads — pings go unanswered during those reads, the server hits the 20s timeout, and the next client send gets ConnectionClosedError 1011. 60s/600s gives the operator 10 minutes between actions before the server considers the connection dead."
   }
 }
