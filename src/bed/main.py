@@ -478,6 +478,33 @@ def _apply_auth_config(args: argparse.Namespace, cfg: dict) -> None:
         args.bed_instance_id = auth["bed_instance_id"]
 
 
+def _apply_websocket_config(args: argparse.Namespace, cfg: dict) -> None:
+    """Apply ``websocket.*`` (WebSocket keepalive) from a loaded config.
+
+    Reads ``websocket.ping_interval`` and ``websocket.ping_timeout``
+    (seconds) from the JSON config and stashes them on ``args`` so
+    :class:`bbsengine6.net.WebSocketServer` picks them up at
+    construction time. Both default to ``None`` (use the
+    websockets library's 20s/20s default) when the section or
+    keys are missing. CLI flags ``--ws-ping-interval`` /
+    ``--ws-ping-timeout`` take precedence over the JSON values
+    when supplied.
+    """
+    ws = cfg.get("websocket")
+    if not isinstance(ws, dict):
+        return
+    if (
+        "ping_interval" in ws
+        and getattr(args, "ws_ping_interval", None) is None
+    ):
+        args.ws_ping_interval = ws["ping_interval"]
+    if (
+        "ping_timeout" in ws
+        and getattr(args, "ws_ping_timeout", None) is None
+    ):
+        args.ws_ping_timeout = ws["ping_timeout"]
+
+
 class BED:
     """BBS Engine Daemon - WebSocket server with dynamic router loading."""
 
@@ -576,6 +603,8 @@ class BED:
 
         self.server = WebSocketServer(
             binds=list(self._final_binds()),
+            ping_interval=getattr(self.args, "ws_ping_interval", None),
+            ping_timeout=getattr(self.args, "ws_ping_timeout", None),
         )
 
         try:
@@ -1199,6 +1228,7 @@ async def main_async() -> None:
     _apply_bed_name_config(args, loaded_config)
     _apply_database_config(args, loaded_config)
     _apply_auth_config(args, loaded_config)
+    _apply_websocket_config(args, loaded_config)
     # Compute the final bind list after every config source has had
     # its say. ``_resolve_binds`` prefers ``--bind`` (CLI) > JSON
     # ``bind`` list > legacy ``--host``/``--port``.
