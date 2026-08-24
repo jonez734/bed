@@ -263,3 +263,34 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         help="Disable the in-process BankService (bed-native handler for "
         "bank_balance / bank_add / bank_remove / bank_history).",
     )
+    parentparser.add_argument(
+        "--ws-ping-interval",
+        dest="ws_ping_interval",
+        type=float,
+        default=None,
+        help=(
+            "WebSocket keepalive ping interval in seconds, forwarded "
+            "to websockets.serve(). None uses the websockets library "
+            "default (20s). Wider values reduce ping traffic; the "
+            "default is too aggressive for terminal clients with "
+            "long blocking stdin reads. JSON config key "
+            "``websocket.ping_interval`` is honored when this flag is "
+            "not given."
+        ),
+    )
+    parentparser.add_argument(
+        "--ws-ping-timeout",
+        dest="ws_ping_timeout",
+        type=float,
+        default=None,
+        help=(
+            "WebSocket keepalive ping timeout in seconds, forwarded "
+            "to websockets.serve(). None uses the websockets library "
+            "default (20s). Set to several minutes when serving "
+            "terminal clients whose main loop interleaves blocking "
+            "stdin reads (the loop is frozen during those reads, so "
+            "pings go unanswered). JSON config key "
+            "``websocket.ping_timeout`` is honored when this flag is "
+            "not given."
+        ),
+    )
