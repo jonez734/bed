@@ -85,6 +85,62 @@ def _iso_from_ts(ts: float) -> str:
     )
 
 
+def _token_hash(token: str) -> str:
+    """Stable short identifier for a token, used in debug logs only.
+
+    Real tokens are never logged; the SHA-256 prefix (8 chars) is
+    enough to correlate "same token" across log lines without leaking
+    enough material to forge a request. Tokens shorter than 8 chars
+    produce fewer characters (no padding) -- still safe to log.
+    """
+    if not token:
+        return "<empty>"
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:8]
+
+
+def _store_size(token_store: Any) -> int:
+    """Best-effort store size for debug logs. Falls back to ``-1``
+    when the backend is the DB-backed store (the COUNT would be
+    intrusive to run for every debug line) or any other custom
+    implementation that does not expose ``__len__``.
+    """
+    try:
+        return len(token_store)
+    except TypeError:
+        return -1
+
+
+def _debug_branch(
+    args: Any,
+    *,
+    op: str,
+    branch: str,
+    token: str,
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Emit one debug log line identifying which branch an auth
+    handler took.
+
+    The handler dispatch only fires when ``args.debug`` is True so
+    production operators see nothing. The ``branch`` token is a
+    short, greppable label (e.g. ``EXPIRED``, ``REVOKED``,
+    ``INSTANCE_MISMATCH``, ``OK``, ``GARBLED``) chosen to be unique
+    in this module so a single grep on the bed log pins down the
+    failing path.
+
+    ``token`` is hashed before logging (see :func:`_token_hash`) so
+    an operator reading the log can correlate "this token was on
+    the wire" across lines without recovering the bearer secret.
+    """
+    if not getattr(args, "debug", False):
+        return
+    fields = [f"op={op}", f"branch={branch}", f"tok={_token_hash(token)}"]
+    if extra:
+        for k, v in extra.items():
+            fields.append(f"{k}={v}")
+    io.echo("AuthService.debug: " + " ".join(fields), level="debug")
+
+
 def _b64encode(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
@@ -284,6 +340,12 @@ class AuthService(BaseService):
         moniker = (message.get("moniker") or "").strip()
         password = message.get("password") or ""
         if not moniker or not password:
+            _debug_branch(
+                self.args,
+                op="login",
+                branch="MISSING_CREDENTIALS",
+                token="",
+            )
             return error_envelope(
                 CODE_MISSING_CREDENTIALS,
                 "moniker and password are required",
@@ -292,12 +354,25 @@ class AuthService(BaseService):
 
         err = self._authorize("login", {}, None)
         if err is not None:
+            _debug_branch(
+                self.args,
+                op="login",
+                branch="POLICY_DENY",
+                token="",
+            )
             return err
 
         info = self.credential_provider.authenticate(
             self.args, moniker, password, pool=getattr(self.args, "pool", None)
         )
         if info is None:
+            _debug_branch(
+                self.args,
+                op="login",
+                branch="BAD_CREDENTIALS",
+                token="",
+                extra={"moniker": moniker},
+            )
             return error_envelope(
                 CODE_BAD_CREDENTIALS,
                 "Invalid moniker or password",
@@ -318,6 +393,17 @@ class AuthService(BaseService):
         record = self._mint_record(info, session_id, websocket_id)
         self._persist(record)
         state.auth_service_token = record.token
+        _debug_branch(
+            self.args,
+            op="login",
+            branch="OK",
+            token=record.token,
+            extra={
+                "moniker": info.moniker,
+                "expires_at": record.expires_at,
+                "store_size": _store_size(self.token_store),
+            },
+        )
 
         io.echo(
             f"AuthService: issued token for moniker={info.moniker!r} "
@@ -331,9 +417,20 @@ class AuthService(BaseService):
         token = message.get("token") or ""
         new_websocket_id = str(websocket.id)
 
+        if not token:
+            _debug_branch(self.args, op="reconnect", branch="EMPTY_TOKEN", token=token)
+            return error_envelope(CODE_TOKEN_INVALID, "token required", recoverable=False)
+
         try:
             claims = _decode_token(token, self.secret)
         except TokenError as e:
+            _debug_branch(
+                self.args,
+                op="reconnect",
+                branch="GARBLED",
+                token=token,
+                extra={"code": e.code},
+            )
             return error_envelope(e.code, str(e), recoverable=False)
 
         # Expiry is checked BEFORE the store lookup so a token whose
@@ -342,7 +439,20 @@ class AuthService(BaseService):
         # (which would otherwise mask the expiry as token_revoked).
         # Mirrors casino/api/_auth.py and bed/api/message.py.
         claims_expires_at = float(claims.get("expires_at") or 0.0)
-        if claims_expires_at <= self._now():
+        now_at_expiry = self._now()
+        if claims_expires_at <= now_at_expiry:
+            _debug_branch(
+                self.args,
+                op="reconnect",
+                branch="EXPIRED",
+                token=token,
+                extra={
+                    "expires_at": claims_expires_at,
+                    "now": now_at_expiry,
+                    "delta": claims_expires_at - now_at_expiry,
+                    "store_size": _store_size(self.token_store),
+                },
+            )
             try:
                 self.token_store.delete(token)
             except Exception:
@@ -358,6 +468,16 @@ class AuthService(BaseService):
 
         store_record = self.token_store.get(token)
         if store_record is None:
+            _debug_branch(
+                self.args,
+                op="reconnect",
+                branch="REVOKED",
+                token=token,
+                extra={
+                    "store_size": _store_size(self.token_store),
+                    "session_id_prefix": (claims.get("session_id") or "")[:8],
+                },
+            )
             existing = self.sessions.get_by_session(claims.get("session_id", ""))
             if existing is not None:
                 existing.pending_request = None
@@ -368,6 +488,16 @@ class AuthService(BaseService):
             )
 
         if store_record.bed_instance_id != self.instance_id:
+            _debug_branch(
+                self.args,
+                op="reconnect",
+                branch="INSTANCE_MISMATCH",
+                token=token,
+                extra={
+                    "claimed_instance_prefix": (store_record.bed_instance_id or "")[:8],
+                    "server_instance_prefix": (self.instance_id or "")[:8],
+                },
+            )
             self.token_store.delete(token)
             return error_envelope(
                 CODE_INSTANCE_MISMATCH,
@@ -378,6 +508,12 @@ class AuthService(BaseService):
         live_state = self.sessions.get_by_websocket(new_websocket_id)
         err = self._authorize("reconnect", claims, live_state)
         if err is not None:
+            _debug_branch(
+                self.args,
+                op="reconnect",
+                branch="POLICY_DENY",
+                token=token,
+            )
             return err
 
         pool = getattr(self.args, "pool", None)
@@ -408,8 +544,19 @@ class AuthService(BaseService):
         except Exception:
             self.token_store.delete(rotated.token)
             raise
+        old_token = token
         self.token_store.delete(token)
         state.auth_service_token = rotated.token
+        _debug_branch(
+            self.args,
+            op="reconnect",
+            branch="OK",
+            token=rotated.token,
+            extra={
+                "old_tok": _token_hash(old_token),
+                "moniker": store_record.moniker,
+            },
+        )
 
         pending = self.sessions.take_pending(store_record.session_id)
         io.echo(
@@ -425,6 +572,12 @@ class AuthService(BaseService):
     ) -> Dict[str, Any]:
         token = message.get("token") or ""
         if websocket is None:
+            _debug_branch(
+                self.args,
+                op="refresh",
+                branch="NO_WS",
+                token=token,
+            )
             return error_envelope(
                 CODE_NOT_AUTHENTICATED,
                 "auth_refresh requires a live websocket",
@@ -434,6 +587,13 @@ class AuthService(BaseService):
         try:
             claims = _decode_token(token, self.secret)
         except TokenError as e:
+            _debug_branch(
+                self.args,
+                op="refresh",
+                branch="GARBLED",
+                token=token,
+                extra={"code": e.code},
+            )
             return error_envelope(e.code, str(e), recoverable=False)
 
         # Expiry is checked BEFORE the store lookup so a token whose
@@ -442,7 +602,19 @@ class AuthService(BaseService):
         # (which would otherwise mask the expiry as token_revoked).
         # Mirrors casino/api/_auth.py and bed/api/message.py.
         claims_expires_at = float(claims.get("expires_at") or 0.0)
-        if claims_expires_at <= self._now():
+        now_at_expiry = self._now()
+        if claims_expires_at <= now_at_expiry:
+            _debug_branch(
+                self.args,
+                op="refresh",
+                branch="EXPIRED",
+                token=token,
+                extra={
+                    "expires_at": claims_expires_at,
+                    "now": now_at_expiry,
+                    "delta": claims_expires_at - now_at_expiry,
+                },
+            )
             try:
                 self.token_store.delete(token)
             except Exception:
@@ -455,12 +627,25 @@ class AuthService(BaseService):
 
         store_record = self.token_store.get(token)
         if store_record is None:
+            _debug_branch(
+                self.args,
+                op="refresh",
+                branch="REVOKED",
+                token=token,
+                extra={"store_size": _store_size(self.token_store)},
+            )
             return error_envelope(
                 CODE_TOKEN_REVOKED,
                 "Token is no longer valid",
                 recoverable=False,
             )
         if store_record.bed_instance_id != self.instance_id:
+            _debug_branch(
+                self.args,
+                op="refresh",
+                branch="INSTANCE_MISMATCH",
+                token=token,
+            )
             self.token_store.delete(token)
             return error_envelope(
                 CODE_INSTANCE_MISMATCH,
@@ -471,6 +656,12 @@ class AuthService(BaseService):
         live_state = self.sessions.get_by_websocket(websocket_id)
         err = self._authorize("refresh", claims, live_state)
         if err is not None:
+            _debug_branch(
+                self.args,
+                op="refresh",
+                branch="POLICY_DENY",
+                token=token,
+            )
             return err
 
         info = MemberInfo(
@@ -485,8 +676,16 @@ class AuthService(BaseService):
         except Exception:
             self.token_store.delete(rotated.token)
             raise
+        old_token = token
         self.token_store.delete(token)
         live_state.auth_service_token = rotated.token
+        _debug_branch(
+            self.args,
+            op="refresh",
+            branch="OK",
+            token=rotated.token,
+            extra={"old_tok": _token_hash(old_token)},
+        )
         return self._auth_result_envelope(rotated, info, fresh=False)
 
     async def _handle_auth_revoke(
@@ -494,12 +693,25 @@ class AuthService(BaseService):
     ) -> Dict[str, Any]:
         token = message.get("token") or ""
         if not token:
+            _debug_branch(
+                self.args,
+                op="revoke",
+                branch="EMPTY_TOKEN",
+                token=token,
+            )
             return error_envelope(
                 CODE_TOKEN_INVALID, "token required", recoverable=False
             )
         try:
             claims = _decode_token(token, self.secret)
         except TokenError as e:
+            _debug_branch(
+                self.args,
+                op="revoke",
+                branch="GARBLED",
+                token=token,
+                extra={"code": e.code},
+            )
             return {
                 "type": "auth_revoke_result",
                 "success": False,
@@ -508,6 +720,12 @@ class AuthService(BaseService):
             }
         err = self._authorize("revoke", claims, None)
         if err is not None:
+            _debug_branch(
+                self.args,
+                op="revoke",
+                branch="POLICY_DENY",
+                token=token,
+            )
             return {
                 "type": "auth_revoke_result",
                 "success": False,
@@ -515,6 +733,13 @@ class AuthService(BaseService):
                 "recoverable": False,
             }
         deleted = self.token_store.delete(token)
+        _debug_branch(
+            self.args,
+            op="revoke",
+            branch="OK" if deleted else "ALREADY_GONE",
+            token=token,
+            extra={"store_size": _store_size(self.token_store)},
+        )
         return {
             "type": "auth_revoke_result",
             "success": bool(deleted),
