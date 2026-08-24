@@ -10,8 +10,8 @@ Covers:
 - :func:`main` calls :func:`bbsengine6.io.echo` with ``level="error"``
   and returns ``1`` on connection failure so the ``bin/bedping`` shim
   exits non-zero.
-- :func:`main` returns ``0`` on the happy path (the existing
-  ping/auth round-trip is preserved).
+- :func:`main` returns ``0`` on the happy path (a single
+  ``ping``/``pong`` round-trip; no auth frame is sent).
 """
 
 from __future__ import annotations
@@ -257,26 +257,15 @@ class TestMainOtherTransportErrors:
 
 class TestMainHappyPath:
     """When the server returns a valid pong, ``main`` completes the
-    ping/auth round-trip and returns ``0``."""
+    ping round-trip and returns ``0``. ``bedping`` sends no auth
+    frame — the daemon's ``PingService`` is credential-free."""
 
-    def test_ping_auth_round_trip_returns_zero(self, monkeypatch):
+    def test_ping_round_trip_returns_zero(self):
         port = _free_port()
 
-        # Stub bbsengine6.io.inputstring so the script doesn't block on
-        # stdin. The post-fix ping tool reads the moniker through
-        # ``io.inputstring`` (matching every other bed CLI prompt) —
-        # no longer the raw ``builtins.input``.
-        monkeypatch.setattr(
-            ping_tool.io,
-            "inputstring",
-            MagicMock(return_value="alice"),
-        )
-
-        # The fake WebSocket replies to ``ping`` with a pong and to
-        # ``auth`` with a success envelope.
+        # The fake WebSocket replies to ``ping`` with a pong.
         fake = _FakeWebSocket([
             json.dumps({"type": "pong", "name": "bed", "version": "0.0.0"}),
-            json.dumps({"type": "auth_result", "ok": True}),
         ])
 
         from bbsengine6.net import ping as _ping_helper
@@ -288,21 +277,20 @@ class TestMainHappyPath:
                 rc = ping_tool.main()
 
         assert rc == 0
-        # The script sent a ping and an auth frame, in that order.
-        assert len(fake.sent) == 2
+        # The script sent exactly one ping frame and no auth frame.
+        assert len(fake.sent) == 1
         assert json.loads(fake.sent[0])["type"] == "ping"
-        assert json.loads(fake.sent[1])["type"] == "auth"
+        # The pong envelope was rendered.
+        rendered = " ".join(
+            str(call.args[0]) for call in print_.call_args_list
+        )
+        assert "'type': 'pong'" in rendered or '"type": "pong"' in rendered
 
-    def test_invalid_pong_is_not_silenced(self, monkeypatch):
+    def test_invalid_pong_is_not_silenced(self):
         """A pong-shaped mistake from the server (not a transport error)
         must still raise — we only swallow connection failures, not
         protocol-level bugs."""
         port = _free_port()
-        monkeypatch.setattr(
-            ping_tool.io,
-            "inputstring",
-            MagicMock(return_value="alice"),
-        )
 
         # Server replies with a wrong type. The script asserts on
         # ``type == "pong"``; that AssertionError must propagate so it
