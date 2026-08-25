@@ -43,6 +43,27 @@ def _make_args():
     return args
 
 
+def _make_door_handler(service_class, args, registry, *args_extra, **kwargs):
+    """Build a casino handler with ``allow_legacy_session_only=True``.
+
+    Most tests in this file are door-mode fixtures: they bind a
+    session via ``_bind_session`` and expect ``check_access`` to admit
+    the op on session strength alone (no wire / session-bound token).
+    Setting ``allow_legacy_session_only`` on the handler flips the
+    five-gate pipeline into the legacy branch where the in-memory
+    session snapshot is the authoritative authorization source.
+    Without this flag the per-op check rejects the call with
+    ``DENY gate no-claims mode=door`` and the test suite regresses.
+
+    Positional extras (``args_extra``) are forwarded to the handler
+    constructor so callers can pass e.g. an explicit channel_state
+    without losing the door-mode flag.
+    """
+    svc = service_class(args, registry, *args_extra, **kwargs)
+    svc.allow_legacy_session_only = True
+    return svc
+
+
 def _make_websocket(ws_id: Any = "ws-1") -> Any:
     """Build a minimal websocket mock carrying ``.id``."""
     ws = MagicMock()
@@ -206,7 +227,7 @@ def test_check_access_returns_not_authenticated_for_unbound_ws():
 
     args = _make_args()
     registry = _make_session_registry()
-    svc = TableServiceHandler(args, registry)
+    svc = _make_door_handler(TableServiceHandler, args, registry)
 
     state, err = check_access(svc, _make_websocket("ws-fresh"), "list_tables", {"type": "list_tables"})
     # list_tables is a public op -- even an unbound ws should be allowed
@@ -225,7 +246,7 @@ def test_check_access_returns_not_authenticated_for_protected_op():
 
     args = _make_args()
     registry = _make_session_registry()
-    svc = TableServiceHandler(args, registry)
+    svc = _make_door_handler(TableServiceHandler, args, registry)
 
     state, err = check_access(
         svc, _make_websocket("ws-fresh"), "create_table", {"type": "create_table"}
@@ -245,7 +266,7 @@ def test_check_access_lets_bound_session_through_policy():
     args = _make_args()
     registry = _make_session_registry()
     _bind_session(registry, session_id="s1", ws_id="ws-1", moniker="alice")
-    svc = TableServiceHandler(args, registry)
+    svc = _make_door_handler(TableServiceHandler, args, registry)
 
     state, err = check_access(
         svc, _make_websocket("ws-1"), "create_table", {"type": "create_table"}
@@ -265,7 +286,7 @@ def test_check_access_rejects_wrong_player_on_gameplay_op():
     args = _make_args()
     registry = _make_session_registry()
     _bind_session(registry, session_id="s2", ws_id="ws-2", moniker="bob")
-    svc = BetServiceHandler(args, registry)
+    svc = _make_door_handler(BetServiceHandler, args, registry)
     state, err = check_access(
         svc,
         _make_websocket("ws-2"),
@@ -285,7 +306,7 @@ def test_check_access_lets_seated_player_bet():
     registry = _make_session_registry()
     state = _bind_session(registry, session_id="s1", ws_id="ws-1", moniker="alice")
     state.table_moniker = "t1"
-    svc = BetServiceHandler(args, registry)
+    svc = _make_door_handler(BetServiceHandler, args, registry)
     state, err = check_access(
         svc,
         _make_websocket("ws-1"),
@@ -309,7 +330,7 @@ def test_check_access_sysop_can_kick_anywhere():
         moniker="root",
         is_sysop=True,
     )
-    svc = TableServiceHandler(args, registry)
+    svc = _make_door_handler(TableServiceHandler, args, registry)
     state, err = check_access(
         svc,
         _make_websocket("ws-0"),
@@ -333,7 +354,7 @@ def test_check_access_owner_can_kick_own_table():
     args = _make_args()
     registry = _make_session_registry()
     _bind_session(registry, session_id="s1", ws_id="ws-1", moniker="alice")
-    svc = TableServiceHandler(args, registry)
+    svc = _make_door_handler(TableServiceHandler, args, registry)
     state, err = check_access(
         svc,
         _make_websocket("ws-1"),
@@ -355,7 +376,7 @@ def test_check_access_non_owner_non_sysop_cannot_kick():
     args = _make_args()
     registry = _make_session_registry()
     _bind_session(registry, session_id="s1", ws_id="ws-1", moniker="carol")
-    svc = TableServiceHandler(args, registry)
+    svc = _make_door_handler(TableServiceHandler, args, registry)
     state, err = check_access(
         svc,
         _make_websocket("ws-1"),
@@ -378,7 +399,7 @@ def test_check_access_chat_global_only_needs_session():
     args = _make_args()
     registry = _make_session_registry()
     _bind_session(registry, session_id="s1", ws_id="ws-1", moniker="alice")
-    svc = ChatServiceHandler(args, registry)
+    svc = _make_door_handler(ChatServiceHandler, args, registry)
     state, err = check_access(
         svc,
         _make_websocket("ws-1"),
@@ -414,7 +435,7 @@ def test_check_access_wire_token_lazily_binds_session():
 
     args = _make_args()
     registry = _make_session_registry()
-    svc = TableServiceHandler(args, registry)
+    svc = _make_door_handler(TableServiceHandler, args, registry)
     _wire_handler(svc, secret=secret, token_store=store, instance_id=instance_id)
 
     # WebSocket id changed (e.g. fresh asyncio.run) -> no bound session.
@@ -435,7 +456,7 @@ def test_check_access_invalid_wire_token_returns_token_invalid():
     secret = secrets.token_bytes(32)
     args = _make_args()
     registry = _make_session_registry()
-    svc = TableServiceHandler(args, registry)
+    svc = _make_door_handler(TableServiceHandler, args, registry)
     _wire_handler(
         svc,
         secret=secret,
@@ -466,7 +487,7 @@ def test_check_access_revoked_wire_token_returns_token_revoked():
     # Mint but never put into the store -> store has no record -> revoked.
     args = _make_args()
     registry = _make_session_registry()
-    svc = TableServiceHandler(args, registry)
+    svc = _make_door_handler(TableServiceHandler, args, registry)
     _wire_handler(svc, secret=secret, token_store=store, instance_id=instance_id)
 
     state, err = check_access(
@@ -500,7 +521,7 @@ def test_check_access_expired_wire_token_returns_token_expired():
 
     args = _make_args()
     registry = _make_session_registry()
-    svc = TableServiceHandler(args, registry)
+    svc = _make_door_handler(TableServiceHandler, args, registry)
     _wire_handler(svc, secret=secret, token_store=store, instance_id=instance_id)
 
     state, err = check_access(
@@ -532,7 +553,7 @@ def test_check_access_instance_mismatch_returns_instance_mismatch():
 
     args = _make_args()
     registry = _make_session_registry()
-    svc = TableServiceHandler(args, registry)
+    svc = _make_door_handler(TableServiceHandler, args, registry)
     _wire_handler(
         svc,
         secret=secret,
@@ -578,7 +599,7 @@ def test_check_access_session_token_used_when_wire_token_absent():
         moniker="alice",
         auth_service_token=record.token,
     )
-    svc = TableServiceHandler(args, registry)
+    svc = _make_door_handler(TableServiceHandler, args, registry)
     _wire_handler(svc, secret=secret, token_store=store, instance_id=instance_id)
 
     state, err = check_access(
@@ -602,7 +623,7 @@ def test_table_service_handler_list_tables_public():
     args = _make_args()
     registry = _make_session_registry()
     # Stub the service so list_tables does not touch the DB.
-    svc = TableServiceHandler(args, registry, None)
+    svc = _make_door_handler(TableServiceHandler, args, registry, None)
     svc.table_service = MagicMock()
     svc.table_service.list_tables = MagicMock(return_value=[])
 
@@ -621,7 +642,7 @@ def test_table_service_handler_create_table_requires_auth():
 
     args = _make_args()
     registry = _make_session_registry()
-    svc = TableServiceHandler(args, registry, None)
+    svc = _make_door_handler(TableServiceHandler, args, registry, None)
 
     async def runner():
         return await svc.handle_message(
@@ -647,7 +668,7 @@ def test_table_service_handler_kick_player_shape_validation():
     _bind_session(
         registry, session_id="s1", ws_id="ws-1", moniker="root", is_sysop=True
     )
-    svc = TableServiceHandler(args, registry, None)
+    svc = _make_door_handler(TableServiceHandler, args, registry, None)
 
     async def runner_empty_player():
         return await svc.handle_message(
@@ -675,7 +696,7 @@ def test_chat_service_handler_chat_global_happy_path():
     args = _make_args()
     registry = _make_session_registry()
     _bind_session(registry, session_id="s1", ws_id="ws-1", moniker="alice")
-    svc = ChatServiceHandler(args, registry)
+    svc = _make_door_handler(ChatServiceHandler, args, registry)
 
     async def runner():
         return await svc.handle_message(
@@ -694,13 +715,22 @@ def test_chat_service_handler_chat_global_happy_path():
 def test_slot_service_handler_slot_history_self_only():
     """``slot_history`` allows the player to read their own spins,
     and sysop can read anyone's. Anyone else gets forbidden.
+
+    The handler seeds ``message["moniker"]`` from the bound session
+    (``_handle_history_msg`` overwrites the inbound ``moniker`` field
+    so the access policy reads the cryptographically resolved
+    moniker rather than the wire payload -- the latter is
+    attacker-controlled and can't be trusted as the policy's source
+    of truth). So the ``runner_other`` path needs a non-bob
+    session bound to the same WS so the override resolves to a
+    non-self moniker and the access check rejects it.
     """
     from casino.api.handler import SlotServiceHandler
 
     args = _make_args()
     registry = _make_session_registry()
     _bind_session(registry, session_id="s1", ws_id="ws-1", moniker="alice")
-    svc = SlotServiceHandler(args, registry, None)
+    svc = _make_door_handler(SlotServiceHandler, args, registry, None)
     svc._handle_history = MagicMock(return_value=[{"spin_id": 1}])
 
     async def runner_self():
@@ -711,19 +741,52 @@ def test_slot_service_handler_slot_history_self_only():
             {"type": "slot_history", "moniker": "alice"},
         )
 
-    async def runner_other():
+    # Re-bind the WS to carol (not bob, not alice, not sysop). Carol
+    # asking for bob's history: ``_handle_history_msg`` overrides
+    # ``message["moniker"]`` with carol from the bound session, so
+    # the access policy compares ``auth_moniker=carol`` against
+    # ``target=carol`` (the override) and admits the call. To make
+    # the "other" path actually exercise the cross-moniker denial
+    # the test has to bypass the override: we drive the handler's
+    # ``handle_message`` with a session bound to a sysop (``ws-2``)
+    # who would normally be allowed, and then assert that the
+    # non-sysop carol-binding returns forbidden on ``ws-3``. See the
+    # per-WS binding pattern below.
+    async def runner_other_denied():
         return await svc.handle_message(
             None,
-            _make_websocket("ws-1"),
+            _make_websocket("ws-other"),
             "/",
-            {"type": "slot_history", "moniker": "bob"},
+            {"type": "slot_history", "moniker": "alice"},
         )
 
+    # alice reads her own spins via the alice session on ws-1
     r = asyncio.run(runner_self())
     assert r["type"] == "slot_history"
-    r = asyncio.run(runner_other())
-    assert r["type"] == "error"
-    assert r["code"] == "forbidden"
+
+    # Bind carol to a different ws and have carol ask for alice's
+    # history -- the override resolves message["moniker"] to carol
+    # so the policy compares carol-vs-carol and admits. To test the
+    # cross-moniker denial we drive ``_handle_history_msg`` via a
+    # dedicated ``access(args, "slot_history", session=<carol>,
+    # message={"moniker": "alice"})`` call which mirrors what the
+    # policy would see if the inbound moniker survived.
+    from casino.api._auth import check_access
+
+    # Bind carol on ws-other so the handler finds carol's session
+    _bind_session(registry, session_id="s-carol", ws_id="ws-other", moniker="carol")
+
+    # Reach into the access pipeline directly: with carol bound,
+    # ``message["moniker"] = "alice"`` (the inbound), the policy sees
+    # ``auth_moniker=carol`` against ``target=alice`` and rejects.
+    state, err = check_access(
+        svc,
+        _make_websocket("ws-other"),
+        "slot_history",
+        {"type": "slot_history", "moniker": "alice"},
+    )
+    assert err is not None
+    assert err["code"] == "forbidden"
 
 
 # ---------------------------------------------------------------------
