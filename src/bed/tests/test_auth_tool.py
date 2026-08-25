@@ -691,7 +691,18 @@ def test_auth_reconnect_prefers_explicit_token_flag(tmp_path):
     client.reconnect.assert_awaited_once_with("flag-tok")
 
 
-def test_auth_reconnect_missing_token_local_short_circuit():
+def test_auth_reconnect_missing_token_local_short_circuit(tmp_path, monkeypatch):
+    """No token flag, no token file, and no readable default token file.
+
+    The default path under ``$XDG_RUNTIME_DIR`` or ``/tmp/bed-<uid>`` is
+    empty / absent so ``_resolve_token`` returns ``""`` and the handler
+    short-circuits with ``missing_token``. Earlier versions of this
+    test ran against the live default path; on a developer machine
+    that path already holds a token from a previous ``bed auth login``
+    so the short-circuit never fired. Pointing ``XDG_RUNTIME_DIR`` at a
+    throwaway tmp dir makes the assertion reproducible.
+    """
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "xdg"))
     tool = _import_tool()
     args = _make_args(subcommand="reconnect", token=None, token_file=None)
     client = _make_client_mock()
@@ -849,7 +860,11 @@ def test_auth_refresh_happy_path_writes_new_token(tmp_path):
         assert f.read().strip() == "rotated"
 
 
-def test_auth_refresh_missing_token_local_short_circuit():
+def test_auth_refresh_missing_token_local_short_circuit(tmp_path, monkeypatch):
+    """See ``test_auth_reconnect_missing_token_local_short_circuit``
+    for the rationale behind redirecting ``XDG_RUNTIME_DIR``.
+    """
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "xdg"))
     tool = _import_tool()
     args = _make_args(subcommand="refresh", token=None, token_file=None)
     client = _make_client_mock()
@@ -994,7 +1009,11 @@ def test_auth_revoke_uses_explicit_token(tmp_path):
     assert not os.path.exists(path)
 
 
-def test_auth_revoke_missing_token_local_short_circuit():
+def test_auth_revoke_missing_token_local_short_circuit(tmp_path, monkeypatch):
+    """See ``test_auth_reconnect_missing_token_local_short_circuit``
+    for the rationale behind redirecting ``XDG_RUNTIME_DIR``.
+    """
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "xdg"))
     tool = _import_tool()
     args = _make_args(subcommand="revoke", token=None, token_file=None)
     client = _make_client_mock()
