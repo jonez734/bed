@@ -19,7 +19,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from bbsengine6.session import SessionManager
@@ -70,5 +70,5 @@ class PingService(BaseService):
             "type": "pong",
             "name": self.name,
             "version": __version__,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
