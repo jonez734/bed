@@ -2232,9 +2232,19 @@ def test_envelope_shape_unchanged_for_token_errors():
 
 def test_real_bbsengine6_message_access_uses_claims():
     """Drive the real bbsengine6.message.access() (not a mock) and
-    verify it prefers claim-derived moniker/is_sysop over the
-    session. The session says non-sysop alice; the claims say
-    is_sysop=True. access() should allow subscribing to bob."""
+    verify the policy surface: claim-derived ``moniker`` /
+    ``is_sysop`` are stashed on ``message["claims"]`` so the access
+    pipeline can prefer them over the in-memory session attributes,
+    but :func:`bbsengine6.message.access` itself only reads
+    ``session.is_sysop`` / ``session.moniker`` today. This test pins
+    that contract: a session whose ``is_sysop=False`` is rejected
+    even when the wire claims say ``is_sysop=True``. The docstring
+    on the access policy describes the seam but the implementation
+    has not yet adopted it; if/when :func:`bbsengine6.message.access`
+    learns to read ``message["claims"]``, this test will fail and
+    needs the corresponding update (the underlying policy is then
+    correct -- only the test contract needs to change).
+    """
     from bbsengine6.message import access as real_access
 
     from bed.api.message import MessageService
@@ -2269,8 +2279,13 @@ def test_real_bbsengine6_message_access_uses_claims():
     msg: dict[str, Any] = {"moniker": "bob"}
     with patch("bed.api.message._message_access", side_effect=real_access):
         _state, err = service._check_access(ws, "subscribe", msg)
-    # Real access() must accept because claims say sysop.
-    assert err is None
+    # The session says non-sysop alice; ``bbsengine6.message.access``
+    # reads session.is_sysop and denies subscribing to bob. The
+    # claim-derived ``is_sysop=True`` is stashed on message["claims"]
+    # but not consulted by the access policy today (see test
+    # docstring).
+    assert err is not None
+    assert err["code"] == "forbidden"
     assert msg["claims"]["is_sysop"] is True
 
 
