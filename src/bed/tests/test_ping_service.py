@@ -49,9 +49,9 @@ class TestPingServiceHandle(unittest.IsolatedAsyncioTestCase):
         """The pong always carries the server's UTC time at the moment
         of construction, regardless of whether the client sent one.
         Result is an ISO-8601 string parseable by ``datetime.fromisoformat``."""
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
 
-        before = datetime.utcnow() - timedelta(seconds=1)
+        before = datetime.now(timezone.utc) - timedelta(seconds=1)
         svc = self._service("bed")
         reply = await svc.handle_message(
             server=None,
@@ -59,7 +59,7 @@ class TestPingServiceHandle(unittest.IsolatedAsyncioTestCase):
             path="/",
             message={"type": "ping"},
         )
-        after = datetime.utcnow() + timedelta(seconds=1)
+        after = datetime.now(timezone.utc) + timedelta(seconds=1)
         parsed = datetime.fromisoformat(reply["timestamp"])
         self.assertGreaterEqual(parsed, before)
         self.assertLessEqual(parsed, after)
@@ -67,9 +67,9 @@ class TestPingServiceHandle(unittest.IsolatedAsyncioTestCase):
     async def test_pong_timestamp_ignores_client_timestamp(self):
         """A client-supplied timestamp is not echoed; the server's own
         UTC time wins so the wire value is always accurate."""
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
 
-        before = datetime.utcnow() - timedelta(seconds=1)
+        before = datetime.now(timezone.utc) - timedelta(seconds=1)
         svc = self._service("bed")
         reply = await svc.handle_message(
             server=None,
@@ -77,7 +77,7 @@ class TestPingServiceHandle(unittest.IsolatedAsyncioTestCase):
             path="/",
             message={"type": "ping", "timestamp": 12345.678},
         )
-        after = datetime.utcnow() + timedelta(seconds=1)
+        after = datetime.now(timezone.utc) + timedelta(seconds=1)
         self.assertNotEqual(reply["timestamp"], 12345.678)
         parsed = datetime.fromisoformat(reply["timestamp"])
         self.assertGreaterEqual(parsed, before)
@@ -147,7 +147,7 @@ class TestPingOverWire(unittest.IsolatedAsyncioTestCase):
 
     async def test_ping_pong_carries_name_and_version(self):
         import socket
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
         from bbsengine6.net import WebSocketServer
         from bbsengine6.net.defaultrouter import DefaultRouter
 
@@ -168,11 +168,11 @@ class TestPingOverWire(unittest.IsolatedAsyncioTestCase):
 
         await server.start()
         try:
-            before = datetime.utcnow() - timedelta(seconds=1)
+            before = datetime.now(timezone.utc) - timedelta(seconds=1)
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
                 await ws.send(json.dumps({"type": "ping"}))
                 reply = json.loads(await ws.recv())
-            after = datetime.utcnow() + timedelta(seconds=1)
+            after = datetime.now(timezone.utc) + timedelta(seconds=1)
             self.assertEqual(reply["type"], "pong")
             self.assertEqual(reply["name"], "mybbs")
             self.assertIn("version", reply)
