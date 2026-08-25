@@ -191,7 +191,30 @@ def _reject_malformed_token_response(reply: dict) -> bool:
     return True
 
 
-def auth_login(args) -> bool:
+def _collect_credentials(args) -> tuple[str, str]:
+    """Prompt for moniker + password using the canonical ``bed auth`` UX.
+
+    Pulled out of :func:`auth_login` so other entry points -- most
+    notably ``casino.auth.auth_prompt`` -- can reuse the exact same
+    prompt strings (``{var:promptcolor}moniker: {var:inputcolor}`` and
+    ``{var:promptcolor}password: {var:inputcolor}``) instead of
+    re-implementing them. This is the single seam that keeps the
+    prompt UX identical between ``bed auth login`` and the in-casino
+    auth flow.
+
+    Honours ``args.moniker`` / ``args.password`` when pre-populated
+    (e.g. ``--moniker alice``); only the missing fields are prompted.
+    ``args`` is mutated in place to populate ``args.token_file`` via
+    :func:`_ensure_token_file_arg` so the returned credentials and the
+    downstream token-write share the same default path resolution.
+
+    Returns ``(moniker, password)`` -- both stripped, both guaranteed
+    non-empty. Raises :class:`RuntimeError` if the user provides an
+    empty value at the prompt (matches the prior soft-failure
+    behaviour: ``auth_login`` rendered ``moniker is required`` /
+    ``password is required`` and returned False, and any caller
+    hitting this in a non-CLI context should fail loudly).
+    """
     _ensure_token_file_arg(args)
     moniker = (getattr(args, "moniker", None) or "").strip()
     if not moniker:
@@ -200,7 +223,7 @@ def auth_login(args) -> bool:
         ).strip()
     if not moniker:
         io.echo("moniker is required", level="error")
-        return False
+        raise RuntimeError("moniker is required")
     password = (getattr(args, "password", None) or "").strip()
     if not password:
         password = inputpassword(
@@ -208,19 +231,30 @@ def auth_login(args) -> bool:
         ).strip()
     if not password:
         io.echo("password is required", level="error")
-        return False
-    svc = _auth_service(args)
-    reply = asyncio.run(svc.login(moniker, password))
-    if not reply.get("ok"):
-        _render_soft_failure(reply)
-        return False
-    if _reject_malformed_token_response(reply):
-        return False
+        raise RuntimeError("password is required")
+    return moniker, password
+
+
+def _persist_token(reply: dict, args) -> bool:
+    """Write a fresh token to ``args.token_file`` and emit the operator line.
+
+    Split out of :func:`auth_login` so the same diagnostic surface
+    (the ``token written to ...`` line + the
+    ``auth_login.debug: token_file=... mtime=... size=... token_sha256_prefix=...``
+    line that lets operators correlate a later ``token_revoked``
+    failure against the exact file the daemon just minted) can be
+    reused by callers that hold their own token-bearing reply --
+    notably ``casino.auth.auth_prompt`` when it delegates the
+    one-shot login to ``bed.auth``.
+
+    Returns True on success, False if the write failed (after
+    rendering a one-line error via :func:`io.echo`).
+    """
     token = reply.get("token", "")
     session_id = reply.get("session_id", "")
     expires_at = reply.get("expires_at", "")
     io.echo(
-        f"issued token for moniker={reply.get('moniker', moniker)!r} "
+        f"issued token for moniker={reply.get('moniker', '')!r} "
         f"session_id={session_id[:8]}… "
         f"expires_at={expires_at} "
         f"is_sysop={bool(reply.get('is_sysop', False))}"
@@ -250,6 +284,22 @@ def auth_login(args) -> bool:
     except OSError as e:
         io.echo(f"auth_login.debug: stat failed: {e}")
     return True
+
+
+def auth_login(args) -> bool:
+    _ensure_token_file_arg(args)
+    try:
+        moniker, password = _collect_credentials(args)
+    except RuntimeError:
+        return False
+    svc = _auth_service(args)
+    reply = asyncio.run(svc.login(moniker, password))
+    if not reply.get("ok"):
+        _render_soft_failure(reply)
+        return False
+    if _reject_malformed_token_response(reply):
+        return False
+    return _persist_token(reply, args)
 
 
 def auth_reconnect(args) -> bool:
