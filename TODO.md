@@ -193,18 +193,13 @@ S→C {"type":"echo_cancel",
 ### Streams
 A session has up to three named render streams, each with its own `seq`:
 - `main` — the primary game UI (menus, listboxes, prompts).
-- `bottombar` — the BBS-style status bar (registered fragments in
-  `bbsengine6.io.screen`, now backed by `bbsengine6.bottombar`).
-  Pushed by `setbottombar` / `register_*` calls. Per-connection
-  plumbing is tracked in `../bbsengine6/TODO-BOTTOMBAR.md` Phase 4a
-  (landed 2026-07-22): `bbsengine6.bottombar.registry_for(name)`,
-  `set_context_for`, `render_for`, `set_active_registry(reg)` /
-  `reset_active_registry(token)`, and the `_active_registry`
-  ContextVar. The BED connection layer should call
-  `set_active_registry(bbsengine6.bottombar.registry_for(
-  f"bed:{session_id}"))` on connect and `reset_active_registry(token)`
-  on disconnect so per-connection fragments don't bleed between
-  sessions.
+- `bottombar` — the BBS-style status bar. Pushed by `setbottombar` /
+  `register_*` / `unregister_*` calls. The wire payload shape for
+  this stream lives in `bbsengine6/TODO-BOTTOMBAR.md` Phase 5b
+  (`echo{stream:"bottombar"}`). Per-connection plumbing:
+  `bbsengine6.bottombar.registry_for(name)`, `set_active_registry` /
+  `reset_active_registry`, and the `_active_registry` ContextVar
+  (landed 2026-07-22 in `bbsengine6/TODO-BOTTOMBAR.md`).
 - `statusline` — optional, for in-game top-of-screen status (turn count,
   bank balance, unread mail). Pushed by empyre's `lib.init` bottom-bar-style
   fragments if/when migrated.
@@ -1064,11 +1059,6 @@ this work is the consumer. The dependency direction is:
     `inputstring` envelope, awaits `inputstring_reply`.
   - `inputboolean`, `inputinteger`, `inputchar`, `inputdate`,
     `inputfilename`, `inputpassword`: analogous.
-  - `screen_setbottombar(text)`: pushes an `echo` frame on
-    `stream="bottombar"`.
-  - `screen_register_bottombar_fragment(name, text)`: same.
-  - `screen_unregister_bottombar_fragment(name)`: same with
-    `unregister=true`.
 - [ ] The `BEDSink` does NOT own the message loop. It only owns the
   outgoing-send side. Incoming `*_reply` messages are dispatched by
   `WebSocketServer.dispatch_message` → `MessageRouter.handle_message`
@@ -1094,10 +1084,9 @@ this work is the consumer. The dependency direction is:
     `menu_reply`) returns the hotkey.
   - `BEDSink.inputstring` builds an `inputstring` envelope and
     returns the value.
-  - `BEDSink.screen_setbottombar` pushes an `echo` frame on
-    `stream="bottombar"`.
   - `BEDSink` does not own the message loop; it only sends
-    outgoing envelopes.
+    outgoing envelopes. (`BEDSink.screen_setbottombar` lives in
+    `bbsengine6/TODO-BOTTOMBAR.md` Phase 5b tests, not here.)
 
 ### Phase 1 — `BEDSink` installed via `WebSocketServer.on_connect_hook`
 
