@@ -12,6 +12,32 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### refactor(bed.config): delegate to `bbsengine6.config`
+
+The JSON-loading, env-var-parsing, deep-merge, and path-expansion
+helpers that previously lived in `bed.config` have been replaced by
+calls to the new generic `bbsengine6.config` module (added in the
+same release cycle). `bed.config` is now a thin facade that owns
+the bed-specific policy — recoverable-error semantics, the
+`ConfigIORecoverableError` sentinel, the `_peek_autorestart` peek
+helper, and the `get_package_data_path` resolver — and delegates
+the generic machinery to `bbsengine6.config`.
+
+The public API of `bed.config` is unchanged:
+
+  - `load_config(config_file, env_prefix="BED_", *, autorestart=False, **overrides)`
+  - `ConfigIORecoverableError`
+  - `_peek_autorestart(config_file)`
+  - `get_package_data_path(filename)`
+  - `_load_from_env(prefix)` (private; re-exported)
+  - `_merge_config(base, override)` (private; re-exported)
+  - `PATH_KEY_SUFFIXES` (re-exported from `bbsengine6.config`)
+
+Existing bed tests (`bed/tests/test_bed.py::TestConfig`,
+`TestConfigFlag`, `TestPeekAutorestart`, and the
+`ConfigIORecoverableError` blocks) all pass unchanged. The 810-test
+bed suite is green.
+
 ### bed: `bedping` is now a pure liveness probe
 
 `bed/tools/ping.py` no longer prompts for a moniker or sends an

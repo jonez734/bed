@@ -1,14 +1,36 @@
+"""bed.config - load and merge bed configuration.
+
+Historically this module owned its own JSON loading, env-var parsing,
+deep-merge, and path-expansion helpers. As of 2026 those primitives
+have moved to :mod:`bbsengine6.config` so downstream apps (zoidoffice,
+asimov, achilles, ...) can share a single precedence chain. This
+module is now a thin facade: it owns the bed-specific policy (where
+to look for the config file, the recoverable-error semantics, the
+``ConfigIORecoverableError`` sentinel) and delegates the generic
+machinery to ``bbsengine6.config``.
+
+The public API (:func:`load_config`, :class:`ConfigIORecoverableError`,
+:func:`_peek_autorestart`, :func:`get_package_data_path`) is
+unchanged so existing callers and tests continue to work.
+"""
+
+from __future__ import annotations
+
 import errno
 import json
 import os
 import socket
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
+from bbsengine6 import config as be6_config
 from bbsengine6 import io
-from bbsengine6.common import safe_path
 
-_PATH_KEY_SUFFIXES = ("_path", "_file", "_dir", "_socket", "_log")
+# Re-export the path-key suffix set from bbsengine6.config for any
+# downstream callers that imported it from here. The set is identical
+# (``bed.config`` and ``bbsengine6.config`` agree on the convention).
+PATH_KEY_SUFFIXES = be6_config.PATH_KEY_SUFFIXES
+
 
 # Errnos that look like transient FS / network conditions. When the
 # explicit config path raises one of these (or a socket DNS failure /
@@ -47,7 +69,7 @@ def _is_recoverable_load_error(exc: BaseException) -> bool:
     return False
 
 
-def _peek_autorestart(config_file: str) -> Optional[bool]:
+def _peek_autorestart(config_file: str) -> bool | None:
     """Read just ``bed.autorestart`` from the config file without
     performing path expansion, env merge, or override merge.
 
@@ -98,7 +120,7 @@ def load_config(
     *,
     autorestart: bool = False,
     **overrides: Any,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Load bed configuration from an explicit config file path (required).
 
@@ -154,37 +176,51 @@ def load_config(
             )
             raise ConfigIORecoverableError(str(e)) from e
     io.echo(f"bed.json config path: {config_file}")
-    config = _expand_paths(config)
 
+    # Phase 1: expand `${VAR}` and `~` everywhere in the file content
+    # (only string leaves; non-string scalars pass through). This
+    # matches the original bed.config behavior of expanding paths
+    # AND env vars.
+    config = be6_config.expand_value(config, env=os.environ)
+
+    # Phase 2: layer env-var-derived config on top of file config.
     env_config = _load_from_env(env_prefix)
-    env_config = _expand_paths(env_config)
-    config = _merge_config(config, env_config)
+    env_config = be6_config.expand_value(env_config, env=os.environ)
+    config = be6_config.deep_merge(config, env_config)
 
-    config = _expand_paths(config)
-    config = _merge_config(config, overrides)
+    # Phase 3: path-shaped keys run through safe_path (no symlink
+    # resolution). This is the original bed.config behavior; we
+    # re-run it after the env merge because env-supplied values may
+    # also be path-shaped (see test_load_config_expands_env_supplied_path).
+    config = be6_config.expand_paths(config)
 
+    # Phase 4: caller-supplied overrides win last.
+    config = be6_config.deep_merge(config, overrides)
     return config
 
 
-def _merge_config(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-    """Deep merge override into base config."""
-    result = base.copy()
-    for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _merge_config(result[key], value)
-        else:
-            result[key] = value
-    return result
+def _merge_config(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Deep merge override into base config.
+
+    Re-exported for backward compatibility (the original
+    ``bed.config`` exposed this as a private helper; nothing in
+    ``bed/`` outside this module calls it but downstream tooling
+    may patch it in tests).
+    """
+    return be6_config.deep_merge(base, override)
 
 
-def _load_from_env(prefix: str) -> Dict[str, Any]:
+def _load_from_env(prefix: str) -> dict[str, Any]:
     """
     Load configuration from environment variables.
 
     Variable format: BED_<SECTION>_<KEY>=value or BED_KEY=value
     Example: BED_DEBUG=true, BED_BED_AUTORESTART=true
+
+    Re-exported for backward compatibility (the original
+    ``bed.config`` exposed this as a private helper).
     """
-    config = {}
+    config: dict[str, Any] = {}
     for key, value in os.environ.items():
         if not key.startswith(prefix):
             continue
@@ -217,21 +253,14 @@ def _load_from_env(prefix: str) -> Dict[str, Any]:
     return config
 
 
-def _expand_paths(value: Any, *, key: str | None = None) -> Any:
-    """Recursively expand path-shaped values via bbsengine6.common.safe_path,
-    which handles ``~`` and ``$VAR`` plus normalization/abspath, with symlinks
-    NOT resolved so the textual form is preserved.
-
-    Non-path keys (module names like ``bed.api.message``, hostnames like
-    ``127.0.0.1``, mode strings like ``memory``) and all non-string values
-    pass through unchanged.
-    """
-    if isinstance(value, str):
-        if key is not None and any(key.endswith(s) for s in _PATH_KEY_SUFFIXES):
-            return safe_path(value, resolve_symlinks=False)
-        return value
-    if isinstance(value, dict):
-        return {k: _expand_paths(v, key=k) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_expand_paths(v, key=key) for v in value]
-    return value
+__all__ = [
+    "PATH_KEY_SUFFIXES",
+    "_RECOVERABLE_ERRNOS",
+    "ConfigIORecoverableError",
+    "_is_recoverable_load_error",
+    "_load_from_env",
+    "_merge_config",
+    "_peek_autorestart",
+    "get_package_data_path",
+    "load_config",
+]
