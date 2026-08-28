@@ -208,6 +208,16 @@ install-venv: clean-egg-info
 	$(call PREPARE_BUILD,$(CURDIR))
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
 	sudo -u $(VENV_OWNER) $(VENV_DIR)/bin/pip install $(WHEEL_DIR)/*.whl
+	# TODO(verify-install): this `sudo -u <owner> pip install` runs as
+	# VENV_OWNER, not the active operator, so the verify check has to be
+	# either (a) re-sudoed to inspect the owner venv, or (b) accept that
+	# silent no-ops here won't be caught from this Makefile. Compare the
+	# wheel's METADATA Version against `pip show bbsengine6` AND
+	# `pip show bed` (both get installed by the *.whl glob above). See
+	# zoidoffice/src/Makefile's VERIFY_INSTALL variable for the reference
+	# implementation; that one is operator-side and doesn't need the
+	# sudo wrapper. Editable mode (EDITABLE/DEPLOY_EDITABLE/DEV=1) skips
+	# the wheel install entirely so no check applies here.
 	rm -rf $(WHEEL_DIR)
 	@command -v semanage >/dev/null 2>&1 && \
 		sudo semanage fcontext -a -t bin_t "$(VENV_DIR)/bin(/.*)?" 2>/dev/null || true
@@ -280,6 +290,13 @@ deploy-venv: clean clean-egg-info
 	$(call PREPARE_BUILD,$(BBSENGINE_DIR))
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(BBSENGINE_DIR)
 	$(VIRTUAL_ENV)/bin/pip install $(WHEEL_DIR)/*.whl 2>/dev/null
+	# TODO(verify-install): after this `pip install` of bbsengine6's
+	# wheel, compare the wheel's METADATA Version against
+	# `pip show bbsengine6`. Catches silent no-ops where pip reports
+	# "already installed" without actually installing. See
+	# zoidoffice/src/Makefile's VERIFY_INSTALL variable for the reference.
+	# Note: stderr is dropped (`2>/dev/null`) here, so the verbatim pip
+	# show output should also be captured when this gets implemented.
 ifeq ($(EDITABLE),1)
 	$(MAKE) -C src install
 else
@@ -287,6 +304,11 @@ else
 	$(call PREPARE_BUILD,$(CURDIR))
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
 	$(VIRTUAL_ENV)/bin/pip install $(WHEEL_DIR)/*.whl 2>/dev/null
+	# TODO(verify-install): after this `pip install` of bed's wheel,
+	# compare the wheel's METADATA Version against `pip show bed`.
+	# Same rationale as the bbsengine6 check above. Editable branch
+	# (the ifeq $(EDITABLE)=1 above) installs from source, not a wheel,
+	# so the comparison semantics differ — skip the check there.
 endif
 	-rm -rf $(WHEEL_DIR)
 	@echo "bed installed into active venv$(if $(EDITABLE), in dev/editable mode)"
