@@ -69,6 +69,19 @@ else
 EDITABLE :=
 endif
 
+# DEPLOY_UPGRADE is set by `deploytool --upgrade` (default true) and
+# unset by `--no-upgrade`. When "1", every `pip install` in this
+# Makefile (except the `pip install --upgrade pip` line, which always
+# upgrades pip itself — that's not gated because a stale pip breaks
+# everything downstream and is unrelated to the project wheel) passes
+# `--upgrade` so the install replaces any prior version of the same
+# distribution and pulls the newest transitive deps from PyPI. When
+# empty, the prior behavior holds: pip is a no-op if the wheel
+# version already matches what's installed. Same env-var contract as
+# the per-project Makefiles for the other projects.
+DEPLOY_UPGRADE ?=
+PIP_UPGRADE_FLAG := $(if $(filter 1,$(DEPLOY_UPGRADE)),--upgrade,)
+
 # Wipe in-tree *.egg-info/ dirs that a prior `pip install -e .` may have
 # left behind. Such egg-infos bake absolute paths into SOURCES.txt and
 # poison any later `python -m build`, which trips the setuptools
@@ -198,7 +211,7 @@ install-venv: clean-egg-info
 	@sudo -u $(VENV_OWNER) test -d "$(VENV_DIR)" || sudo -u $(VENV_OWNER) $(PYTHON) -m venv "$(VENV_DIR)"
 	sudo -u $(VENV_OWNER) $(VENV_DIR)/bin/pip install --upgrade pip
 	$(PYTHON) -m ensurepip --upgrade >/dev/null 2>&1 || true
-	$(PYTHON) -m pip install build setuptools wheel
+	$(PYTHON) -m pip install $(PIP_UPGRADE_FLAG) build setuptools wheel
 	mkdir -p $(WHEEL_DIR)
 	rm -f $(WHEEL_DIR)/*.whl
 	$(MAKE) -C $(BBSENGINE_DIR) version
@@ -207,7 +220,7 @@ install-venv: clean-egg-info
 	$(MAKE) version
 	$(call PREPARE_BUILD,$(CURDIR))
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
-	sudo -u $(VENV_OWNER) $(VENV_DIR)/bin/pip install $(WHEEL_DIR)/*.whl
+	sudo -u $(VENV_OWNER) $(VENV_DIR)/bin/pip install $(PIP_UPGRADE_FLAG) $(WHEEL_DIR)/*.whl
 	# TODO(verify-install): this `sudo -u <owner> pip install` runs as
 	# VENV_OWNER, not the active operator, so the verify check has to be
 	# either (a) re-sudoed to inspect the owner venv, or (b) accept that
@@ -289,7 +302,7 @@ deploy-venv: clean clean-egg-info
 	$(MAKE) -C $(BBSENGINE_DIR) version
 	$(call PREPARE_BUILD,$(BBSENGINE_DIR))
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(BBSENGINE_DIR)
-	$(VIRTUAL_ENV)/bin/pip install $(WHEEL_DIR)/*.whl 2>/dev/null
+	$(VIRTUAL_ENV)/bin/pip install $(PIP_UPGRADE_FLAG) $(WHEEL_DIR)/*.whl 2>/dev/null
 	# TODO(verify-install): after this `pip install` of bbsengine6's
 	# wheel, compare the wheel's METADATA Version against
 	# `pip show bbsengine6`. Catches silent no-ops where pip reports
@@ -303,7 +316,7 @@ else
 	$(MAKE) version
 	$(call PREPARE_BUILD,$(CURDIR))
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
-	$(VIRTUAL_ENV)/bin/pip install $(WHEEL_DIR)/*.whl 2>/dev/null
+	$(VIRTUAL_ENV)/bin/pip install $(PIP_UPGRADE_FLAG) $(WHEEL_DIR)/*.whl 2>/dev/null
 	# TODO(verify-install): after this `pip install` of bed's wheel,
 	# compare the wheel's METADATA Version against `pip show bed`.
 	# Same rationale as the bbsengine6 check above. Editable branch
