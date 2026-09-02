@@ -43,6 +43,12 @@
   "websocket": {
     "ping_interval": 60,
     "ping_timeout": 600,
-    "_comment": "WebSocket keepalive (seconds), forwarded to websockets.serve(). The websockets library default of 20s/20s is too aggressive for terminal clients (casino_client, etc.) whose main loop interleaves blocking stdin reads — pings go unanswered during those reads, the server hits the 20s timeout, and the next client send gets ConnectionClosedError 1011. 60s/600s gives the operator 10 minutes between actions before the server considers the connection dead."
+    "_comment": "WebSocket keepalive (seconds), forwarded to websockets.serve(). The websockets library default of 20s/20s is too aggressive for terminal clients (casino_client, etc.) whose main loop interleaves blocking stdin reads \u2014 pings go unanswered during those reads, the server hits the 20s timeout, and the next client send gets ConnectionClosedError 1011. 60s/600s gives the operator 10 minutes between actions before the server considers the connection dead."
+  },
+  "postoffice": {
+    "enabled": false,
+    "modulepath": "postoffice.api.handler",
+    "description": "Postoffice service (IMAP mail polling and notifications) -- disabled pending integration",
+    "required": false
   }
 }
