@@ -87,6 +87,14 @@ connected WebSocket clients by moniker. **STATUS: COMPLETE**
       `set_local_unread_count`, `bump_local_unread_count`,
       `clear_local_unread_cache`.
 
+> **Phase 11 (2026-09-01, bbsengine6):** the local-cache functions
+> referenced above (`get_local_unread_count`,
+> `set_local_unread_count`, `bump_local_unread_count`,
+> `clear_local_unread_cache`) moved from
+> `bbsengine6/message/lib.py` to `bbsengine6/message/cache.py`.
+> The package surface is unchanged. See
+> `bbsengine6/TODO-message-migration.md` Phase 11.
+
 ## Phase 6: Bed client subscription
 
 **STATUS: COMPLETE**
