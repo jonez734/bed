@@ -12,6 +12,63 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### docs(bed): consolidate, rewrite, and update docs and specs
+
+The `bed` docs tree is restructured to mirror `bbsengine6/handbook/`
+and to stop carrying the per-repo file:line call-outs that drifted
+out of date (the cross-repo code index in `SPEC.md` §10 and the
+`bbsengine6.notify/daemon/daemon.py` references in `TODO.md` are
+examples).
+
+**Layout changes:**
+
+- `bed/docs/` renamed to `bed/handbook/`. `BED_AUTH.md` is
+  preserved at the same filename and just relocated; the URL
+  `<repo>/blob/main/handbook/BED_AUTH.md` supersedes the old
+  `<repo>/blob/main/docs/BED_AUTH.md`. Historical CHANGELOG
+  entries are not edited.
+- `bed/FHS.md` moved under `bed/handbook/FHS.md`.
+- `bed/TODO-message-service.md` merged into `bed/specs/message.md`
+  §"Open follow-ups" (the 8 unchecked Phase 5/7/8/9 items).
+- `bed/specs/{echo,menu,help,key_f2,sink,postoffice}.md` extracted
+  from `bed/TODO.md` design sections. The bare-topic naming
+  matches `bbsengine6/handbook/specs/` (`auth-bank.md`,
+  `net-layer.md`, etc.).
+- `bed/handbook/{ARCHITECTURE,ADOPTERS,README}.md` are new.
+- `bed/specs/README.md` is new (spec index).
+
+**Content changes:**
+
+- Cross-repo file:line call-outs (e.g.
+  `zoid6/src/zoid6/api/handler.py:13`,
+  `bbsengine6/notify/daemon/daemon.py:118-119`) are stripped from
+  every bed doc. Each relationship is now a one-line pointer to
+  that repo's own TODO/SPEC.
+- `SPEC.md` shrinks from 702 → ~250 LOC: §6.8 (Implementation
+  order), §6.8.b (Session plan post-bring-up), §9 (Cross-Reference
+  Map), §10 (Authoritative File Index), §11 (Out of Scope), and
+  Appendix A are dropped or relocated. The remaining sections
+  point to the spec that owns each topic.
+- `TODO.md` shrinks from 2,518 → ~400 LOC: closed sections
+  (Bearer token, echo, menu, help, key_f2, sink integration
+  tasks, --pidfile, Systemd deployment, Session plan post-
+  bring-up, bed.venv/bed.prod, Interactive prompts) are removed;
+  each is now the live spec under `bed/specs/`. Live task lists
+  survive for: tilde fix in `_apply_auth_config` (3 sites),
+  SIGTERM/SIGKILL gap Options A+C+D, sink infrastructure phases
+  0-4 (prerequisites on bbsengine6 side).
+- `FHS.md` loses §"bed Changes", §"mistermcfeely Changes", and
+  §"Files Modified/Created" (all duplicative of CHANGELOG or out
+  of scope); the install-path tree, per-service venv section,
+  and SELinux section survive.
+- `specs/{auth,message,ping,bank}.md` are modernized: Section-9-
+  style code indexes removed, redundant "What this spec does NOT
+  cover" sections removed, overlap with `handbook/BED_AUTH.md`
+  reconciled (the auth spec covers server/client/CLI surface;
+  `BED_AUTH.md` covers wire shape).
+
+**Net:** 10,205 → ~5,615 LOC across the docs tree, ≈ −45%.
+
 ### refactor(bed.config): delegate to `bbsengine6.config`
 
 The JSON-loading, env-var-parsing, deep-merge, and path-expansion
