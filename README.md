@@ -1,18 +1,21 @@
 # bed — BBS Engine Daemon
 
-A small WebSocket daemon that sits in front of a `bbsengine6` game router
-(empyre, casino, mistermcfeely, murdermotel, zoid6, …), terminates
-JSON-over-WebSocket, and lets the game own the wire protocol.
+A small WebSocket daemon that sits in front of a `bbsengine6`
+game router (empyre, casino, mistermcfeely, murdermotel, zoid6,
+…), terminates JSON-over-WebSocket, and lets the game own the
+wire protocol.
 
-> **See [`SPEC.md`](SPEC.md)** for the entry-point specification: what
-> works now, what doesn't, future plans beyond v1.0, the v1/v1.1/v1.2/v1.3/v1.4/v2
-> phase gates, code that moved from `bed` to `bbsengine6`, and the
-> bbsengine6-side prerequisites for each bed service.
+> **See [`SPEC.md`](SPEC.md)** for the entry-point specification:
+> what works now, phase gates, code that moved from `bed` to
+> `bbsengine6`, and per-service specs.
 >
-> This README is a quick-start. `SPEC.md` is the spec. `TODO.md` is the
-> line-numbered open work. `docs/BED_AUTH.md` is the bearer-token auth
-> wire protocol. `CHANGELOG.md` is the history. `FHS.md` is the FHS/UAPI
-> design.
+> **See [`handbook/`](handbook/)** for the long-form docs:
+> bearer-token wire protocol, architecture, FHS/UAPI install,
+> per-game adopters.
+>
+> **See [`specs/`](specs/)** for per-service specs: auth, message,
+> bank, ping (implemented) + echo, menu, help, key_f2, sink,
+> postoffice (planned).
 
 ## Quick start
 
@@ -21,20 +24,20 @@ pip install -e .
 bed --router zoid6.api.handler.MonikerAuthRouter
 ```
 
-`--config` is optional. When the operator omits it, `bed` walks this
-precedence (highest wins):
+`--config` is optional. When the operator omits it, `bed` walks
+this precedence (highest wins):
 
 1. `--config <path>` on the command line
 2. `$BED_CONFIG` environment variable
 3. `/etc/bed/bed.json` if present (FHS-installed config)
-4. The packaged default (`bed/data/bed.json` inside the wheel, always
-   present after `pip install bed`)
+4. The packaged default (`bed/data/bed.json` inside the wheel,
+   always present after `pip install bed`)
 
 This means a fresh `pip install -e .` is enough to run `bed` (no
 flags) against the packaged default; the FHS path
 (`/etc/bed/bed.json`) is only consulted when the operator runs
-`make install-etc` to drop the factory config there. The systemd unit
-at `src/bed/daemon/bed.service` still passes
+`make install-etc` to drop the factory config there. The systemd
+unit at `src/bed/daemon/bed.service` still passes
 `--config /etc/bed/bed.json` so FHS hosts use the operator-edit
 surface; the fallback only fires for `bed --foreground`,
 `make deploy-venv`, and other non-prod invocations.
@@ -50,34 +53,35 @@ applies the same resolver (`$ZOID6_CONFIG` → `/etc/zoid6/zoid6.json`
 → packaged), so most callers want:
 
 ```bash
-pip install -e . -e ../bbsengine6/py -e ../zoid6/src
+pip install -e . -e ../bbsengine6/py/src -e ../zoid6/src
 zoid6
 ```
 
 ### Database setup
 
-Bed bootstraps the database automatically on daemon start (since the
-`008b9d1` commit). If you want to run the bootstrap standalone, or
-audit the schema without starting the daemon:
+Bed bootstraps the database automatically on daemon start. If you
+want to run the bootstrap standalone, or audit the schema
+without starting the daemon:
 
 ```bash
 bed-startup
 # or: python -m bed.startup
 ```
 
-`bed-startup` runs `bbsengine6.startup` first (creating the `engine`
-schema, core roles `member`/`web`/`sysop`/`term`, and all SECURITY
-DEFINER functions), then creates the `bed` role with LOGIN and grants
-it USAGE on the `engine` schema.  The role is idempotent — re-running
-after the role already exists is a no-op.
+`bed-startup` runs `bbsengine6.startup` first (creating the
+`engine` schema, core roles `member`/`web`/`sysop`/`term`, and
+all SECURITY DEFINER functions), then creates the `bed` role with
+LOGIN and grants it USAGE on the `engine` schema. The role is
+idempotent — re-running after the role already exists is a no-op.
 
 ### systemd service (per-service venv)
 
-The system Python may be too new for `bed`'s requirement (`>=3.9,<3.13`).
-`bed` owns a per-service venv at `/var/lib/bed/venv` (owned by `bed:bed`).
-Consumers of bed (`zoid6`, games) own their own venvs and install the bed
-wheel into theirs via `pip install`. The dep direction is `zoid6 → bed`;
-bed does not depend on zoid6.
+The system Python may be too new for `bed`'s requirement
+(`>=3.9,<3.13`). `bed` owns a per-service venv at
+`/var/lib/bed/venv` (owned by `bed:bed`). Consumers of bed
+(`zoid6`, games) own their own venvs and install the bed wheel
+into theirs via `pip install`. The dep direction is
+`zoid6 → bed`; bed does not depend on zoid6.
 
 One-command install:
 
@@ -106,17 +110,10 @@ make deploy DEPLOY_EDITABLE=1       # set by `deploytool --editable`
 make deploy DEV=1                   # legacy alias (one release)
 ```
 
-In editable mode, bed is installed via
-`$(MAKE) -C src install` (which `bed/src/Makefile:24-25` resolves
-to `cd .. && pip install --no-cache-dir -e . && rm -rf src/bed.egg-info`).
+In editable mode, bed is installed via `$(MAKE) -C src install`
+(which `bed/src/Makefile` resolves to `pip install -e .`).
 Source-tree edits are picked up on next interpreter start without
-a rebuild. Behavior change vs. the previous `DEV=1` form: editable
-mode now installs into the **active** venv, not
-`/var/lib/bed/venv`.
-
-The `EDITABLE`/`DEPLOY_EDITABLE`/`DEV` precedence and rationale are
-documented in the comment block above `clean-egg-info` in
-`bed/Makefile:39-50`.
+a rebuild.
 
 #### Prerequisites
 
@@ -127,53 +124,46 @@ documented in the comment block above `clean-egg-info` in
 pip install --user build setuptools wheel
 ```
 
-It also expects the local sibling repo `../bbsengine6/py` and builds
-wheels for `bbsengine6` and `bed` itself into `/tmp` so they can be
-installed into the shared venv via
-`sudo -u $(VENV_OWNER) $(VENV_DIR)/bin/pip install` (the venv owner
-may not have access to the source tree). `getdate_next` is no
-longer built inline — pip resolves `getdate-next` as a transitive
-runtime dep of `bbsengine6` (declared in `bbsengine6/py/pyproject.toml`).
-Run `make -C ../getdate_next deploy-venv` manually before
-`install-venv` if you want to use local getdate_next source instead
-of the PyPI version.
+It also expects the local sibling repo `../bbsengine6/py` and
+builds wheels for `bbsengine6` and `bed` itself into `/tmp` so
+they can be installed into the shared venv via
+`sudo -u $(VENV_OWNER) $(VENV_DIR)/bin/pip install`. `getdate_next`
+is no longer built inline — pip resolves `getdate-next` as a
+transitive runtime dep of `bbsengine6`.
 
 #### SELinux + setgid build trees
 
 On SELinux-enforcing hosts (Fedora, RHEL) running inside a
-`NoNewPrivs` container, the project tree (`/home/opencode/data/work`
-and its project subdirs) typically carries the setgid bit (mode
-`0o2775`). `python -m build` then fails with
+`NoNewPrivs` container, the project tree typically carries the
+setgid bit (mode `0o2775`). `python -m build` then fails with
 `Errno 1: Operation not permitted` because setuptools
 `bdist_wheel.egg2dist` calls `shutil.copystat(<egg-info>,
-<dist-info>)` and the source egg-info has mode `0o2775` (setgid
-inherited). The build process lacks `CAP_FSETID`, so the
-`os.chmod` of the freshly-created `<dist-info>/` raises EPERM.
+<dist-info>)` and the source egg-info has mode `0o2775`
+(setgid inherited). The build process lacks `CAP_FSETID`, so
+the `os.chmod` of the freshly-created `<dist-info>/` raises EPERM.
 
-The `Makefile` defends against this with a `PREPARE_BUILD`
-helper that runs `mkdir -p <proj>/build && chmod g-s <proj>/build`
-before each `python -m build`, ensuring `<project>/build/` has
-mode `0o755` (no setgid) so every nested dir the build creates
-inherits no setgid and the `chmod 0o775` mirror succeeds. (See
-`CHANGELOG.md` under "Unreleased" for the full diagnosis.) The
-fix is automatic and needs no operator action.
+The `Makefile` defends against this with a `PREPARE_BUILD` helper
+that drops the setgid bit on `<proj>/build/` before each
+`python -m build`. The fix is automatic and needs no operator
+action.
 
 #### SELinux
 
-On systems with SELinux enforcing (Fedora, RHEL, CentOS), the venv binaries
-under `/var/lib/bed/venv/bin/` get labeled `var_lib_t` by default.
-systemd cannot execute scripts with this context — it causes a 203/EXEC error.
+On systems with SELinux enforcing (Fedora, RHEL, CentOS), the
+venv binaries under `/var/lib/bed/venv/bin/` get labeled
+`var_lib_t` by default. systemd cannot execute scripts with this
+context — it causes a 203/EXEC error.
 
-`make install-venv` adds a `semanage` rule and runs `restorecon` automatically
-when available. If you install manually, run:
+`make install-venv` adds a `semanage` rule and runs `restorecon`
+automatically when available. If you install manually, run:
 
 ```bash
 sudo semanage fcontext -a -t bin_t "/var/lib/bed/venv/bin(/.*)?"
 sudo restorecon -R /var/lib/bed/venv/bin/
 ```
 
-Without `semanage`, `restorecon` will restore the default `var_lib_t` label
-and the 203 error will persist.
+Without `semanage`, `restorecon` will restore the default
+`var_lib_t` label and the 203 error will persist.
 
 #### One-command install
 
@@ -181,14 +171,16 @@ and the 203 error will persist.
 cd /path/to/bed && sudo make install && sudo systemctl enable --now bed
 ```
 
-This chains: `install-sysusers` → `install-tmpfiles` → `install-venv` →
-`install-systemd` → `install-etc`.
+This chains: `install-sysusers` → `install-tmpfiles` →
+`install-venv` → `install-systemd` → `install-etc`.
 
-The unit at `src/bed/daemon/bed.service` runs as `User=bed` and uses a
-templated `ExecStart=@VENV_DIR@/bin/bed --config /etc/bed/bed.json`
+The unit at `src/bed/daemon/bed.service` runs as `User=bed` and
+uses a templated
+`ExecStart=@VENV_DIR@/bin/bed --config /etc/bed/bed.json`
 (`install-systemd` substitutes `$(VENV_DIR)` → `/var/lib/bed/venv`).
-bed does not share this venv with any other service; any consumer that
-needs `import bed` installs the bed wheel into its own per-service venv.
+bed does not share this venv with any other service; any consumer
+that needs `import bed` installs the bed wheel into its own
+per-service venv.
 
 In another terminal:
 
@@ -206,33 +198,38 @@ pip install -e .
 ping --url ws://127.0.0.1:8765
 ```
 
-The `bank` console script provides a standalone CLI for balance, add,
-remove, history, transfer request/approve/reject, and list-all.
+The `auth` / `bank` / `message` console scripts are documented in
+their respective specs:
+
+- `bed auth` → [`specs/auth.md`](specs/auth.md)
+- `bed bank` → [`specs/bank.md`](specs/bank.md)
+- `bed message` → [`specs/message.md`](specs/message.md)
 
 ## Routers
 
-| FQCN                                                | behavior                                               |
-|-----------------------------------------------------|--------------------------------------------------------|
-| `bbsengine6.net.defaultrouter.DefaultRouter`        | no-credential stub; wscat / development                |
-| `bed.defaultrouter.DefaultRouter`                   | bank + auth services                                   |
-| `zoid6.api.handler.MonikerAuthRouter`               | verifies the moniker exists; any password accepted     |
-| `zoid6.api.handler.MessageRouter`                   | full zoid6 unified router                              |
-| any custom router                                   | your game; `bed` wires AuthService alongside          |
+| FQCN | Behavior |
+|---|---|
+| `bbsengine6.net.defaultrouter.DefaultRouter` | no-credential stub; wscat / development |
+| `bed.defaultrouter.DefaultRouter` | bank + auth services |
+| `zoid6.api.handler.MonikerAuthRouter` | verifies the moniker exists; any password accepted |
+| `zoid6.api.handler.MessageRouter` | full zoid6 unified router |
+| any custom router | your game; `bed` wires AuthService alongside |
 
 `bed` automatically registers `AuthService` (bearer tokens,
-reconnect, refresh, revoke) before any non-`DefaultRouter` runs. When
-the router is anything other than the bbsengine6 no-credential stub,
-`MessageService` (server-push via PG `LISTEN`/`NOTIFY` on
+reconnect, refresh, revoke) before any non-`DefaultRouter` runs.
+When the router is anything other than the bbsengine6 no-credential
+stub, `MessageService` (server-push via PG `LISTEN`/`NOTIFY` on
 `engine_message_recipient`) and `BankService` (bed-native empyre
-shape: `bank_balance` / `bank_add` / `bank_remove` / `bank_history`)
-are also auto-registered. Opt out with `--no-message-service` or
-`--no-bank-service`. Using `bed.defaultrouter.DefaultRouter` exposes
-the full 9-message bank surface (`bank_balance`, `bank_add`,
-`bank_remove`, `bank_transfer_request`, `bank_transfer_approve`,
+shape: `bank_balance` / `bank_add` / `bank_remove` /
+`bank_history`) are also auto-registered. Opt out with
+`--no-message-service` or `--no-bank-service`. Using
+`bed.defaultrouter.DefaultRouter` exposes the full 9-message bank
+surface (`bank_balance`, `bank_add`, `bank_remove`,
+`bank_transfer_request`, `bank_transfer_approve`,
 `bank_transfer_reject`, `bank_pending`, `bank_history`,
 `bank_list_all`) via `bbsengine6.bank.BankServiceHandler`. See
-[`docs/BED_AUTH.md`](docs/BED_AUTH.md) for the auth wire protocol, TTL
-knobs, and threat model.
+[`handbook/BED_AUTH.md`](handbook/BED_AUTH.md) for the auth wire
+protocol, TTL knobs, and threat model.
 
 ## CLI flags
 
@@ -244,7 +241,7 @@ knobs, and threat model.
                            IPv4 and IPv6 listeners.
 --router DOTTED.NAME       default: bbsengine6.net.defaultrouter.DefaultRouter
 --config PATH              default: $BED_CONFIG > /etc/bed/bed.json > packaged
-                            (bed/data/bed.json in the wheel)
+                           (bed/data/bed.json in the wheel)
 --bed-secret PATH          default: ~/.config/bed/bed.secret
 --token-ttl SECONDS        default: 900
 --token-persistence MODE   default: memory  (none | memory | db)
@@ -264,13 +261,14 @@ Run `bed --help` for the authoritative list.
 
 ### Multi-bind
 
-A daemon can listen on more than one address at once. State (services,
-session manager, channel state, auth context) is shared across every
-listener so a service registered once reaches every bind.
+A daemon can listen on more than one address at once. State
+(services, session manager, channel state, auth context) is
+shared across every listener so a service registered once reaches
+every bind.
 
 ```bash
 # IPv4 + IPv6 on the same port, both stacks reachable:
-bed --bind 127.0.0.1:8765 --bind '[::1]:8765' ...
+bed --bind 127.0.0.1:8765 --bind '[::1]:8765 ...
 
 # 'localhost' resolves to both A and AAAA so this is equivalent
 # to the explicit two-line form above (on hosts whose /etc/hosts
@@ -289,10 +287,10 @@ Same shape via `bed.json`:
 }
 ```
 
-The legacy `"bind": {"host": "...", "port": ...}` dict shape and the
-singleton `--host` / `--port` flags still work; precedence is
-`--bind` (CLI) > JSON `bind` list > JSON `bind` dict > `--host`/`--port`
-> argparse default (`127.0.0.1:8765`).
+The legacy `"bind": {"host": "...", "port": ...}` dict shape and
+the singleton `--host` / `--port` flags still work; precedence is
+`--bind` (CLI) > JSON `bind` list > JSON `bind` dict >
+`--host`/`--port` > argparse default (`127.0.0.1:8765`).
 
 A multi-bind start logs one line per listener plus a summary:
 
@@ -323,17 +321,17 @@ port is held by a half-started daemon.
 }
 ```
 
-The shipped default config (`src/bed/data/bed.json`, byte-identical
-to `usr/share/factory/etc/bed/bed.json`) disables `autorestart` so
-that systemd owns the restart loop. Set it to `true` for
-foreground-only deployments without systemd.
+The shipped default config (`src/bed/data/bed.json`, byte-
+identical to `usr/share/factory/etc/bed/bed.json`) disables
+`autorestart` so that systemd owns the restart loop. Set it to
+`true` for foreground-only deployments without systemd.
 
 ### Exit codes
 
 `bed` distinguishes three failure modes at startup. The systemd
 unit (`daemon/bed.service`) is configured with
-`RestartPreventExitStatus=2 3` so neither of the recoverable ones
-loops the unit.
+`RestartPreventExitStatus=2 3` so neither of the recoverable
+ones loops the unit.
 
 | Code | Meaning |
 |------|---------|
@@ -342,37 +340,28 @@ loops the unit.
 | `2`  | permanent bind failure (`EADDRINUSE` / `EACCES` / unresolvable host) with `restart_on_bind_failure=false` |
 | `3`  | transient FS / network error prevented loading the explicit config with `autorestart` off |
 
-A `3` is raised when `open()` on the explicit `--config` path (or
-the resolved `$BED_CONFIG` / `/etc/bed/bed.json`) fails with
-`PermissionError`, `socket.gaierror` (DNS / `ENOTFOUND`), `EIO`,
-`ESTALE` (stale NFS handle), `ETXTBSY`, `ENETUNREACH`,
-`EHOSTUNREACH`, `ECONNREFUSED`, or `ETIMEDOUT` -- AND the
-resolved `autorestart` is `False`. Resolution order matches the
-runtime policy in `get_restart_config`: CLI `--autorestart` wins,
-otherwise the value of `bed.autorestart` peek-read from the JSON,
-otherwise `False` (fail-safe). With `autorestart=True` the same
-errors emit a `level="warning"` and load the packaged default
-(`bed/data/bed.json`) instead. Operator errors (`FileNotFoundError`,
-`IsADirectoryError`, JSON syntax errors) always propagate (exit `1`)
-so a silent fallback never masks a real config bug.
+A `3` is raised when `open()` on the explicit `--config` path
+(or the resolved `$BED_CONFIG` / `/etc/bed/bed.json`) fails with
+`PermissionError`, `socket.gaierror`, `EIO`, `ESTALE`, `ETXTBSY`,
+`ENETUNREACH`, `EHOSTUNREACH`, `ECONNREFUSED`, or `ETIMEDOUT` —
+AND the resolved `autorestart` is `False`. With `autorestart=
+True` the same errors emit a `level="warning"` and load the
+packaged default instead. Operator errors (`FileNotFoundError`,
+`IsADirectoryError`, JSON syntax errors) always propagate (exit
+`1`).
 
 ### `restart_on_bind_failure`
 
-`bed` distinguishes two failure modes. When the listening port is
-already in use (`EADDRINUSE`) or the bind is denied (`EACCES`,
-e.g. trying to bind a privileged port without root), the daemon
-exits with status **2** and the systemd unit
-(`daemon/bed.service`) is configured with
+When the listening port is already in use (`EADDRINUSE`) or the
+bind is denied (`EACCES`), the daemon exits with status **2**
+and the systemd unit (`daemon/bed.service`) is configured with
 `RestartPreventExitStatus=2` so it does **not** spin on that
-condition — otherwise a stuck port would silently restart every
-`RestartSec=5s` forever, indistinguishable from a healthy crash
-loop.
+condition.
 
-If you want in-process retries on bind failures (e.g. you hold the
-port from a sidecar that comes up later), set
+If you want in-process retries on bind failures, set
 `restart_on_bind_failure: true` in `bed.json` or pass
-`--restart-on-bind-failure` on the command line. The retries honor
-`restart_delay` and `max_restarts` exactly like the general
+`--restart-on-bind-failure` on the command line. The retries
+honor `restart_delay` and `max_restarts` exactly like the general
 `autorestart` loop. Default is `false`.
 
 ### PID file
@@ -384,22 +373,21 @@ restart instance lifetime: autorestart keeps the same pid, so
 the pidfile is never removed and re-created during a restart.
 
 The systemd unit at `bed/src/bed/daemon/bed.service` does
-**not** use `--pidfile` — systemd tracks the main pid
-natively. `--pidfile` is for foreground / dev / test
-invocations.
+**not** use `--pidfile` — systemd tracks the main pid natively.
+`--pidfile` is for foreground / dev / test invocations.
 
 Test-cleanup recipe: `kill $(cat /tmp/bed.pid)`, or use the
-helper at `bed/tests/scripts/stop_bed.sh <pidfile>` which
-sends SIGTERM, waits up to 5 seconds, then escalates to
-SIGKILL on the process group as a fallback. The 5s grace is
-shorter than the systemd unit's 30s `TimeoutStopSec` because
-tests should fail fast; the operator can override the
-systemd unit if a longer grace is desired.
+helper at `bed/tests/scripts/stop_bed.sh <pidfile>` which sends
+SIGTERM, waits up to 5 seconds, then escalates to SIGKILL on the
+process group as a fallback. The 5s grace is shorter than the
+systemd unit's 30s `TimeoutStopSec` because tests should fail
+fast; the operator can override the systemd unit if a longer
+grace is desired.
 
-When `--pidfile` is set, a startup error (e.g. the path's
-parent directory does not exist) logs a warning and
-continues without the pidfile. The daemon does not refuse
-to start over a missing pidfile.
+When `--pidfile` is set, a startup error (e.g. the path's parent
+directory does not exist) logs a warning and continues without
+the pidfile. The daemon does not refuse to start over a missing
+pidfile.
 
 If the pidfile already exists on startup:
 
@@ -411,17 +399,18 @@ If the pidfile already exists on startup:
   bed processes from silently sharing a pidfile.
 
 The pidfile is opened with `O_EXCL` and retried once on a
-TOCTOU race with another start, so two concurrent
-invocations cannot both believe they own the file.
+TOCTOU race with another start, so two concurrent invocations
+cannot both believe they own the file.
 
 ## Layout
 
 ```
 bed/
 ├── src/bed/
-│   ├── api/                AuthService, TokenStore, SessionRegistry,
+│   ├── api/                AuthService, BankService, MessageService,
+│   │                       PingService, TokenStore, SessionRegistry,
 │   │                       CredentialProvider, error envelopes,
-│   │                       secret loader, MessageService, BankService
+│   │                       secret loader
 │   ├── client/             BedConnection, BedBankClient,
 │   │                       BedBankServiceClient, BedMessageClient,
 │   │                       BedMessageServiceClient, probe, singleton
@@ -438,15 +427,28 @@ bed/
 │   ├── startup.py          database bootstrap (bbsengine6 startup + bed role)
 │   ├── lib.py              argparse
 │   ├── config.py           bed.json loader
-│   ├── defaultrouter.py    DefaultRouter stub
-│   └── tests/              pytest (~4,148 LOC across 6 modules)
-│                          Router load uses `bbsengine6.module.load()`; tracebacks on failure are emitted via `io.echo_traceback()`.
-├── docs/
-│   └── BED_AUTH.md         bearer-token protocol reference
-├── usr/
-│   └── share/factory/etc/bed/
-│       ├── bed.json        FHS factory default config
-│       └── bed.env         FHS factory env file (BED_DATABASE_USER=bed)
+│   └── defaultrouter.py    DefaultRouter stub
+├── handbook/               long-form docs (mirrors bbsengine6/handbook/)
+│   ├── README.md
+│   ├── BED_AUTH.md         bearer-token wire protocol reference
+│   ├── ARCHITECTURE.md     dep graph, code map, prerequisites
+│   ├── FHS.md              FHS/UAPI install-path tree
+│   └── ADOPTERS.md         per-game consumer pointers
+├── specs/                  per-service specs
+│   ├── README.md
+│   ├── auth.md
+│   ├── message.md
+│   ├── bank.md
+│   ├── ping.md
+│   ├── echo.md
+│   ├── menu.md
+│   ├── help.md
+│   ├── key_f2.md
+│   ├── sink.md
+│   └── postoffice.md
+├── usr/share/factory/etc/bed/
+│   ├── bed.json            FHS factory default config
+│   └── bed.env             FHS factory env file (BED_DATABASE_USER=bed)
 ├── tests/
 │   └── scripts/
 │       └── stop_bed.sh     SIGTERM→SIGKILL pidfile-driven stop helper
@@ -457,49 +459,16 @@ bed/
 
 ## Console scripts
 
-`pip install .` registers five entry points:
+`pip install .` registers six entry points:
 
-| Script         | Module                  | Purpose                                       |
-|----------------|-------------------------|-----------------------------------------------|
-| `bed`          | `bed.main:main`         | the WebSocket daemon                          |
-| `bed-startup`  | `bed.startup:main`      | standalone database bootstrap                 |
-| `auth`         | `bed.tools.auth:main`   | standalone auth CLI (login, reconnect, refresh, revoke) |
-| `bank`         | `bed.tools.bank:main`   | standalone bank CLI (balance, add, remove, history, transfer) |
-| `message`      | `bed.tools.message:main` | standalone message CLI (subscribe, pending, send, mark read/delivered, watch) — see [`specs/message.md`](specs/message.md) § 14 |
-| `ping`         | `bed.tools.ping:main`   | smoke-test WebSocket + auth round-trip        |
-
-### `bed message` quick reference
-
-The message CLI mirrors the bank tool's two-backend shape. The
-WS-bound ops (`subscribe` / `unsubscribe` / `watch` / `pending`)
-talk to the bed daemon via WebSocket and require a valid
-`--token-file` (run `bed auth login` first). The DB-backed ops
-(`send` / `mark_read` / `mark_delivered`) are always routed to the
-local DB through `bbsengine6.message.*` — `--direct` is implicit
-for them, so the operator never has to pass it and the CLI never
-exits with "bed unreachable" for these subcommands. `--direct` is
-still honored when passed explicitly.
-
-```bash
-# Subscribe to NOTIFY fanout for alice (bed mode, needs auth)
-bed message subscribe --moniker alice
-
-# Tail live pushes until Ctrl-C
-bed message watch --moniker alice
-
-# List pending messages (bed or DB; backend-aware)
-bed message pending --moniker alice
-
-# Send a message (always direct)
-bed message send --to bob --content "hello"
-
-# Mark a message read for the actor (always direct)
-bed message mark_read --message-id 12345
-```
-
-The full subcommand/flag table, the auto-direct-mode rationale,
-and the per-handler dispatch are in
-[`specs/message.md`](specs/message.md) § 14.
+| Script         | Module                  | Purpose | Spec |
+|----------------|-------------------------|---------|------|
+| `bed`          | `bed.main:main`         | the WebSocket daemon | `SPEC.md` |
+| `bed-startup`  | `bed.startup:main`      | standalone database bootstrap | `SPEC.md` |
+| `auth`         | `bed.tools.auth:main`   | standalone auth CLI (login, reconnect, refresh, revoke) | `specs/auth.md` |
+| `bank`         | `bed.tools.bank:main`   | standalone bank CLI (balance, add, remove, history, transfer) | `specs/bank.md` |
+| `message`      | `bed.tools.message:main` | standalone message CLI (subscribe, pending, send, mark read/delivered, watch) | `specs/message.md` |
+| `ping`         | `bed.tools.ping:main`   | smoke-test WebSocket + identity probe | `specs/ping.md` |
 
 ## Tests
 
@@ -508,49 +477,10 @@ cd bed
 PYTHONPATH=src:../bbsengine6/py/src pytest src/bed/tests
 ```
 
-Nine modules plus a shared helper module and a pytest `conftest`:
-
-- **`test_auth_service.py`** (~1,824 lines) — bearer token
-  encode/decode, AuthService unit + dispatch fuzz, loginid plumbing,
-  pre/post-dispatch hooks, `bbsengine6.auth.access` delegation.
-- **`test_auth_integration.py`** (~750 lines) — wire-level
-  end-to-end against a real in-process `WebSocketServer`+`AuthService`
-  (login, reconnect, refresh, revoke), `BedAuthServiceClient` envelope
-  logic against a loopback transport, optional live-daemon test.
-- **`test_auth_tool.py`** (~843 lines) — `bed.tools.auth` CLI surface
-  with `_auth_service` mocked (buildargs, token-file plumbing,
-  precedence, --direct guard, main_with_args dispatch).
-- **`test_auth_tool_integration.py`** (~700 lines, new) — full
-  CLI end-to-end through real `BedAuthServiceClient` and real
-  token file: `auth_login` / `auth_reconnect` / `auth_refresh` /
-  `auth_revoke` driven through `BedServerContext` (a daemon-threaded
-  in-process bed server) plus `main_with_args` dispatch through
-  `select_backend` / `probe_bed`. Marked `@pytest.mark.integration`.
-- **`test_bank_service.py`** (~1,800 lines) — bed-native BankService
-  + BedBankServiceClient.
-- **`test_bank_integration.py`** (~1,580 lines) — wire-level bank
-  operations + optional live-daemon test.
-- **`test_bank_tool.py`** (~1,300 lines) — `bed.tools.bank` CLI
-  surface with `_bank_service` mocked.
-- **`test_bed.py`** (~1,223 lines) — BED server lifecycle, config
-  parsing, pidfile, mocked DB.
-- **`test_message_service.py`** (~700 lines) — MessageService
-  registration / dispatch / list_pending.
-- **`test_startup.py`** (~332 lines) — role creation, idempotency,
-  main flow.
-- **`test_client.py`** (~225 lines) — Phase 3 asyncio hardening
-  (running_loop, weakref cache, push handlers).
-- **`test_tools_routing.py`** (~131 lines) — `bed.tools._routing`
-  (--bed-* flags, select_backend, BedNotReachable).
-- **`_auth_helpers.py`** — shared helpers for the auth integration
-  tests (StubCredentialProvider, _start_bed_with_auth,
-  BedServerContext, _send_and_recv, LIVE_HOST/PORT,
-  _live_daemon_reachable). Sibling of `conftest.py` because pytest's
-  package import mode (test dir has `__init__.py`) does not make
-  `conftest` importable from test files.
-- **`conftest.py`** — pytest fixtures (`stub_credential_provider`,
-  `live_daemon_reachable`, `live_host`, `live_port`) used by
-  any pytest test that opts in.
+Per-service test modules live alongside the source they cover
+(`bed/src/bed/tests/test_<service>.py`). The auth integration
+tests share a `BedServerContext` helper at
+`bed/src/bed/tests/_auth_helpers.py`.
 
 ## License
 
