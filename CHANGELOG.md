@@ -69,6 +69,28 @@ examples).
 
 **Net:** 10,205 → ~5,615 LOC across the docs tree, ≈ −45%.
 
+### feat(bed): centralize `ChannelState` and add channel section to `bed.json`
+
+`bed.main.BED.start` now constructs one `ChannelState()` per
+daemon and threads it to both `WebSocketServer(channel_state=...)`
+and `MessageRouterClass(..., channel_state=state)`. Previously
+each consumer built its own, leaving `server.publish()` reaching
+no subscribers because the server's internal map was disconnected
+from the router's. Now both see the same state.
+
+Per-router `server._channel_state = self.channel_state` boilerplate
+removed from `casino.api.handler.register_all`. empyre and
+postoffice had only comments at the planned locations — no
+wiring line to remove.
+
+`bed.json` (top-level `channel` section) carries the canonical
+channel config: `enabled`, `modulepath`,
+`admin_handler_enabled`, and the shared `auto_seed` list used by
+all modules. Each entry's `createdby` is namespaced per owning
+module (e.g. `zoid6:casino`); the channel MessageRouter lazily
+creates the namespaced daemon member via
+`bbsengine6.member.lib.register_module_member`.
+
 ### refactor(bed.config): delegate to `bbsengine6.config`
 
 The JSON-loading, env-var-parsing, deep-merge, and path-expansion
