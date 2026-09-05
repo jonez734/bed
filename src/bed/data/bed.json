@@ -40,6 +40,42 @@
       "_comment_surrender_multiplier": "Forfeit fraction on late surrender; 0.5 matches Las Vegas Strip / Atlantic City / Macau standard (Wizard of Odds, Vegas Advantage)."
     }
   },
+  "channel": {
+    "enabled": true,
+    "modulepath": "bbsengine6.channel.api.handler",
+    "description": "Channel service (pub/sub messaging, channel subscriptions, announce-only enforcement)",
+    "admin_handler_enabled": true,
+    "_comment_admin_handler": "When true, ChannelAdminHandler is registered alongside the subscription handler. The admin handler exposes channel_create / channel_list / channel_set_announce_only / channel_add_announcer / channel_remove_announcer WS verbs. Operators should run 'con channel-*' instead of using these WS verbs directly, but they're useful for in-process admin tools.",
+    "auto_seed": [
+      {
+        "name": "casino:global",
+        "createdby": "zoid6:casino",
+        "announce_only": false,
+        "description": "Casino-wide announcement channel (open publishing)"
+      },
+      {
+        "name": "system:announcements",
+        "createdby": "zoid6:casino",
+        "announce_only": true,
+        "announcers": ["sysop"],
+        "description": "System-wide announcements (sysop/announcer-only publishing)"
+      }
+    ],
+    "_comment_auto_seed": "Channels seeded at BED startup. The auto_seed list is shared across all modules; each entry's createdby must be namespaced per its owning module (e.g., 'zoid6:casino', 'empyre:router'). Namespaced daemon members are auto-created via bbsengine6.member.lib.register_module_member when they don't exist (warn-and-skip on failure). Seeds are idempotent (skipped when the channel name already exists)."
+  },
+  "websocket": {
+    "ping_interval": 60,
+    "ping_timeout": 600,
+    "_comment": "WebSocket keepalive (seconds), forwarded to websockets.serve(). The websockets library default of 20s/20s is too aggressive for terminal clients (casino_client, etc.) whose main loop interleaves blocking stdin reads — pings go unanswered during those reads, the server hits the 20s timeout, and the next client send gets ConnectionClosedError 1011. 60s/600s gives the operator 10 minutes between actions before the server considers the connection dead."
+  },
+  "postoffice": {
+    "enabled": false,
+    "modulepath": "postoffice.api.handler",
+    "description": "Postoffice service (IMAP mail polling and notifications) -- disabled pending integration",
+    "required": false
+  }
+}
+  },
   "websocket": {
     "ping_interval": 60,
     "ping_timeout": 600,
