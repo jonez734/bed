@@ -12,10 +12,10 @@
 >   service).
 > - [`README.md`](../README.md) — quick-start, CLI flags, routers,
 >   console scripts, layout.
-> - [`TODO-message-service.md`](../TODO-message-service.md) — the
->   9-phase plan whose execution produced this code (most phases
->   complete; Phase 5 F2 migration and Phase 9 TUI fallback removal
->   are the remaining gaps).
+> - [§13 Open work](#13-open-work) — the 9-phase rollout plan,
+>   absorbed from `bed/TODO-message-service.md` (which is now
+>   removed). Most phases complete; Phase 5 F2 migration and
+>   Phase 9 TUI fallback removal are the remaining gaps.
 > - [`docs/BED_AUTH.md`](../docs/BED_AUTH.md) — bearer-token protocol
 >   reference. The message service consumes tokens minted by
 >   `bed.api.auth.AuthService` and re-verifies them on every op.
@@ -1080,7 +1080,7 @@ cannot be authorized.
 
 ### 11.1 `bed/src/bed/tests/test_message_service.py` (~2,360 lines)
 
-Coverage (per `bed/TODO-message-service.md` Phase 7 and the current
+Coverage (per §13 Open work Phase 7 and the current
 test surface):
 
 - `test_message_service_registers_handled_types` — `HANDLED_TYPES`
@@ -1133,7 +1133,7 @@ clamping at zero, `-1` on miss, lazy-lock import.
 
 - End-to-end `LISTEN engine_message_recipient` test in
   `bbsengine6/py/tests/test_message_lib.py` — requires a live PG,
-  deferred per `TODO-message-service.md` Phase 7.
+  deferred per §13 Open work Phase 7.
 - `_check_notifications` no-DB-hit verification — covered indirectly
   by the local cache tests; a `getch.py`-level smoke test is
   deferred.
@@ -1195,7 +1195,10 @@ Integration-only tests (those that hit a real daemon) are marked
 
 ## 13. Open work
 
-Per `bed/TODO-message-service.md` and `bed/SPEC.md`:
+This section absorbs `bed/TODO-message-service.md` (the 9-phase
+plan for the message service rollout; the file is now removed
+and merged here). Per the v1.1 GA gate below, all 9 phases
+must be checked.
 
 ### 13.1 Phase 5 (partial)
 
@@ -1226,7 +1229,7 @@ via bed push.
 
 ### 13.5 v1.1 GA gate (per `bed/SPEC.md:251-257`)
 
-- All 9 phases of `bed/TODO-message-service.md` checked.
+- All 9 phases of §13 Open work checked.
 - `zoid6` `bed.json` enables message service by default.
 - F2 key handler in `getch.py` migrated from `message.get_queue`
   (DB) to `message_list_pending` (bed push).
@@ -1516,9 +1519,9 @@ across the spec:
 | `bbsengine6/py/src/bbsengine6/message/lib.py:362-421` | `get_pending_messages` (DB fetch for list_pending) |
 | `bed/src/bed/tests/test_message_service.py` (~2,360 LOC) | Service unit tests                     |
 | `bbsengine6/py/tests/test_message_local_cache.py`      | Local cache tests                         |
-| `bed/TODO-message-service.md`                          | 9-phase plan                              |
+| `bed/specs/message.md` §13                              | Open work (9-phase plan; absorbed from `bed/TODO-message-service.md`) |
 | `bed/SPEC.md`                                          | Bed daemon entry-point spec               |
-| `bed/docs/BED_AUTH.md`                                 | Bearer-token protocol (Gate 2/3)          |
+| `bed/handbook/BED_AUTH.md`                             | Bearer-token protocol (Gate 2/3)          |
 | `bbsengine6/handbook/specs/notify.md`                  | Unified message system (upstream)         |
 | `bed/CHANGELOG.md`                                     | Release history                           |
 
@@ -1531,7 +1534,7 @@ This spec tracks the bed daemon. Phase gates per `bed/SPEC.md`:
 - **v1.0** (current stable) — daemon core, AuthService,
   MessageService, BankService, FHS install.
 - **v1.1** (in flight) — MessageService GA + cross-repo adoption.
-  Gate: all 9 phases of `bed/TODO-message-service.md` checked;
+  Gate: all 9 phases of §13 Open work checked;
   zoid6 `bed.json` enables by default; F2 handler migrated;
   end-to-end DB LISTEN test.
 - **v1.2 / v1.3 / v1.4 / v2** — design-only; not affected by this
