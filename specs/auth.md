@@ -6,11 +6,11 @@
 > bearer-token authentication protocol.
 >
 > **See also:**
-> - [`docs/BED_AUTH.md`](../docs/BED_AUTH.md) — bearer-token protocol
->   reference (wire-shape, claim schema, error codes, security
->   notes, v1/v2 multi-instance roadmap). This spec covers the
->   server + client + CLI architecture; BED_AUTH.md is the
->   authoritative wire-protocol document.
+> - [`handbook/BED_AUTH.md`](../handbook/BED_AUTH.md) — bearer-token
+>   protocol reference (wire-shape, claim schema, error codes,
+>   security notes, v1/v2 multi-instance roadmap). This spec
+>   covers the server + client + CLI architecture; BED_AUTH.md is
+>   the authoritative wire-protocol document.
 > - [`SPEC.md`](../SPEC.md) — bed daemon entry point (what works, what
 >   doesn't, v1/v1.1/v1.2/v1.3/v1.4/v2 phase gates, code that moved
 >   to `bbsengine6`, bbsengine6-side prerequisites for each bed
@@ -43,7 +43,7 @@ S→C {"type":"auth_result", "success":true, "moniker":"alice",
 
 The whole primitive is one BED daemon process by design; for a
 multi-instance deployment behind a load balancer, see "Out of scope
-for v1" in `docs/BED_AUTH.md`.
+for v1" in `handbook/BED_AUTH.md`.
 
 The default `bbsengine6.net.defaultrouter.DefaultRouter` is **not**
 wired to `AuthService` — it stays a no-credential stub for `wscat`
@@ -82,7 +82,8 @@ smoke tests and local development. Any other router
 
 ### 1.2 What this spec does NOT cover
 
-- The bearer-token wire protocol details — see `docs/BED_AUTH.md`
+- The bearer-token wire protocol details — see
+  `handbook/BED_AUTH.md`
   for the full wire-shape reference, claim schema, error code
   table, and the v1/v2 multi-instance roadmap.
 - Per-op policy decisions for non-auth services — `bank.access`,
@@ -96,7 +97,7 @@ smoke tests and local development. Any other router
 
 ## 2. Wire protocol
 
-The full wire shape is documented in `docs/BED_AUTH.md`. This
+The full wire shape is documented in `handbook/BED_AUTH.md`. This
 section is the architectural summary.
 
 ### 2.1 Client requests
@@ -120,7 +121,8 @@ section is the architectural summary.
 ### 2.3 Error envelopes
 
 Standard `{"type": "error", "code": ..., "message": ..., "recoverable": bool}`
-shape. The full error code table is in `docs/BED_AUTH.md:68-78`.
+shape. The full error code table is in `handbook/BED_AUTH.md`
+("Errors" section).
 Most relevant for clients:
 
 | code                       | recoverable | meaning                                                                 |
@@ -493,7 +495,7 @@ only when the service is active.
 `bed_secret_path` is set by `_apply_bed_name_config` from `name` if
 not already set; CLI `--bed-secret` always wins. The `bed_instance_id`
 key is the issuing ID baked into new tokens; v2's allowlist (see
-`docs/BED_AUTH.md`) is a separate, new concept.
+`handbook/BED_AUTH.md`) is a separate, new concept.
 
 ### 7.4 Token-aware wiring for downstream services
 
@@ -790,7 +792,7 @@ two events: the rotated record is live BEFORE the old one is
 deleted. The DB-backed store's `INSERT … ON CONFLICT DO UPDATE`
 makes step 2 atomic per row, but cross-row atomicity
 (rotated-put + old-delete in one transaction) is documented as a
-v2 cluster-mode fix in `docs/BED_AUTH.md`.
+v2 cluster-mode fix in `handbook/BED_AUTH.md`.
 
 ### 9.11 `_auth_result_envelope` / `_reconnect_result_envelope`
 
@@ -1095,7 +1097,7 @@ BED_AUTH.md security notes.
 
 ### 13.5 v2 cluster-mode failure modes
 
-See `docs/BED_AUTH.md` § "Failure modes of a v1 cluster" for the
+See `handbook/BED_AUTH.md` § "Failure modes of a v1 cluster" for the
 cross-node replay scenarios and the v2 Path A / Path B mitigations.
 v1 is single-process by design.
 
@@ -1105,7 +1107,7 @@ v1 is single-process by design.
 
 ### 14.1 `bed/src/bed/tests/test_auth_service.py` (~1,955 lines)
 
-Coverage (Phase 7 of `bed/TODO-message-service.md` plus the
+Coverage (see §13 Open work in `specs/message.md` Phase 7 plus the
 bank/auth/casino-standard upgrade):
 
 - Token codec: `_encode_token` / `_decode_token` round-trip;
@@ -1218,7 +1220,7 @@ skipped in the default run.
 - TLS — depends on the WS deployment (TLS in reverse-proxy /
   systemd unit, plain WS in dev).
 - Multi-instance load balancing (LB → different `bed_instance_id`
-  → token invalidation). See `docs/BED_AUTH.md` § "v2 roadmap:
+  → token invalidation). See `handbook/BED_AUTH.md` § "v2 roadmap:
   multi-instance load balancing" for the Path A / Path B design.
 - IP / user-agent binding. Not implemented; `websocket_id`
   binding is the only binding layer.
@@ -1251,7 +1253,7 @@ skipped in the default run.
 
 - Path A (shared HMAC secret + allowlist + DB-backed token store)
   + Path B (shared `SessionRegistry` + per-connection UUID instead
-  of `id(websocket)`) per `docs/BED_AUTH.md`. Required for
+  of `id(websocket)`) per `handbook/BED_AUTH.md`. Required for
   "no interactive password prompt on LB rebalance" with replay-
   on-reconnect preserved across nodes.
 
@@ -1291,7 +1293,7 @@ skipped in the default run.
 | `bed/src/bed/tests/test_auth_integration.py` (~750 LOC) | Wire-level end-to-end (integration)      |
 | `bed/src/bed/tests/test_auth_tool.py` (~843 LOC)       | CLI surface with mocked `_auth_service`   |
 | `bed/src/bed/tests/test_auth_tool_integration.py` (~700 LOC) | CLI end-to-end with real WS (integration) |
-| `bed/docs/BED_AUTH.md`                                 | Bearer-token protocol reference (wire-shape, error codes, v1/v2 roadmap) |
+| `bed/handbook/BED_AUTH.md`                             | Bearer-token protocol reference (wire-shape, error codes, v1/v2 roadmap) |
 | `bed/SPEC.md`                                          | Bed daemon entry-point spec               |
 | `bed/README.md`                                        | Quick-start, CLI flags, console scripts   |
 | `bed/CHANGELOG.md`                                     | Release history                           |
@@ -1307,5 +1309,5 @@ This spec tracks the bed daemon. Phase gates per `bed/SPEC.md`:
 - **v1.1** (in flight) — MessageService GA + cross-repo adoption;
   AuthService rides along unchanged.
 - **v1.2 / v1.3 / v1.4 / v2** — design-only; not affected by this
-  spec beyond what is listed in Section 16. See `docs/BED_AUTH.md`
+  spec beyond what is listed in Section 16. See `handbook/BED_AUTH.md`
   for the v2 cluster-mode roadmap.
