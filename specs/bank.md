@@ -1244,7 +1244,7 @@ skipped in the default run.
 
 ### 12.4 v1.1 GA gate (per `bed/SPEC.md:251-257`)
 
-- All 9 phases of `bed/TODO-message-service.md` checked.
+- All 9 phases of `specs/message.md` §13 Open work checked.
 - `zoid6` `bed.json` enables message service by default.
 - F2 key handler in `getch.py` migrated from `message.get_queue`
   (DB) to `message_list_pending` (bed push).

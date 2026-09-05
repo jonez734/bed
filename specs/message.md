@@ -506,7 +506,7 @@ does, because envelope codes are a wire-protocol concern. Currently:
 The bbsengine6.message package owns the op vocabulary and the
 per-op policy; bed is a thin consumer.
 
-The policy (`bbsengine6/message/__init__.py:155-219`) is:
+The policy (`bbsengine6.message.access()`) is:
 
 - `op="run"` with no `session` kwarg → `True` (module-load probe).
 - `session=None` → `False` (claims alone cannot grant access —
@@ -909,7 +909,7 @@ Limitation, 2026-07-22)").
 
 ## 8. Local cache
 
-File: `bbsengine6/py/src/bbsengine6/message/lib.py:627-680`.
+File: `bbsengine6.message.lib` (local-unread-count cache).
 
 The cache is the "no DB hit on every input tick" optimization that
 the entire pipeline exists to enable.
@@ -1513,10 +1513,9 @@ across the spec:
 | `bed/src/bed/data/bed.json:30-34`                      | `message_service` config block            |
 | `bed/src/bed/client/messageservice.py`                 | `BedMessageServiceClient`, push handler   |
 | `bed/src/bed/client/connection.py`                     | `subscribe` / `unsubscribe` push-handler plumbing |
-| `bbsengine6/py/src/bbsengine6/sql/message.sql:52-92`   | NOTIFY trigger function and triggers      |
-| `bbsengine6/py/src/bbsengine6/message/__init__.py:155-219` | `bbsengine6.message.access()` policy  |
-| `bbsengine6/py/src/bbsengine6/message/lib.py:627-680`  | Local unread cache                        |
-| `bbsengine6/py/src/bbsengine6/message/lib.py:362-421` | `get_pending_messages` (DB fetch for list_pending) |
+| `bbsengine6/py/src/bbsengine6/sql/message.sql`             | NOTIFY trigger function and triggers    |
+| `bbsengine6/py/src/bbsengine6/message/__init__.py`        | `bbsengine6.message.access()` policy     |
+| `bbsengine6/py/src/bbsengine6/message/lib.py`             | Local unread cache; `get_pending_messages` (DB fetch for list_pending) |
 | `bed/src/bed/tests/test_message_service.py` (~2,360 LOC) | Service unit tests                     |
 | `bbsengine6/py/tests/test_message_local_cache.py`      | Local cache tests                         |
 | `bed/specs/message.md` §13                              | Open work (9-phase plan; absorbed from `bed/TODO-message-service.md`) |
