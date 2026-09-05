@@ -366,8 +366,8 @@ honor `restart_delay` and `max_restarts` exactly like the general
 
 ### PID file
 
-`bed --pidfile /var/run/bed.pid` writes the daemon's pid to
-`/var/run/bed.pid` on startup and removes it on shutdown. The
+`bed --pidfile /run/bed.pid` writes the daemon's pid to
+`/run/bed.pid` on startup and removes it on shutdown. The
 pidfile lifetime matches the daemon's lifetime, not the per-
 restart instance lifetime: autorestart keeps the same pid, so
 the pidfile is never removed and re-created during a restart.
