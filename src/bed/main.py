@@ -16,7 +16,7 @@ from bbsengine6 import io
 from bbsengine6.common import safe_path
 from bbsengine6.database import getpool, parse_dsn, set_current_role
 from bbsengine6.module import load as bbs_module_load
-from bbsengine6.net import WebSocketServer
+from bbsengine6.net import ChannelState, WebSocketServer
 
 from . import config, lib
 from ._configpath import resolve_config_path
@@ -601,10 +601,19 @@ class BED:
         if self._auth_enabled():
             await self._start_auth(db_args)
 
+        # Construct one ChannelState for the whole daemon. Both the
+        # WebSocketServer (so server.publish() routes through it) and the
+        # router (so its ChannelServiceHandler sees the same subscriber
+        # set) reference this single instance. Previously each consumer
+        # built its own; that left server.publish() reaching no one because
+        # the server's internal map was disconnected from the router's.
+        self._channel_state = ChannelState()
+
         self.server = WebSocketServer(
             binds=list(self._final_binds()),
             ping_interval=getattr(self.args, "ws_ping_interval", None),
             ping_timeout=getattr(self.args, "ws_ping_timeout", None),
+            channel_state=self._channel_state,
         )
 
         try:
@@ -624,12 +633,14 @@ class BED:
                 # when auth is disabled (DefaultRouter + no auth) so
                 # the router's legacy / door-mode fallback stays
                 # intact for tests.
-                router_kwargs: Dict[str, Any] = {}
+                router_kwargs: Dict[str, Any] = {
+                    "channel_state": self._channel_state,
+                }
                 if (
                     self.auth_service is not None
                     and self.token_store is not None
                 ):
-                    router_kwargs = {
+                    router_kwargs.update({
                         "session_registry": self._session_registry,
                         "secret": getattr(
                             self.auth_service, "secret", None
@@ -638,7 +649,7 @@ class BED:
                         "instance_id": getattr(
                             self.auth_service, "instance_id", None
                         ),
-                    }
+                    })
                 self.router = self.MessageRouterClass(db_args, **router_kwargs)
                 self.router.register_all(self.server)
 
