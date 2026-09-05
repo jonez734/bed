@@ -13,12 +13,13 @@
 > - [`README.md`](../README.md) — quick-start, CLI flags, routers,
 >   console scripts, layout.
 > - [§13 Open work](#13-open-work) — the 9-phase rollout plan,
->   absorbed from `bed/TODO-message-service.md` (which is now
->   removed). Most phases complete; Phase 5 F2 migration and
->   Phase 9 TUI fallback removal are the remaining gaps.
-> - [`docs/BED_AUTH.md`](../docs/BED_AUTH.md) — bearer-token protocol
->   reference. The message service consumes tokens minted by
->   `bed.api.auth.AuthService` and re-verifies them on every op.
+>   absorbed from the (now-removed) 9-phase TODO file. Most
+>   phases complete; Phase 5 F2 migration and Phase 9 TUI
+>   fallback removal are the remaining gaps.
+> - [`handbook/BED_AUTH.md`](../handbook/BED_AUTH.md) —
+>   bearer-token protocol reference. The message service
+>   consumes tokens minted by `bed.api.auth.AuthService` and
+>   re-verifies them on every op.
 > - `bbsengine6/handbook/specs/notify.md` — the unified message
 >   system's authoritative spec. This spec covers only the **bed-side
 >   surface**; the storage layer (`bbsengine6.message`) is upstream.
@@ -96,7 +97,7 @@ process-local cache that the bed client's recv loop keeps current.
 - The unified message system's storage layer (`bbsengine6.message.*`).
   See `bbsengine6/handbook/specs/notify.md` for that.
 - Authentication flow (the `auth`/`reconnect`/`auth_refresh`/`auth_revoke`
-  messages). See `docs/BED_AUTH.md`.
+  messages). See `handbook/BED_AUTH.md`.
 - The IMAP postoffice service. The postoffice is a separate in-process
   service and does not flow through MessageService.
 - Multi-process bed fanout. A single bed instance per host is the
@@ -1195,10 +1196,9 @@ Integration-only tests (those that hit a real daemon) are marked
 
 ## 13. Open work
 
-This section absorbs `bed/TODO-message-service.md` (the 9-phase
-plan for the message service rollout; the file is now removed
-and merged here). Per the v1.1 GA gate below, all 9 phases
-must be checked.
+This section is the 9-phase plan for the message service
+rollout. Per the v1.1 GA gate below, all 9 phases must be
+checked.
 
 ### 13.1 Phase 5 (partial)
 
@@ -1518,7 +1518,7 @@ across the spec:
 | `bbsengine6/py/src/bbsengine6/message/lib.py`             | Local unread cache; `get_pending_messages` (DB fetch for list_pending) |
 | `bed/src/bed/tests/test_message_service.py` (~2,360 LOC) | Service unit tests                     |
 | `bbsengine6/py/tests/test_message_local_cache.py`      | Local cache tests                         |
-| `bed/specs/message.md` §13                              | Open work (9-phase plan; absorbed from `bed/TODO-message-service.md`) |
+| `bed/specs/message.md` §13                              | Open work (9-phase plan; absorbed from the previously-separate 9-phase TODO file) |
 | `bed/SPEC.md`                                          | Bed daemon entry-point spec               |
 | `bed/handbook/BED_AUTH.md`                             | Bearer-token protocol (Gate 2/3)          |
 | `bbsengine6/handbook/specs/notify.md`                  | Unified message system (upstream)         |
