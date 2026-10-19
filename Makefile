@@ -200,9 +200,15 @@ BBSENGINE_DIR = $(CURDIR)/../bbsengine6/py
 # first. The parent dir is group-writable in this tree so the rename is
 # permitted even when we don't own the build/ contents. Without this,
 # the subsequent chmod fails with EPERM and the build aborts.
+#
+# The stale name uses $$$$ (Make -> $$ -> shell PID) so it is unique per
+# run. Earlier this was $$, which Make reduced to a literal `$`, leaving
+# build.stale.$ dirs behind. The rename must succeed: a failed mv is a
+# hard error, not something to hide with `|| true`, because the chmod
+# that follows then fails with a less useful EPERM.
 PREPARE_BUILD = \
 	if [ -d $(1)/build ] && [ ! -O $(1)/build ]; then \
-		mv $(1)/build $(1)/build.stale.$$ 2>/dev/null || true; \
+		mv $(1)/build $(1)/build.stale.$$$$ || exit 1; \
 	fi; \
 	mkdir -p $(1)/build && chmod g-s,+t $(1)/build
 
