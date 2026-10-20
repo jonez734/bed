@@ -169,6 +169,10 @@ class BedMessageServiceClient:
         await self._conn.subscribe(_push)
         self._subscribed_moniker = moniker
         self._handler = _push
+        # After any redial, re-register the server-side subscription (the
+        # new socket has none) and recount from the DB, so pushes missed
+        # while disconnected are reflected in the count.
+        self._conn.add_reconnect_hook(self._on_reconnect)
 
         try:
             pending = await self.list_pending(moniker)
@@ -185,6 +189,30 @@ class BedMessageServiceClient:
 
         logger.info("BedMessageClient: subscribed moniker=%s", moniker)
         return {"ok": True, "moniker": moniker}
+
+    async def _on_reconnect(self) -> None:
+        """Re-subscribe on the new socket and recount from the DB."""
+        from bbsengine6 import message as message_module
+
+        moniker = self._subscribed_moniker
+        if not moniker:
+            return
+        try:
+            reply = await self._send_authed(
+                {"type": "message_subscribe", "moniker": moniker}
+            )
+            if not reply.get("ok"):
+                logger.warning(
+                    "BedMessageClient: re-subscribe refused: %s", reply.get("code")
+                )
+                return
+        except BedUnavailable as e:
+            logger.warning("BedMessageClient: re-subscribe failed: %s", e)
+            return
+        try:
+            message_module.set_local_unread_count(moniker, _exact_unread(moniker))
+        except Exception as e:
+            logger.warning("BedMessageClient: post-reconnect recount failed: %s", e)
 
     async def unsubscribe(self, moniker: Optional[str] = None) -> Dict[str, Any]:
         """Unsubscribe from message pushes."""

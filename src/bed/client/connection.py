@@ -64,6 +64,7 @@ class BedConnection:
         self._lock: Optional[asyncio.Lock] = None
         self._request_ids = _RequestId()
         self._push_handlers: List[PushHandler] = []
+        self._reconnect_hooks: List[Callable[[], Any]] = []
         self._recv_task: Optional[asyncio.Task] = None
         self._recv_stop: Optional[asyncio.Event] = None
 
@@ -251,17 +252,38 @@ class BedConnection:
         self._recv_task = None
 
     async def _recv_loop(self) -> None:
-        """Background loop that consumes server-pushed messages."""
+        """Background loop that consumes server-pushed messages.
+
+        When the socket closes, the loop redials (bounded backoff) and calls
+        every reconnect hook registered with :meth:`add_reconnect_hook` so the
+        owner can re-subscribe and recount. Pushes missed while disconnected
+        are covered by that recount, not replayed here.
+        """
+        backoff = 0.5
         try:
-            ws = self._ws
-            if ws is None:
-                return
             while not self._recv_stop.is_set():
-                if self._is_closed():
-                    break
+                ws = self._ws
+                if ws is None or self._is_closed():
+                    try:
+                        self._ws = await self._connect()
+                    except BedUnavailable:
+                        await asyncio.sleep(min(backoff, 10.0))
+                        backoff = min(backoff * 2, 10.0)
+                        continue
+                    backoff = 0.5
+                    for hook in list(self._reconnect_hooks):
+                        try:
+                            await hook()
+                        except Exception as e:
+                            logger.warning("bed.client reconnect hook error: %s", e)
+                    continue
                 try:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                    raw = await asyncio.wait_for(self._ws.recv(), timeout=1.0)
                 except asyncio.TimeoutError:
+                    continue
+                except Exception:
+                    # Socket error or closed: drop it and redial on next pass.
+                    self._ws = None
                     continue
                 try:
                     msg = json.loads(raw)
@@ -272,6 +294,17 @@ class BedConnection:
             return
         except Exception as e:
             logger.warning("bed.client recv loop error: %s", e)
+
+    def add_reconnect_hook(self, hook: Callable[[], Any]) -> None:
+        """Register an async callable run after every successful redial."""
+        if not any(h is hook for h in self._reconnect_hooks):
+            self._reconnect_hooks.append(hook)
+
+    def remove_reconnect_hook(self, hook: Callable[[], Any]) -> None:
+        try:
+            self._reconnect_hooks.remove(hook)
+        except ValueError:
+            pass
 
     def force_close(self) -> None:
         """Close the current connection so the next send redials.
