@@ -412,7 +412,12 @@ class MessageService(BaseService):
         """
         super().__init__(args, session_manager)
         self.server: Any = None
+        # ``_subscribed`` keeps the most recent websocket per moniker (legacy
+        # shape, relied on by callers and tests). ``_sessions`` holds every
+        # websocket subscribed for a moniker, so a member with two clients
+        # open gets each DM on all of them. Delivery uses ``_sessions``.
         self._subscribed: Dict[str, Any] = {}
+        self._sessions: Dict[str, set] = {}
         self._subscribed_lock = asyncio.Lock()
         self._listener_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
@@ -612,8 +617,10 @@ class MessageService(BaseService):
         if not recipient:
             return
         async with self._subscribed_lock:
-            ws = self._subscribed.get(recipient)
-        if ws is None or self.server is None:
+            targets = list(self._sessions.get(recipient, ()))
+            if not targets and recipient in self._subscribed:
+                targets = [self._subscribed[recipient]]
+        if not targets or self.server is None:
             return
 
         self._seq += 1
@@ -628,12 +635,29 @@ class MessageService(BaseService):
             "datestamp": data.get("datestamp"),
             "request_id": f"server:msg:{self._seq}",
         }
-        try:
-            await self.server.send_to(ws, envelope)
-        except Exception as e:
-            logger.warning("MessageService: send_to failed for %s: %s", recipient, e)
-            async with self._subscribed_lock:
-                self._subscribed.pop(recipient, None)
+        for ws in targets:
+            try:
+                await self.server.send_to(ws, envelope)
+            except Exception as e:
+                logger.warning(
+                    "MessageService: send_to failed for %s: %s", recipient, e
+                )
+                await self._drop_session(recipient, ws)
+
+    async def _drop_session(self, moniker: str, websocket: Any) -> None:
+        """Remove one websocket from a moniker's subscriptions (dead socket)."""
+        async with self._subscribed_lock:
+            sessions = self._sessions.get(moniker)
+            if sessions is not None:
+                sessions.discard(websocket)
+                if not sessions:
+                    self._sessions.pop(moniker, None)
+            if self._subscribed.get(moniker) is websocket:
+                remaining = self._sessions.get(moniker)
+                if remaining:
+                    self._subscribed[moniker] = next(iter(remaining))
+                else:
+                    self._subscribed.pop(moniker, None)
 
     async def handle_message(
         self, server: Any, websocket: Any, path: str, message: Dict[str, Any]
@@ -659,6 +683,7 @@ class MessageService(BaseService):
             }
         moniker = (message.get("moniker") or "").strip()
         async with self._subscribed_lock:
+            self._sessions.setdefault(moniker, set()).add(websocket)
             self._subscribed[moniker] = websocket
         logger.info(
             "MessageService: subscribed moniker=%s by=%s",
@@ -684,8 +709,9 @@ class MessageService(BaseService):
                 "recoverable": err.get("recoverable", False),
             }
         moniker = (message.get("moniker") or "").strip()
-        async with self._subscribed_lock:
-            self._subscribed.pop(moniker, None)
+        # Unsubscribe only the calling socket. Other sessions of the same
+        # member keep receiving DMs.
+        await self._drop_session(moniker, websocket)
         return {
             "type": "message_unsubscribe_result",
             "ok": True,
