@@ -43,10 +43,75 @@ class BedMessageServiceClient:
     counts so the bbsengine6 TUI can read counts without a DB hit.
     """
 
-    def __init__(self, connection: BedConnection) -> None:
+    def __init__(
+        self,
+        connection: BedConnection,
+        *,
+        token: str = "",
+        token_file: Optional[str] = None,
+        owner: bool = False,
+    ) -> None:
+        """
+        Args:
+            connection: the shared BedConnection (never read directly here).
+            token: bearer token used on every message op.
+            token_file: path the token was read from. Used to re-read on
+                ``not_authenticated`` (non-owner) and to write rotations (owner).
+            owner: True only for the process that owns the connection. Only
+                the owner writes rotated tokens back to ``token_file``.
+        """
         self._conn = connection
         self._subscribed_moniker: Optional[str] = None
         self._handler: Optional[PushHandler] = None
+        self._token = token or ""
+        self._token_file = token_file
+        self._owner = bool(owner)
+
+    # --- token handling -------------------------------------------------
+
+    def _adopt_rotation(self, reply: Dict[str, Any]) -> None:
+        """Store a rotated token from a reply; the owner also persists it."""
+        rotated = reply.get("token") if isinstance(reply, dict) else None
+        if not rotated or rotated == self._token:
+            return
+        self._token = rotated
+        if self._owner and self._token_file:
+            try:
+                from bed.tools.auth import _write_token_file
+
+                _write_token_file(self._token_file, rotated)
+            except Exception as e:
+                logger.warning("BedMessageClient: token write failed: %s", e)
+
+    def _reload_token_from_file(self) -> bool:
+        """Non-owner: pick up a token the owner rotated. True if it changed."""
+        if not self._token_file:
+            return False
+        from bed.tools._token import read_token_file
+
+        fresh = read_token_file(self._token_file)
+        if fresh and fresh != self._token:
+            self._token = fresh
+            return True
+        return False
+
+    async def _send_authed(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Send a message op with the token. One retry on ``not_authenticated``.
+
+        Non-owner: re-read the token file and retry once. Owner: the
+        owner is the only writer, so a stale token here means the server
+        rejected it; report that rather than rotating silently.
+        """
+        msg = dict(message)
+        msg["token"] = self._token
+        reply = await self._conn.send(msg)
+        self._adopt_rotation(reply)
+        if reply.get("code") == "not_authenticated" and not self._owner:
+            if self._reload_token_from_file():
+                msg["token"] = self._token
+                reply = await self._conn.send(msg)
+                self._adopt_rotation(reply)
+        return reply
 
     async def subscribe(self, moniker: str) -> Dict[str, Any]:
         """Subscribe to live message pushes for ``moniker``.
@@ -70,7 +135,7 @@ class BedMessageServiceClient:
             return {"ok": True, "moniker": moniker, "already_subscribed": True}
 
         try:
-            reply = await self._conn.send(
+            reply = await self._send_authed(
                 {"type": "message_subscribe", "moniker": moniker}
             )
         except BedUnavailable as e:
@@ -127,7 +192,7 @@ class BedMessageServiceClient:
         if not target:
             return {"ok": True, "moniker": None, "no_subscription": True}
         try:
-            reply = await self._conn.send(
+            reply = await self._send_authed(
                 {"type": "message_unsubscribe", "moniker": target}
             )
         except BedUnavailable as e:
@@ -155,7 +220,7 @@ class BedMessageServiceClient:
                 "messages": [],
             }
         try:
-            reply = await self._conn.send(
+            reply = await self._send_authed(
                 {"type": "message_list_pending", "moniker": target}
             )
         except BedUnavailable as e:
@@ -171,11 +236,31 @@ class BedMessageServiceClient:
 _module_client: Optional[BedMessageServiceClient] = None
 
 
-def get_message_client(connection: BedConnection) -> BedMessageServiceClient:
-    """Get or create a process-wide :class:`BedMessageServiceClient`."""
+def get_message_client(
+    connection: BedConnection,
+    *,
+    token: str = "",
+    token_file: Optional[str] = None,
+    owner: bool = False,
+) -> BedMessageServiceClient:
+    """Get or create the process-wide :class:`BedMessageServiceClient`.
+
+    The cached client is rebuilt when the connection, token source, or
+    ownership changes, so a caller never inherits another caller's token.
+    """
     global _module_client
-    if _module_client is None or _module_client._conn is not connection:
-        _module_client = BedMessageServiceClient(connection)
+    c = _module_client
+    if (
+        c is None
+        or c._conn is not connection
+        or c._token_file != token_file
+        or c._owner != bool(owner)
+    ):
+        _module_client = BedMessageServiceClient(
+            connection, token=token, token_file=token_file, owner=owner
+        )
+    elif token and c._token != token:
+        c._token = token
     return _module_client
 
 
