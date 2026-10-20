@@ -63,6 +63,10 @@
     ],
     "_comment_auto_seed": "Channels seeded at BED startup. The auto_seed list is shared across all modules; each entry's createdby must be namespaced per its owning module (e.g., 'zoid6:casino', 'empyre:router'). Namespaced daemon members are auto-created via bbsengine6.member.lib.register_module_member when they don't exist (warn-and-skip on failure). Seeds are idempotent (skipped when the channel name already exists)."
   },
+  "message": {
+    "everyone_allowed_roles": ["sysop"],
+    "_comment": "Roles allowed to address @everyone in a message. Supported: sysop. Applied to bbsengine6.message.configure() at startup. Non-matching senders get a denied result; nothing is stored."
+  },
   "websocket": {
     "ping_interval": 60,
     "ping_timeout": 600,

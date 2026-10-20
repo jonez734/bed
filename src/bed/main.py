@@ -478,6 +478,26 @@ def _apply_auth_config(args: argparse.Namespace, cfg: dict) -> None:
         args.bed_instance_id = auth["bed_instance_id"]
 
 
+def _apply_message_config(cfg: dict) -> None:
+    """Apply ``message.*`` policy from a loaded config to bbsengine6.message.
+
+    Reads ``message.everyone_allowed_roles`` and hands it to
+    :func:`bbsengine6.message.configure`. Missing section or key leaves the
+    bbsengine6 default (sysop only) in place.
+    """
+    msg = cfg.get("message")
+    if not isinstance(msg, dict):
+        return
+    roles = msg.get("everyone_allowed_roles")
+    if roles is None:
+        return
+    if not isinstance(roles, list) or not all(isinstance(r, str) for r in roles):
+        raise ValueError("message.everyone_allowed_roles must be a list of strings")
+    from bbsengine6 import message as _bbs_message
+
+    _bbs_message.configure(everyone_allowed_roles=roles)
+
+
 def _apply_websocket_config(args: argparse.Namespace, cfg: dict) -> None:
     """Apply ``websocket.*`` (WebSocket keepalive) from a loaded config.
 
@@ -1245,6 +1265,7 @@ async def main_async() -> None:
     _apply_database_config(args, loaded_config)
     _apply_auth_config(args, loaded_config)
     _apply_websocket_config(args, loaded_config)
+    _apply_message_config(loaded_config)
     # Compute the final bind list after every config source has had
     # its say. ``_resolve_binds`` prefers ``--bind`` (CLI) > JSON
     # ``bind`` list > legacy ``--host``/``--port``.
