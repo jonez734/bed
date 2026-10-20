@@ -478,6 +478,30 @@ def _apply_auth_config(args: argparse.Namespace, cfg: dict) -> None:
         args.bed_instance_id = auth["bed_instance_id"]
 
 
+def _apply_notify_config(cfg: dict) -> None:
+    """Apply ``notify.*`` (terminal bell) from a loaded config.
+
+    Reads ``notify.bell_window_seconds`` and hands it to
+    :func:`bbsengine6.io.set_bell_window_seconds`. Missing section or key leaves
+    the bbsengine6 default (5 seconds) in place.
+    """
+    notify = cfg.get("notify")
+    if not isinstance(notify, dict):
+        return
+    seconds = notify.get("bell_window_seconds")
+    if seconds is None:
+        return
+    if (
+        not isinstance(seconds, (int, float))
+        or isinstance(seconds, bool)
+        or seconds < 0
+    ):
+        raise ValueError("notify.bell_window_seconds must be a number >= 0")
+    from bbsengine6 import io as _bbs_io
+
+    _bbs_io.set_bell_window_seconds(float(seconds))
+
+
 def _apply_message_config(cfg: dict) -> None:
     """Apply ``message.*`` policy from a loaded config to bbsengine6.message.
 
@@ -1269,6 +1293,7 @@ async def main_async() -> None:
     _apply_auth_config(args, loaded_config)
     _apply_websocket_config(args, loaded_config)
     _apply_message_config(loaded_config)
+    _apply_notify_config(loaded_config)
     # Compute the final bind list after every config source has had
     # its say. ``_resolve_binds`` prefers ``--bind`` (CLI) > JSON
     # ``bind`` list > legacy ``--host``/``--port``.

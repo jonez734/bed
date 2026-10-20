@@ -68,6 +68,10 @@
     "pending_max_age_days": 0,
     "_comment": "Roles allowed to address @everyone in a message. Supported: sysop. Applied to bbsengine6.message.configure() at startup. Non-matching senders get a denied result; nothing is stored."
   },
+  "notify": {
+    "bell_window_seconds": 5,
+    "_comment": "Terminal bell for new messages. One bell per window: notifications that arrive within bell_window_seconds of the first share that bell. Applied to bbsengine6.io.set_bell_window_seconds() at startup. Must be >= 0."
+  },
   "websocket": {
     "ping_interval": 60,
     "ping_timeout": 600,
