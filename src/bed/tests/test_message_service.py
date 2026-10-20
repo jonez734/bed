@@ -207,7 +207,7 @@ def test_list_pending_returns_db_messages():
         moniker="alice", is_sysop=True
     )
     with patch.object(
-        message_module, "get_pending_messages", return_value=fake_messages
+        message_module, "get_pending_page", return_value=fake_messages
     ) as m:
         service = MessageService(_make_args(), sm)
         result = asyncio.run(
@@ -220,7 +220,7 @@ def test_list_pending_returns_db_messages():
     assert result["ok"] is True
     assert result["moniker"] == "alice"
     assert result["messages"] == fake_messages
-    m.assert_called_once_with("alice", limit=100)
+    m.assert_called_once_with("alice", limit=50, before=None)
 
 
 def test_list_pending_rejects_empty_moniker():
@@ -736,14 +736,14 @@ def test_list_pending_returns_messages_when_access_returns_true():
 
     fake_messages = [{"id": 1, "content": "hello"}]
     with patch.object(
-        message_module, "get_pending_messages", return_value=fake_messages
+        message_module, "get_pending_page", return_value=fake_messages
     ) as gp, patch.object(message_module, "_message_access", fake):
         result = asyncio.run(service._handle_list_pending(ws, msg))
 
     assert result["ok"] is True
     assert result["moniker"] == "alice"
     assert result["messages"] == fake_messages
-    gp.assert_called_once_with("alice", limit=100)
+    gp.assert_called_once_with("alice", limit=50, before=None)
     assert len(calls) == 1
     assert calls[0]["op"] == "list_pending"
 
@@ -905,14 +905,14 @@ def _patch_access_returning(allow: bool = True):
 
 
 def _patch_get_pending_messages(rows=None):
-    """Patch get_pending_messages at the bed.api.message module
-    boundary. Returns (ctx_mgr, mock)."""
+    """Patch the pending read at the bed.api.message module boundary.
+    list_pending now reads through get_pending_page. Returns a ctx manager."""
     from bed.api import message as message_module
 
     if rows is None:
         rows = []
     return patch.object(
-        message_module, "get_pending_messages", return_value=rows
+        message_module, "get_pending_page", return_value=rows
     )
 
 
@@ -1992,7 +1992,7 @@ def test_handle_unsubscribe_token_aware_unbinds():
 def test_handle_list_pending_token_aware_returns_messages():
     """End-to-end: a token-aware service processes
     ``message_list_pending`` and delegates to
-    ``bbsengine6.message.get_pending_messages``."""
+    ``bbsengine6.message.get_pending_page``."""
     from bed.api.message import MessageService
     from bed.api.token_store import InMemoryTokenStore
 
@@ -2031,7 +2031,7 @@ def test_handle_list_pending_token_aware_returns_messages():
     assert result["ok"] is True
     assert result["moniker"] == "alice"
     assert result["messages"] == fake_messages
-    gp.assert_called_once_with("alice", limit=100)
+    gp.assert_called_once_with("alice", limit=50, before=None)
 
 
 def test_handle_list_pending_token_aware_rejects_revoked_token():

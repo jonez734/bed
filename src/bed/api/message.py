@@ -81,6 +81,7 @@ from bbsengine6 import io
 from bbsengine6.database import make_dsn
 from bbsengine6.message import access as _message_access
 from bbsengine6.message import get_pending_messages
+from bbsengine6.message import get_pending_page
 
 from .auth import TokenError, _decode_token
 from .errors import (
@@ -732,8 +733,34 @@ class MessageService(BaseService):
                 "recoverable": err.get("recoverable", False),
             }
         moniker = (message.get("moniker") or "").strip()
+
+        # Pagination: ``limit`` is clamped by bbsengine6 (1..PENDING_PAGE_MAX).
+        # ``before`` is the cursor from a previous page's ``next_cursor``,
+        # a ``[datestamp, id]`` pair. A malformed cursor is a client error.
         try:
-            messages = get_pending_messages(moniker, limit=100)
+            limit = int(message.get("limit", 50))
+        except (TypeError, ValueError):
+            limit = 50
+        before = None
+        raw_before = message.get("before")
+        if raw_before is not None:
+            if (
+                not isinstance(raw_before, (list, tuple))
+                or len(raw_before) != 2
+                or not isinstance(raw_before[1], int)
+            ):
+                return {
+                    "type": "message_list_pending_result",
+                    "ok": False,
+                    "code": "invalid_cursor",
+                    "message": "before must be [datestamp, id]",
+                    "messages": [],
+                    "recoverable": True,
+                }
+            before = (raw_before[0], raw_before[1])
+
+        try:
+            messages = get_pending_page(moniker, limit=limit, before=before)
         except Exception as e:
             io.echo_traceback("bed.api.message._handle_list_pending:")
             return {
@@ -743,11 +770,17 @@ class MessageService(BaseService):
                 "message": str(e),
                 "messages": [],
             }
+
+        next_cursor = None
+        if messages and len(messages) >= max(1, min(limit, 100)):
+            last = messages[-1]
+            next_cursor = [str(last["datestamp"]), last["id"]]
         return {
             "type": "message_list_pending_result",
             "ok": True,
             "moniker": moniker,
             "messages": messages,
+            "next_cursor": next_cursor,
         }
 
 

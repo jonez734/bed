@@ -489,13 +489,16 @@ def _apply_message_config(cfg: dict) -> None:
     if not isinstance(msg, dict):
         return
     roles = msg.get("everyone_allowed_roles")
-    if roles is None:
-        return
-    if not isinstance(roles, list) or not all(isinstance(r, str) for r in roles):
+    if roles is not None and (
+        not isinstance(roles, list) or not all(isinstance(r, str) for r in roles)
+    ):
         raise ValueError("message.everyone_allowed_roles must be a list of strings")
+    days = msg.get("pending_max_age_days")
+    if days is not None and (not isinstance(days, int) or isinstance(days, bool) or days < 0):
+        raise ValueError("message.pending_max_age_days must be an integer >= 0")
     from bbsengine6 import message as _bbs_message
 
-    _bbs_message.configure(everyone_allowed_roles=roles)
+    _bbs_message.configure(everyone_allowed_roles=roles, pending_max_age_days=days)
 
 
 def _apply_websocket_config(args: argparse.Namespace, cfg: dict) -> None:

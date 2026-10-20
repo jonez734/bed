@@ -65,6 +65,7 @@
   },
   "message": {
     "everyone_allowed_roles": ["sysop"],
+    "pending_max_age_days": 0,
     "_comment": "Roles allowed to address @everyone in a message. Supported: sysop. Applied to bbsengine6.message.configure() at startup. Non-matching senders get a denied result; nothing is stored."
   },
   "websocket": {
