@@ -19,6 +19,21 @@ from bed.client.exceptions import BedUnavailable
 logger = logging.getLogger(__name__)
 
 
+def _exact_unread(moniker: str) -> int:
+    """Authoritative unread count from the DB (pending + delivered).
+
+    Runs on the push executor thread. Returns 0 if bbsengine6 cannot
+    count (no DB configured), so a failed recount never raises into the
+    push path.
+    """
+    from bbsengine6 import message as message_module
+
+    try:
+        return int(message_module.get_unread_count(moniker) or 0)
+    except Exception:
+        return 0
+
+
 class BedMessageServiceClient:
     """Client for bed's MessageService.
 
@@ -69,15 +84,19 @@ class BedMessageServiceClient:
                 return
             if msg.get("recipient_moniker") != moniker:
                 return
-            status = msg.get("status", "pending")
+            # The NOTIFY payload carries only the NEW status, not the old
+            # one, so a delta cannot be computed from the push alone
+            # (pending->delivered and a fresh delivered insert look the
+            # same). Treat the push as a signal to recount, and write only
+            # an exact DB count. This cannot drift and tolerates a missed
+            # or reordered push.
             try:
-                if status == "read":
-                    message_module.bump_local_unread_count(moniker, -1)
-                elif status == "pending":
-                    message_module.bump_local_unread_count(moniker, 1)
+                message_module.set_local_unread_count(
+                    moniker, _exact_unread(moniker)
+                )
             except Exception as e:
                 logger.warning(
-                    "BedMessageClient: local unread update failed for %s: %s",
+                    "BedMessageClient: unread recount failed for %s: %s",
                     moniker,
                     e,
                 )
