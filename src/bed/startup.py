@@ -29,7 +29,14 @@ def _ensure_bed_token_table(args, conn):
         f"{{var:labelcolor}}: ",
         end="",
     )
-    for sqlfile in ("bed_token.sql", "bed_token_functions.sql"):
+    # Order matters: the token table, then its functions, then the message
+    # read functions, then the grants that revoke install-only rights from bed.
+    for sqlfile in (
+        "bed_token.sql",
+        "bed_token_functions.sql",
+        "bed_message_read_functions.sql",
+        "bed_service_grants.sql",
+    ):
         ok = database.importsql(args, sqlfile, conn=conn, rollback=False, package="bed")
         if ok is False:
             io.echo(f"{{level.error}} fail ({sqlfile}) ", level="error")
