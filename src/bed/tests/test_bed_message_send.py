@@ -57,7 +57,7 @@ def test_slice_one_refuses_groups_and_broadcast():
 def test_security_definer_with_pinned_search_path():
     text = _text()
     assert "SECURITY DEFINER" in text
-    assert re.search(r"SET\s+search_path\s*=\s*engine\s*,\s*pg_temp", text, re.IGNORECASE)
+    assert re.search(r"SET\s+search_path\s*=\s*engine\s*,\s*public\s*,\s*pg_temp", text, re.IGNORECASE)
 
 
 def test_owned_by_zoid6_and_execute_only_to_bed():

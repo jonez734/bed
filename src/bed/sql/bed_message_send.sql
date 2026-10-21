@@ -21,7 +21,7 @@ CREATE OR REPLACE FUNCTION engine.bed_message_send(
 RETURNS bigint
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = engine, pg_temp
+SET search_path = engine, public, pg_temp
 AS $$
 DECLARE
     v_sender citext;

@@ -15,7 +15,7 @@ CREATE OR REPLACE FUNCTION engine.bed_group_create(p_token_hash bytea, p_name te
 RETURNS bigint
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = engine, pg_temp
+SET search_path = engine, public, pg_temp
 AS $$
 DECLARE
     v_actor citext;
@@ -54,7 +54,7 @@ CREATE OR REPLACE FUNCTION engine.bed_group_add_member(p_token_hash bytea, p_nam
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = engine, pg_temp
+SET search_path = engine, public, pg_temp
 AS $$
 DECLARE
     v_actor citext;
@@ -91,7 +91,7 @@ CREATE OR REPLACE FUNCTION engine.bed_group_remove_member(p_token_hash bytea, p_
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = engine, pg_temp
+SET search_path = engine, public, pg_temp
 AS $$
 DECLARE
     v_actor citext;
@@ -128,7 +128,7 @@ CREATE OR REPLACE FUNCTION engine.bed_group_delete(p_token_hash bytea, p_name te
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = engine, pg_temp
+SET search_path = engine, public, pg_temp
 AS $$
 DECLARE
     v_actor citext;

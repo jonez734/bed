@@ -41,7 +41,7 @@ def test_functions_take_hash_not_token():
 def test_security_definer_with_pinned_search_path():
     text = _text()
     assert len(re.findall(r"SECURITY\s+DEFINER", text, re.IGNORECASE)) == 4
-    assert len(re.findall(r"SET\s+search_path\s*=\s*engine\s*,\s*pg_temp", text, re.IGNORECASE)) == 4
+    assert len(re.findall(r"SET\s+search_path\s*=\s*engine\s*,\s*public\s*,\s*pg_temp", text, re.IGNORECASE)) == 4
 
 
 def test_functions_owned_by_zoid6():

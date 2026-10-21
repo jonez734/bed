@@ -53,7 +53,7 @@ def test_count_unread_function_signature():
 def test_both_functions_are_security_definer_with_fixed_search_path():
     text = _text()
     assert len(re.findall(r"SECURITY\s+DEFINER", text, re.IGNORECASE)) == 2
-    assert len(re.findall(r"SET\s+search_path\s*=\s*engine\s*,\s*pg_temp", text, re.IGNORECASE)) == 2
+    assert len(re.findall(r"SET\s+search_path\s*=\s*engine\s*,\s*public\s*,\s*pg_temp", text, re.IGNORECASE)) == 2
 
 
 def test_old_four_argument_overload_is_dropped():

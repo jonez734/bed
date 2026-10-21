@@ -35,7 +35,7 @@ RETURNS TABLE (
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
-SET search_path = engine, pg_temp
+SET search_path = engine, public, pg_temp
 AS $$
     SELECT
         m.id, m.channel, m.sender_moniker, m.content, m.data,
@@ -56,7 +56,7 @@ RETURNS bigint
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
-SET search_path = engine, pg_temp
+SET search_path = engine, public, pg_temp
 AS $$
     SELECT COUNT(*)
     FROM engine.__message_recipient r

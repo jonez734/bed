@@ -21,7 +21,7 @@ CREATE OR REPLACE FUNCTION engine.bed_token_put(
 RETURNS void
 LANGUAGE sql
 SECURITY DEFINER
-SET search_path = engine, pg_temp
+SET search_path = engine, public, pg_temp
 AS $$
     INSERT INTO engine.__bed_token
         (token_hash, moniker, session_id, issued_at, expires_at,
@@ -56,7 +56,7 @@ RETURNS TABLE (
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
-SET search_path = engine, pg_temp
+SET search_path = engine, public, pg_temp
 AS $$
     SELECT t.moniker, t.session_id,
            EXTRACT(EPOCH FROM t.issued_at)::double precision,
@@ -70,7 +70,7 @@ CREATE OR REPLACE FUNCTION engine.bed_token_delete(p_token_hash bytea)
 RETURNS boolean
 LANGUAGE sql
 SECURITY DEFINER
-SET search_path = engine, pg_temp
+SET search_path = engine, public, pg_temp
 AS $$
     WITH d AS (
         DELETE FROM engine.__bed_token WHERE token_hash = p_token_hash RETURNING 1
@@ -82,7 +82,7 @@ CREATE OR REPLACE FUNCTION engine.bed_token_gc(p_now double precision DEFAULT NU
 RETURNS bigint
 LANGUAGE sql
 SECURITY DEFINER
-SET search_path = engine, pg_temp
+SET search_path = engine, public, pg_temp
 AS $$
     WITH d AS (
         DELETE FROM engine.__bed_token

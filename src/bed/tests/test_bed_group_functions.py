@@ -55,7 +55,7 @@ def test_delete_requires_sysop_or_creator():
 def test_security_definer_pinned_and_execute_only_to_bed():
     text = _text()
     assert len(re.findall(r"SECURITY\s+DEFINER", text, re.IGNORECASE)) == 4
-    assert len(re.findall(r"SET\s+search_path\s*=\s*engine\s*,\s*pg_temp", text, re.IGNORECASE)) == 4
+    assert len(re.findall(r"SET\s+search_path\s*=\s*engine\s*,\s*public\s*,\s*pg_temp", text, re.IGNORECASE)) == 4
     assert len(re.findall(r"TO\s+bed\b", text, re.IGNORECASE)) == 4
     assert len(re.findall(r"FROM\s+PUBLIC", text, re.IGNORECASE)) == 4
 
