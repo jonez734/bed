@@ -72,6 +72,10 @@
     "bell_window_seconds": 5,
     "_comment": "Terminal bell for new messages. One bell per window: notifications that arrive within bell_window_seconds of the first share that bell. Applied to bbsengine6.io.set_bell_window_seconds() at startup. Must be >= 0."
   },
+  "bind": [
+    {"host": "127.0.0.1", "port": 8765},
+    {"host": "::1", "port": 8765}
+  ],
   "websocket": {
     "ping_interval": 60,
     "ping_timeout": 600,
