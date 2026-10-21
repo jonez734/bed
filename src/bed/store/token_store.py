@@ -20,23 +20,7 @@ def token_hash(token: str) -> bytes:
 
 
 def put_sql() -> str:
-    return f"""
-        INSERT INTO {TABLE}
-            (token_hash, moniker, session_id, issued_at, expires_at,
-             is_sysop, bed_instance_id, websocket_id, claims, loginid)
-        VALUES (%s, %s, %s, to_timestamp(%s), to_timestamp(%s),
-                %s, %s, %s, %s::jsonb, %s)
-        ON CONFLICT (token_hash) DO UPDATE SET
-            moniker = EXCLUDED.moniker,
-            session_id = EXCLUDED.session_id,
-            issued_at = EXCLUDED.issued_at,
-            expires_at = EXCLUDED.expires_at,
-            is_sysop = EXCLUDED.is_sysop,
-            bed_instance_id = EXCLUDED.bed_instance_id,
-            websocket_id = EXCLUDED.websocket_id,
-            claims = EXCLUDED.claims,
-            loginid = EXCLUDED.loginid
-    """
+    return "SELECT engine.bed_token_put(%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)"
 
 
 def put_params(record: Any) -> tuple:
@@ -55,14 +39,7 @@ def put_params(record: Any) -> tuple:
 
 
 def get_sql() -> str:
-    return f"""
-        SELECT moniker, session_id,
-               EXTRACT(EPOCH FROM issued_at)::double precision AS issued_at,
-               EXTRACT(EPOCH FROM expires_at)::double precision AS expires_at,
-               is_sysop, bed_instance_id, websocket_id, claims, loginid
-        FROM {TABLE}
-        WHERE token_hash = %s AND expires_at > now()
-    """
+    return "SELECT * FROM engine.bed_token_get(%s)"
 
 
 def get_params(token: str) -> tuple:
@@ -70,7 +47,7 @@ def get_params(token: str) -> tuple:
 
 
 def delete_sql() -> str:
-    return f"DELETE FROM {TABLE} WHERE token_hash = %s"
+    return "SELECT engine.bed_token_delete(%s)"
 
 
 def delete_params(token: str) -> tuple:
@@ -78,6 +55,5 @@ def delete_params(token: str) -> tuple:
 
 
 def gc_sql(now: Optional[float]) -> tuple:
-    if now is None:
-        return f"DELETE FROM {TABLE} WHERE expires_at <= now()", ()
-    return f"DELETE FROM {TABLE} WHERE expires_at <= to_timestamp(%s)", (float(now),)
+    """Call the zoid6-owned gc function. ``now`` None means the database clock."""
+    return "SELECT engine.bed_token_gc(%s)", (None if now is None else float(now),)

@@ -29,10 +29,11 @@ def _ensure_bed_token_table(args, conn):
         f"{{var:labelcolor}}: ",
         end="",
     )
-    ok = database.importsql(args, "bed_token.sql", conn=conn, rollback=False, package="bed")
-    if ok is False:
-        io.echo("{{level.error}} fail ", level="error")
-        return False
+    for sqlfile in ("bed_token.sql", "bed_token_functions.sql"):
+        ok = database.importsql(args, sqlfile, conn=conn, rollback=False, package="bed")
+        if ok is False:
+            io.echo(f"{{level.error}} fail ({sqlfile}) ", level="error")
+            return False
     io.echo("{{level.ok}} ok  ")
     return True
 

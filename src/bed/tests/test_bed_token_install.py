@@ -44,3 +44,17 @@ def test_runtime_path_does_not_create_token_table():
     src = inspect.getsource(startup.verify_install)
     assert "_ensure_bed_token_table" not in src
     assert "importsql" not in src
+
+
+def test_install_runs_token_functions_after_table():
+    startup = importlib.import_module("bed.startup")
+    src = inspect.getsource(startup._ensure_bed_token_table)
+    assert src.index('"bed_token.sql"') < src.index('"bed_token_functions.sql"')
+    assert "importsql(" in src
+
+
+def test_store_sql_calls_functions_not_table():
+    from bed.store import token_store as s
+    for sql in (s.put_sql(), s.get_sql(), s.delete_sql()):
+        assert "__bed_token" not in sql
+        assert "engine.bed_token_" in sql

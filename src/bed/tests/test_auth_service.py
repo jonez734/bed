@@ -1164,7 +1164,7 @@ class TestDBTokenStoreGcExpiredArgs(unittest.TestCase):
 
         cursor_cm.execute.assert_called_once()
         sql, params = cursor_cm.execute.call_args.args
-        self.assertIn("to_timestamp(%s)", sql)
+        self.assertIn("engine.bed_token_gc(", sql)
         self.assertEqual(params, (1234.5,))
 
     def test_gc_expired_uses_now_when_omitted(self) -> None:
@@ -1191,8 +1191,8 @@ class TestDBTokenStoreGcExpiredArgs(unittest.TestCase):
 
         cursor_cm.execute.assert_called_once()
         sql, params = cursor_cm.execute.call_args.args
-        self.assertIn("WHERE expires_at <= now()", sql)
-        self.assertEqual(params, ())
+        self.assertIn("engine.bed_token_gc(", sql)
+        self.assertEqual(params, (None,))
 
 
 class TestSecretUpgrade(unittest.TestCase):

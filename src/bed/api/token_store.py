@@ -245,7 +245,8 @@ class DBTokenStore:
         with connect(self._args, pool=pool) as conn:
             with _cursor(conn) as cur:
                 cur.execute(_store.delete_sql(), _store.delete_params(token))
-                return cur.rowcount > 0
+                row = cur.fetchone()
+                return bool(row["bed_token_delete"]) if row else False
 
     def gc_expired(self, now: Optional[float] = None) -> int:
         from bbsengine6.database import connect, cursor as _cursor
@@ -255,7 +256,8 @@ class DBTokenStore:
         with connect(self._args, pool=pool) as conn:
             with _cursor(conn) as cur:
                 cur.execute(sql, params)
-                return cur.rowcount
+                row = cur.fetchone()
+                return int(row["bed_token_gc"]) if row else 0
 
 
 def _now_ts() -> float:

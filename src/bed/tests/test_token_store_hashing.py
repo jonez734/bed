@@ -80,7 +80,7 @@ def test_get_queries_by_hash():
 
 
 def test_delete_queries_by_hash():
-    cur = _FakeCursor(rowcount=1)
+    cur = _FakeCursor(rows=[{"bed_token_delete": True}], rowcount=1)
     store = ts.DBTokenStore(MagicMock())
     store._pool = lambda: MagicMock()
     with patch("bbsengine6.database.connect") as connect, \
@@ -127,3 +127,15 @@ def test_get_returns_caller_token_since_db_holds_only_hash():
         rec = store.get("RAW-SECRET-TOKEN")
     assert rec is not None
     assert rec.token == "RAW-SECRET-TOKEN"
+
+
+def test_delete_reads_function_boolean_not_rowcount():
+    cur = _FakeCursor(rows=[{"bed_token_delete": False}])
+    cur.rowcount = 1  # a SELECT always reports 1; must not be trusted
+    store = ts.DBTokenStore(MagicMock())
+    store._pool = lambda: MagicMock()
+    with patch("bbsengine6.database.connect") as connect, \
+         patch("bbsengine6.database.cursor") as cursor:
+        connect.return_value.__enter__.return_value = MagicMock()
+        cursor.return_value.__enter__.return_value = cur
+        assert store.delete("RAW-SECRET-TOKEN") is False
