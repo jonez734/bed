@@ -1321,6 +1321,9 @@ async def main_async() -> None:
             level="error",
         )
         sys.exit(1)
+    if getattr(args, "install", False):
+        io.echo("bed --install complete; exiting without starting the daemon", level="ok")
+        sys.exit(0)
 
     restart_count = 0
     shutdown_requested = False

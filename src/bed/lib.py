@@ -78,6 +78,16 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
     """Add BED arguments to parent parser."""
     databasebuildargs(parentparser)
     parentparser.add_argument(
+        "--install",
+        action="store_true",
+        default=False,
+        help=(
+            "Run the full bbsengine6 bootstrap and casino setup, then exit. "
+            "Run once per install as the install owner (zoid6). The service "
+            "start path does not run this."
+        ),
+    )
+    parentparser.add_argument(
         "--host",
         default="127.0.0.1",
         help=(

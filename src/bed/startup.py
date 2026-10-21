@@ -57,9 +57,42 @@ def _ensure_bed_role(args, conn):
     return True
 
 
+def verify_install(args) -> bool:
+    """Read-only check used on the service start path.
+
+    Confirms the target database is reachable and the ``engine`` schema
+    exists. Does not run the superuser gate, DDL, or grants; those belong
+    to ``bed --install``, run once per install by the owner.
+    """
+    try:
+        pool = database.getpool(args, dbname=args.databasename)
+        with database.connect(args, pool=pool) as conn:
+            present = database.schemaexists(args, "engine", conn=conn)
+    except (
+        ConnectionError,
+        TimeoutError,
+        OSError,
+        psycopg.OperationalError,
+    ) as exc:
+        io.echo(f"bed-startup: cannot verify install: {exc}", level="error")
+        return False
+    if present is not True:
+        io.echo(
+            "bed-startup: install not present (schema 'engine' missing). "
+            "Run 'bed --install' once as the install owner.",
+            level="error",
+        )
+        return False
+    return True
+
+
 def ensure_startup(args):
-    """Run bbsengine6 startup, ensure the bed role exists, then bootstrap
-    the casino schema.
+    """Start-up entry point.
+
+    With ``args.install`` set, runs the full bootstrap (bbsengine6 startup,
+    the bed role, casino). Otherwise only verifies the install is present
+    via :func:`verify_install`, so the service start path needs no
+    superuser and no DDL.
 
     Idempotent: safe to call repeatedly.  Returns True on success, False
     on failure.  Non-interactive: does not parse arguments or call
@@ -73,6 +106,9 @@ def ensure_startup(args):
     ``bin/bed-startup`` shim exits cleanly with a useful message rather
     than a Python traceback.
     """
+    if not getattr(args, "install", False):
+        return verify_install(args)
+
     try:
         result = startuplib.runmodule(args, "main")
     except (
