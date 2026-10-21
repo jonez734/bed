@@ -14,8 +14,7 @@ EnvironmentFile=-/etc/bed/bed.env
 
 ExecStart=/var/lib/bed/venv/bin/bed \
   --config /etc/zoid6/zoid6.json \
-  --router zoid6.api.handler.MessageRouter \
-  --no-autorestart
+  --router zoid6.api.handler.MessageRouter
 
 ExecReload=/bin/kill -HUP $MAINPID
 
