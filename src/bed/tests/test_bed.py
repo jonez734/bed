@@ -1549,6 +1549,8 @@ class TestPhase2BED(unittest.IsolatedAsyncioTestCase):
                 order.append(("server_stop",))
             def register_service(self, router, names):
                 order.append(("register_service", tuple(names)))
+            def register_router(self, router):
+                order.append(("register_router",))
             def list_services(self):
                 return []  # for the post-start log
 

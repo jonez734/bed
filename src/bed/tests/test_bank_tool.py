@@ -139,7 +139,9 @@ def test_buildargs_registers_expected_flags():
     parser = argparse.ArgumentParser()
     tool.buildargs(parser)
     a = parser.parse_args([])
-    assert a.databasename == "zoid6"
+    # bbsengine6's default is the NEEDINFO sentinel; the service always passes
+    # --databasename zoid6 explicitly (see zoid6.service).
+    assert a.databasename == "NEEDINFO"
     assert a.moniker is None
     assert a.sysop is False
     assert a.debug is False
