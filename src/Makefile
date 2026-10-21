@@ -8,6 +8,11 @@ PIP ?= $(PYTHON) -m pip
 UNIT_SRC = bed/daemon/bed.service
 UNIT_DST = /usr/lib/systemd/system/bed.service
 
+ZOID6_UNIT_SRC = bed/daemon/zoid6.service
+ZOID6_UNIT_DST = /usr/lib/systemd/system/zoid6.service
+ZOID6_FACTORY = ../../zoid6/usr/share/factory/etc/zoid6/zoid6.json
+ZOID6_ETC_DIR = /etc/zoid6
+
 SYSUSERS_SRC = bed/daemon/bed.sysusers
 SYSUSERS_DST = /usr/lib/sysusers.d/bed.conf
 
@@ -79,6 +84,35 @@ uninstall-systemd:
 	-rm -f $(UNIT_DST)
 	-systemctl daemon-reload
 	@echo "Removed $(UNIT_DST)"
+
+# The zoid6 unit runs bed (owned by the bed user, venv at /var/lib/bed/venv)
+# with zoid6's router. zoid6 must be importable from that venv or the unit
+# fails at start. zoid6's own install-venv target uses /var/lib/zoid6/venv
+# (owner zoid6) and does NOT satisfy this; install into the bed venv instead:
+#   sudo -u bed /var/lib/bed/venv/bin/pip install ../../zoid6/src
+install-zoid6-systemd:
+	@if ! /var/lib/bed/venv/bin/python -c "import zoid6" 2>/dev/null; then \
+		echo "ERROR: zoid6 is not installed in /var/lib/bed/venv. Install it there first:" >&2; \
+		echo "  sudo -u bed /var/lib/bed/venv/bin/pip install ../../zoid6/src" >&2; \
+		exit 1; \
+	fi
+	install -m 0644 $(ZOID6_UNIT_SRC) $(ZOID6_UNIT_DST)
+	install -d $(ZOID6_ETC_DIR)
+	@if [ ! -f $(ZOID6_ETC_DIR)/zoid6.json ]; then \
+		install -m 0644 $(ZOID6_FACTORY) $(ZOID6_ETC_DIR)/zoid6.json; \
+		echo "Installed $(ZOID6_ETC_DIR)/zoid6.json from factory defaults"; \
+	else \
+		echo "Kept existing $(ZOID6_ETC_DIR)/zoid6.json"; \
+	fi
+	systemctl daemon-reload
+	@echo "Installed $(ZOID6_UNIT_DST). Run: systemctl enable --now zoid6"
+
+uninstall-zoid6-systemd:
+	-systemctl stop zoid6
+	-systemctl disable zoid6
+	-rm -f $(ZOID6_UNIT_DST)
+	-systemctl daemon-reload
+	@echo "Removed $(ZOID6_UNIT_DST). $(ZOID6_ETC_DIR)/zoid6.json left in place."
 
 install-etc:
 	install -d $(ETC_DIR)
