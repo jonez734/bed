@@ -1,5 +1,5 @@
 -- bed/sql/bed_message_send.sql
--- Session-bound message send for bed (slice 1: direct recipients).
+-- Session-bound message send for bed (direct recipients, @everyone, one-level groups).
 --
 -- bed calls engine.bed_message_send with the SHA-256 digest of the bearer
 -- token. The sender is read from engine.__bed_token for that hash, so bed
@@ -31,6 +31,9 @@ DECLARE
     v_limit integer;
     v_hour timestamp;
     v_count integer;
+    v_expanded citext[];
+    v_token text;
+    v_group_id integer;
 BEGIN
     SELECT t.moniker INTO v_sender
     FROM engine.__bed_token t
@@ -44,17 +47,62 @@ BEGIN
         RAISE EXCEPTION 'bed_message_send: at least one recipient is required';
     END IF;
 
-    -- Refuse group and broadcast addressing (later slices).
+    -- Expand recipient tokens. Direct monikers pass through. @everyone and
+    -- @<group> expand here (one level). @here needs the host's location
+    -- resolver, which the database does not have, so it is refused. Nested
+    -- groups are refused rather than flattened.
+    v_expanded := ARRAY[]::citext[];
     FOREACH v_recipient IN ARRAY p_recipients LOOP
-        IF left(v_recipient::text, 1) = '@' THEN
-            RAISE EXCEPTION 'bed_message_send: group and broadcast addressing is not yet supported (%)', v_recipient;
+        IF left(v_recipient::text, 1) <> '@' THEN
+            v_expanded := v_expanded || v_recipient;
+            CONTINUE;
+        END IF;
+
+        v_token := lower(substr(v_recipient::text, 2));
+
+        IF v_token = 'here' THEN
+            RAISE EXCEPTION 'bed_message_send: @here is not yet supported for bed sends';
+        ELSIF v_token = 'everyone' THEN
+            IF NOT (engine.checkmemberflag(v_sender, 'sysop') IS TRUE) THEN
+                RAISE EXCEPTION 'bed_message_send: only sysops may address @everyone';
+            END IF;
+            v_expanded := v_expanded || ARRAY(
+                SELECT m.moniker FROM engine.__member m WHERE m.approved = TRUE
+            );
+        ELSE
+            SELECT g.id INTO v_group_id FROM engine.__message_group g WHERE g.name = substr(v_recipient::text, 2);
+            IF v_group_id IS NULL THEN
+                RAISE EXCEPTION 'bed_message_send: unknown group %', v_recipient;
+            END IF;
+            IF NOT (engine.checkmemberflag(v_sender, 'sysop') IS TRUE)
+               AND NOT EXISTS (
+                   SELECT 1 FROM engine.__message_group_member gm
+                   WHERE gm.group_id = v_group_id AND gm.member_moniker = v_sender
+               ) THEN
+                RAISE EXCEPTION 'bed_message_send: only members of % (or sysops) may address it', v_recipient;
+            END IF;
+            IF EXISTS (
+                SELECT 1 FROM engine.__message_group_member gm
+                WHERE gm.group_id = v_group_id AND gm.member_moniker::text LIKE '@%'
+            ) THEN
+                RAISE EXCEPTION 'bed_message_send: nested groups are not yet supported (%)', v_recipient;
+            END IF;
+            v_expanded := v_expanded || ARRAY(
+                SELECT gm.member_moniker FROM engine.__message_group_member gm WHERE gm.group_id = v_group_id
+            );
         END IF;
     END LOOP;
+
+    -- De-duplicate while keeping first-seen order (matches resolve_recipients).
+    SELECT COALESCE(array_agg(x ORDER BY ord), '{}') INTO v_expanded
+    FROM (
+        SELECT x, min(ord) AS ord FROM unnest(v_expanded) WITH ORDINALITY AS t(x, ord) GROUP BY x
+    ) d;
 
     -- Drop recipients who have blocked the sender. A blocked recipient is
     -- skipped, not an error, matching the service layer.
     SELECT COALESCE(array_agg(r ORDER BY r), '{}') INTO v_allowed
-    FROM unnest(p_recipients) AS r
+    FROM unnest(v_expanded) AS r
     WHERE NOT EXISTS (
         SELECT 1 FROM engine.__message_block b
         WHERE b.blocker_moniker = r AND b.blocked_moniker = v_sender

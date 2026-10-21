@@ -99,3 +99,26 @@ def test_no_row_stored_when_every_recipient_blocked():
     text = _text()
     assert re.search(r"RAISE\s+EXCEPTION.*no recipients", text, re.IGNORECASE | re.DOTALL) or \
         re.search(r"RETURN\s+NULL", text, re.IGNORECASE)
+
+
+def test_everyone_limited_to_sysop_and_expands_approved_members():
+    text = _text()
+    assert re.search(r"engine\.checkmemberflag\(\s*v_sender\s*,\s*'sysop'\s*\)", text, re.IGNORECASE)
+    assert re.search(r"FROM\s+engine\.__member\s+\w+\s+WHERE\s+\w+\.approved\s*=\s*TRUE", text, re.IGNORECASE)
+
+
+def test_named_group_requires_membership_or_sysop():
+    text = _text()
+    assert re.search(r"FROM\s+engine\.__message_group\s+\w+\s+WHERE\s+\w+\.name\s*=", text, re.IGNORECASE)
+    assert re.search(r"FROM\s+engine\.__message_group_member", text, re.IGNORECASE)
+
+
+def test_here_and_sources_remain_refused_in_sql():
+    text = _text()
+    assert re.search(r"RAISE\s+EXCEPTION\s+'bed_message_send:\s+@here is not yet supported", text, re.IGNORECASE)
+    assert re.search(r"not yet supported", text, re.IGNORECASE)
+
+
+def test_nested_groups_refused_not_silently_flattened():
+    text = _text()
+    assert re.search(r"nested", text, re.IGNORECASE)
