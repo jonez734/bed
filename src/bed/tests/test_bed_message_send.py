@@ -75,3 +75,27 @@ def test_install_runs_send_function():
     src = inspect.getsource(startup._ensure_bed_token_table)
     assert '"bed_message_send.sql"' in src
     assert src.index('"bed_message_read_functions.sql"') < src.index('"bed_message_send.sql"') < src.index('"bed_service_grants.sql"')
+
+
+def test_blocked_recipients_are_dropped_in_sql():
+    text = _text()
+    assert re.search(r"FROM\s+engine\.__message_block", text, re.IGNORECASE)
+    assert re.search(r"blocker_moniker\s*=\s*r\b|blocker_moniker\s*=\s*recipient", text, re.IGNORECASE)
+
+
+def test_rate_limit_reserved_atomically_after_block_check():
+    text = _text()
+    assert re.search(r"INSERT\s+INTO\s+engine\.__message_rate_limit", text, re.IGNORECASE)
+    assert re.search(r"WHERE\s+engine\.__message_rate_limit\.message_count\s*<", text, re.IGNORECASE)
+    assert text.index("__message_block") < text.index("__message_rate_limit")
+
+
+def test_refuses_when_rate_limit_reached():
+    text = _text()
+    assert re.search(r"RAISE\s+EXCEPTION.*rate", text, re.IGNORECASE | re.DOTALL)
+
+
+def test_no_row_stored_when_every_recipient_blocked():
+    text = _text()
+    assert re.search(r"RAISE\s+EXCEPTION.*no recipients", text, re.IGNORECASE | re.DOTALL) or \
+        re.search(r"RETURN\s+NULL", text, re.IGNORECASE)

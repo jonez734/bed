@@ -27,6 +27,10 @@ DECLARE
     v_sender citext;
     v_id bigint;
     v_recipient citext;
+    v_allowed citext[];
+    v_limit integer;
+    v_hour timestamp;
+    v_count integer;
 BEGIN
     SELECT t.moniker INTO v_sender
     FROM engine.__bed_token t
@@ -40,18 +44,52 @@ BEGIN
         RAISE EXCEPTION 'bed_message_send: at least one recipient is required';
     END IF;
 
+    -- Refuse group and broadcast addressing (later slices).
     FOREACH v_recipient IN ARRAY p_recipients LOOP
         IF left(v_recipient::text, 1) = '@' THEN
             RAISE EXCEPTION 'bed_message_send: group and broadcast addressing is not yet supported (%)', v_recipient;
         END IF;
     END LOOP;
 
+    -- Drop recipients who have blocked the sender. A blocked recipient is
+    -- skipped, not an error, matching the service layer.
+    SELECT COALESCE(array_agg(r ORDER BY r), '{}') INTO v_allowed
+    FROM unnest(p_recipients) AS r
+    WHERE NOT EXISTS (
+        SELECT 1 FROM engine.__message_block b
+        WHERE b.blocker_moniker = r AND b.blocked_moniker = v_sender
+    );
+
+    IF cardinality(v_allowed) = 0 THEN
+        RAISE EXCEPTION 'bed_message_send: no recipients accepted this message';
+    END IF;
+
+    -- Reserve one rate slot for this sender and channel in the current hour.
+    -- Done after the block check so a blocked send never consumes a slot.
+    SELECT rate_limit_per_hour INTO v_limit
+    FROM engine.__message_type WHERE type_name = p_channel;
+
+    IF v_limit IS NOT NULL AND v_limit > 0 THEN
+        v_hour := date_trunc('hour', now());
+        INSERT INTO engine.__message_rate_limit
+            (sender_moniker, message_type, hour_bucket, message_count)
+        VALUES (v_sender, p_channel, v_hour, 1)
+        ON CONFLICT (sender_moniker, message_type, hour_bucket)
+        DO UPDATE SET message_count = engine.__message_rate_limit.message_count + 1
+        WHERE engine.__message_rate_limit.message_count < v_limit
+        RETURNING message_count INTO v_count;
+
+        IF v_count IS NULL THEN
+            RAISE EXCEPTION 'bed_message_send: rate limit reached for this channel this hour';
+        END IF;
+    END IF;
+
     INSERT INTO engine.__message (channel, sender_moniker, content, urgency, source)
     VALUES (p_channel, v_sender, p_content, p_urgency::engine.notify_urgency_enum, 'member')
     RETURNING id INTO v_id;
 
     INSERT INTO engine.__message_recipient (message_id, recipient_moniker)
-    SELECT v_id, r FROM unnest(p_recipients) AS r
+    SELECT v_id, r FROM unnest(v_allowed) AS r
     ON CONFLICT DO NOTHING;
 
     RETURN v_id;
