@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Protocol
 
+from bed.store import token_store as _store
+
 
 @dataclass
 class TokenRecord:
@@ -175,15 +177,15 @@ class InMemoryTokenStore:
 
 
 class DBTokenStore:
-    """PostgreSQL-backed token store.
+    """PostgreSQL-backed token store (hashed).
 
-    Schema: see bed/src/bed/data/sql/bed_token.sql. The store owns no
-    connection: it borrows one from the bbsengine6 connection pool each
-    call. This matches the pattern used throughout bbsengine6.member /
-    bbsengine6.bank.
+    Schema: bed/src/bed/sql/bed_token.sql, installed by ``bed --install``.
+    The raw token is hashed by :mod:`bed.store.token_store` before it reaches
+    SQL. The store owns no connection and borrows one from the bbsengine6
+    pool each call.
     """
 
-    TABLE = "engine.__bed_token"
+    TABLE = _store.TABLE
 
     def __init__(self, args: Any) -> None:
         self._args = args
@@ -203,38 +205,7 @@ class DBTokenStore:
         pool = self._pool()
         with connect(self._args, pool=pool) as conn:
             with _cursor(conn) as cur:
-                cur.execute(
-                    f"""
-                    INSERT INTO {self.TABLE}
-                        (token, moniker, session_id, issued_at, expires_at,
-                         is_sysop, bed_instance_id, websocket_id, claims,
-                         loginid)
-                    VALUES (%s, %s, %s, to_timestamp(%s), to_timestamp(%s),
-                            %s, %s, %s, %s::jsonb, %s)
-                    ON CONFLICT (token) DO UPDATE SET
-                        moniker = EXCLUDED.moniker,
-                        session_id = EXCLUDED.session_id,
-                        issued_at = EXCLUDED.issued_at,
-                        expires_at = EXCLUDED.expires_at,
-                        is_sysop = EXCLUDED.is_sysop,
-                        bed_instance_id = EXCLUDED.bed_instance_id,
-                        websocket_id = EXCLUDED.websocket_id,
-                        claims = EXCLUDED.claims,
-                        loginid = EXCLUDED.loginid
-                    """,
-                    (
-                        record.token,
-                        record.moniker,
-                        record.session_id,
-                        record.issued_at,
-                        record.expires_at,
-                        record.is_sysop,
-                        record.bed_instance_id,
-                        record.websocket_id,
-                        json.dumps(record.claims),
-                        record.loginid,
-                    ),
-                )
+                cur.execute(_store.put_sql(), _store.put_params(record))
 
     def get(self, token: str) -> Optional[TokenRecord]:
         from bbsengine6.database import connect, cursor as _cursor
@@ -242,18 +213,7 @@ class DBTokenStore:
         pool = self._pool()
         with connect(self._args, pool=pool) as conn:
             with _cursor(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT token, moniker, session_id,
-                           EXTRACT(EPOCH FROM issued_at)::double precision AS issued_at,
-                           EXTRACT(EPOCH FROM expires_at)::double precision AS expires_at,
-                           is_sysop, bed_instance_id, websocket_id, claims,
-                           loginid
-                    FROM {self.TABLE}
-                    WHERE token = %s AND expires_at > now()
-                    """,
-                    (token,),
-                )
+                cur.execute(_store.get_sql(), _store.get_params(token))
                 row = cur.fetchone()
         if row is None:
             return None
@@ -266,7 +226,7 @@ class DBTokenStore:
         elif not isinstance(claims, dict):
             claims = {}
         return TokenRecord(
-            token=row["token"],
+            token=token,
             moniker=row["moniker"],
             session_id=row["session_id"],
             issued_at=float(row["issued_at"]),
@@ -284,25 +244,17 @@ class DBTokenStore:
         pool = self._pool()
         with connect(self._args, pool=pool) as conn:
             with _cursor(conn) as cur:
-                cur.execute(
-                    f"DELETE FROM {self.TABLE} WHERE token = %s",
-                    (token,),
-                )
+                cur.execute(_store.delete_sql(), _store.delete_params(token))
                 return cur.rowcount > 0
 
     def gc_expired(self, now: Optional[float] = None) -> int:
         from bbsengine6.database import connect, cursor as _cursor
 
         pool = self._pool()
-        if now is None:
-            cur_sql = f"DELETE FROM {self.TABLE} WHERE expires_at <= now()"
-            params: tuple = ()
-        else:
-            cur_sql = f"DELETE FROM {self.TABLE} WHERE expires_at <= to_timestamp(%s)"
-            params = (float(now),)
+        sql, params = _store.gc_sql(now)
         with connect(self._args, pool=pool) as conn:
             with _cursor(conn) as cur:
-                cur.execute(cur_sql, params)
+                cur.execute(sql, params)
                 return cur.rowcount
 
 
