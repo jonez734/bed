@@ -31,6 +31,7 @@ from .api import (
     get_provider,
     load_or_create_secret,
 )
+from . import push_subscriber
 from .startup import ensure_startup
 
 
@@ -1313,6 +1314,10 @@ async def main_async() -> None:
         # bbsengine6.module.load() already emitted io.echo_traceback(...).
         io.echo("BED exiting: router load failed", level="error")
         sys.exit(1)
+
+    # Register bed's push subscriber with bbsengine6 before serving, so
+    # bbsengine6 never imports bed for message push.
+    push_subscriber.register()
 
     if not ensure_startup(args):
         io.echo(
