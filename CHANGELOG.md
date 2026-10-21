@@ -12,6 +12,26 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### feat(token): hashed, install-time, restart-surviving bearer tokens
+
+- `--token-persistence=db` stores only the SHA-256 digest of each bearer
+  token (`engine.__bed_token.token_hash`). The raw token never reaches SQL.
+- The table is created by `bed --install` as the owner, from
+  `bed/sql/bed_token.sql`. It is no longer created lazily at runtime.
+- bed calls zoid6-owned `SECURITY DEFINER` functions
+  (`engine.bed_token_put/get/delete/gc`) and holds EXECUTE only, no table
+  privileges. The functions are in `bed/sql/bed_token_functions.sql`.
+- Tokens survive a `bed` restart with `db`, so a client can reconnect
+  without logging in again.
+- Expired rows are removed every 300 seconds (was 60), in a worker thread.
+- Hashing and SQL building live in `bed/store/token_store.py`, which has no
+  dependency on the auth service or the daemon, so it can be reused.
+- The zoid6 config (`zoid6.json` and its factory copy) selects `db`. The
+  code default stays `memory`. Existing installs must set
+  `"auth": {"token_persistence": "db"}` in `/etc/zoid6/zoid6.json` to opt in.
+- Removed the lazy schema at `bed/data/sql/bed_token.sql`. Earlier raw-token
+  rows, if any, are not migrated. The table was never created on live zoid6.
+
 ### docs(bed): consolidate, rewrite, and update docs and specs
 
 The `bed` docs tree is restructured to mirror `bbsengine6/handbook/`

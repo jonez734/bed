@@ -194,8 +194,9 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         help=(
             "Where issued tokens are stored. 'memory' (default) is the "
             "v1 in-process Dict[token, TokenRecord]; tokens are lost on "
-            "bed restart. 'db' persists to engine.__bed_token (schema in "
-            "bed/data/sql/bed_token.sql). 'none' disables AuthService "
+            "bed restart. 'db' persists hashed tokens to engine.__bed_token; "
+            "the table is installed by 'bed --install' (bed/sql/bed_token.sql), "
+            "and tokens survive restarts. 'none' disables AuthService "
             "entirely (same as using DefaultRouter)."
         ),
     )

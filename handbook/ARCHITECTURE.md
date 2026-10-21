@@ -63,7 +63,7 @@ src/bed/
 ├── daemon/               bed.service, bed.sysusers, bed.tmpfiles
 ├── data/
 │   ├── bed.json          Packaged default config
-│   └── sql/bed_token.sql Optional DB token-store schema
+│   └── sql/bed_token.sql Hashed DB token-store schema (installed by bed --install)
 ├── defaultrouter.py      DefaultRouter stub (no-credential)
 ├── lib.py                argparse
 ├── main.py               BED daemon entry point

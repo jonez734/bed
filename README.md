@@ -421,7 +421,7 @@ bed/
 │   ├── tools/              auth, bank, message, ping console-script CLIs
 │   ├── data/
 │   │   ├── bed.json        packaged default config
-│   │   └── sql/bed_token.sql   optional DB token-store schema
+│   │   └── sql/bed_token.sql   hashed DB token-store schema (bed --install)
 │   ├── _version.py         auto-stamped by `make version`
 │   ├── main.py             BED daemon entry point
 │   ├── startup.py          database bootstrap (bbsengine6 startup + bed role)

@@ -133,15 +133,31 @@ the same way as `bind.*` and `database.*`.
 
 ## Token storage
 
-- **memory** (default): in-process `Dict[token, TokenRecord]`, guarded
+- **memory** (code default): in-process `Dict[token, TokenRecord]`, guarded
   by a `threading.Lock`. Tokens are lost on `bed` restart; clients
   must re-`auth`. GC is lazy (a `get` evicts the record when it
   expires) plus a 60s background `gc_expired` sweep.
-- **db**: a `bed_token.sql` schema in `engine.__bed_token` (see
-  `bed/data/sql/bed_token.sql`); `INSERT ... ON CONFLICT DO UPDATE`
-  on issue, `SELECT WHERE expires_at > now()` on validate, `DELETE`
-  on revoke/expiry. The DB is applied lazily on first use; no
-  separate migration step.
+- **db** (set in the zoid6 config): tokens are stored in
+  `engine.__bed_token`, and they survive `bed` restarts, so a client can
+  reconnect with the same token. The table is created by
+  `bed --install` as the owner (zoid6), from `bed/sql/bed_token.sql`.
+  bed never creates it at runtime, and it holds no table privileges on it.
+  - **Hashing.** Only the SHA-256 digest of each token is stored (`token_hash
+    bytea`). The raw bearer token never reaches SQL, and a database read does
+    not expose live tokens.
+  - **Access.** bed calls three functions owned by zoid6 and granted to `bed`
+    with EXECUTE only: `engine.bed_token_put`, `engine.bed_token_get`, and
+    `engine.bed_token_delete`. `engine.bed_token_gc` removes expired rows. Each
+    takes the hash, not the token, and runs under a fixed `search_path`.
+  - **Expiry.** `get` returns a row only while `expires_at > now()`, so an
+    expired row never authenticates, even before it is removed.
+  - **Cleanup.** A background task calls `engine.bed_token_gc` every 300
+    seconds (5 minutes), in a worker thread, so it cannot stall the event loop.
+  - **Reuse.** The hashing and SQL-building logic live in
+    `bed/store/token_store.py`, which imports nothing from the auth service,
+    the daemon, or any role name, so other callers can use it.
+  - Choosing `db` is a deployment decision made in config. The code default
+    stays `memory`.
 - **none**: disables `AuthService` entirely. Equivalent to using
   `DefaultRouter` regardless of the `--router` choice.
 
@@ -355,8 +371,8 @@ required in cluster mode rather than opt-in:
 - In `BED._start_auth` (`bed/main.py:199-241`), when
   `--bed-secret-source=env` (or whatever opt-in is chosen) is on,
   refuse to start with `token_persistence=memory`. The error
-  message points at `bed/data/sql/bed_token.sql` (referenced from
-  `bed/api/token_store.py:140-144`).
+  message points at `bed/sql/bed_token.sql` (installed by
+  `bed --install`; see `bed/store/token_store.py`).
 - `DBTokenStore` (`bed/api/token_store.py:112-231`) is already
   correct for the cross-node get/put/delete contract; no changes
   to its SQL.
@@ -420,8 +436,8 @@ seams:
   `bed_instance_ids` is set; default `false` otherwise.
 - `auth.token_persistence` is unchanged as a value, but the
   cluster-mode doc must call out that `db` is required (not the
-  default) and that `bed/data/sql/bed_token.sql` is applied
-  lazily on first use.
+  default) and that `bed/sql/bed_token.sql` is installed by
+  `bed --install` as the owner, not applied at runtime.
 
 ### Things to fix in passing (not blocking)
 
