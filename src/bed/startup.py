@@ -19,6 +19,24 @@ from bbsengine6.startup import lib as startuplib
 BED_ROLE = "bed"
 
 
+def _ensure_bed_token_table(args, conn):
+    """Create ``engine.__bed_token`` (hashed bearer tokens) as the owner.
+
+    Runs only from ``bed --install``. The service start path never creates it.
+    """
+    io.echo(
+        f"{{var:labelcolor}}bed token table {{var:valuecolor}}engine.__bed_token"
+        f"{{var:labelcolor}}: ",
+        end="",
+    )
+    ok = database.importsql(args, "bed_token.sql", conn=conn, rollback=False, package="bed")
+    if ok is False:
+        io.echo("{{level.error}} fail ", level="error")
+        return False
+    io.echo("{{level.ok}} ok  ")
+    return True
+
+
 def _ensure_bed_role(args, conn):
     """Create the ``bed`` role with LOGIN if it does not exist, and grant
     it USAGE on the ``engine`` schema."""
@@ -145,6 +163,11 @@ def ensure_startup(args):
             if not ok:
                 conn.rollback()
                 io.echo("bed role setup failed", level="error")
+                return False
+            ok = _ensure_bed_token_table(args, conn)
+            if not ok:
+                conn.rollback()
+                io.echo("bed token table setup failed", level="error")
                 return False
             conn.commit()
     except (
