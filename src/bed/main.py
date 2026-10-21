@@ -37,6 +37,9 @@ from .startup import ensure_startup
 
 _BED_DEFAULTS: Optional[dict] = None
 
+# How often expired bearer tokens are removed from the token store.
+TOKEN_GC_INTERVAL_SECONDS = 300
+
 
 def _get_bed_defaults() -> dict:
     """Snapshot of argparse defaults (host, port, database*) used to detect
@@ -999,17 +1002,21 @@ class BED:
         )
 
     async def _gc_loop(self) -> None:
-        """Periodic token-store garbage collection. Cancelled by stop()."""
+        """Periodic token-store garbage collection. Cancelled by stop().
+
+        Each tick runs in a worker thread so a slow database call cannot
+        stall WebSocket dispatch on the event loop.
+        """
         try:
             while self._running and self.token_store is not None:
                 try:
-                    self.token_store.gc_expired()
+                    await asyncio.to_thread(self.token_store.gc_expired)
                 except Exception as e:
                     io.echo(
                         f"BED token gc error: {e}",
                         level="warning",
                     )
-                await asyncio.sleep(60)
+                await asyncio.sleep(TOKEN_GC_INTERVAL_SECONDS)
         except asyncio.CancelledError:
             return
 
