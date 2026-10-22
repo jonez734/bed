@@ -260,6 +260,31 @@ class BedMessageServiceClient:
             }
         return reply
 
+    async def send_message(
+        self,
+        recipients: list,
+        content: str,
+        channel: str = "member:direct",
+        urgency: str = "NORMAL",
+    ) -> Dict[str, Any]:
+        """Send a message as the signed-in member. The server takes the sender from the session."""
+        try:
+            return await self._send_authed(
+                {
+                    "type": "message_send",
+                    "recipients": list(recipients),
+                    "content": content,
+                    "channel": channel,
+                    "urgency": urgency,
+                }
+            )
+        except BedUnavailable as e:
+            return {
+                "ok": False,
+                "code": "bed_unavailable",
+                "message": str(e),
+            }
+
 
 _module_client: Optional[BedMessageServiceClient] = None
 
