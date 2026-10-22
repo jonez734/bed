@@ -59,9 +59,9 @@ on one database.
 
 **Fix.** The cluster-mode design in `BED_AUTH.md`.
 
-## 5. `sysop` membership on `bed`
+## 5. `sysop` membership on `bed` (closed)
 
-**Present.** `bed` is a member of `sysop`. `bed` is `NOINHERIT`, so this does
-not grant table access directly, but it is broader than the runtime needs.
-
-**Fix.** Remove it, after the send and group smoke test passes.
+**Closed.** `bed` no longer holds `sysop`. The install revokes it
+(`bed_service_grants.sql`), and the send and group smoke test passed afterward
+with no memberships. Sysop checks now go through the zoid6-owned
+`engine.bed_is_sysop` wrapper.
