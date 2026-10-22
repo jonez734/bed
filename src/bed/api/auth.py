@@ -313,6 +313,30 @@ class AuthService(BaseService):
             loginid=info.loginid,
         )
 
+    def _touch_lastlogin(self, token: str, moniker: str) -> Optional[str]:
+        """Record this password login; return the lastlogin from before it (ISO), or None.
+
+        Calls the zoid6-owned engine.bed_touch_lastlogin definer function with the token's
+        digest. A failure here must not block the login, so it is logged and skipped.
+        """
+        try:
+            from bed.store.token_store import token_hash
+            from bbsengine6 import database
+
+            with database.connect(self.args, pool=getattr(self.args, "pool", None)) as conn, \
+                    database.cursor(conn) as cur:
+                cur.execute(
+                    "SELECT engine.bed_touch_lastlogin(%s, %s) AS previous",
+                    (token_hash(token), moniker),
+                )
+                row = cur.fetchone()
+                conn.commit()
+            prev = row["previous"] if row else None
+            return prev.isoformat() if prev is not None else None
+        except Exception as e:
+            io.echo(f"AuthService: lastlogin not recorded for {moniker}: {e}", level="warning")
+            return None
+
     def _persist(self, record: TokenRecord) -> None:
         try:
             self.token_store.put(record)
@@ -392,6 +416,7 @@ class AuthService(BaseService):
         record = self._mint_record(info, session_id, websocket_id)
         self._persist(record)
         state.auth_service_token = record.token
+        last_login = self._touch_lastlogin(record.token, info.moniker)
         _debug_branch(
             self.args,
             op="login",
@@ -408,7 +433,9 @@ class AuthService(BaseService):
             f"AuthService: issued token for moniker={info.moniker!r} "
             f"loginid={info.loginid!r} session={session_id[:8]}…",
         )
-        return self._auth_result_envelope(record, info, fresh=True)
+        env = self._auth_result_envelope(record, info, fresh=True)
+        env["last_login"] = last_login
+        return env
 
     async def _handle_reconnect(
         self, websocket: Any, message: Dict[str, Any]

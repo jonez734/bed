@@ -73,7 +73,11 @@ def test_runtime_path_never_runs_the_owner_migration():
 @pytest.mark.unit
 def test_migration_file_is_only_owner_moves_in_one_transaction():
     t = _code(MIGRATION.read_text())
-    statements = [s.strip() for s in t.split(";") if s.strip()]
+    # Pull out the catch-all DO block first: its body contains ';' that must not split it.
+    do_block = re.search(r"do\s+\$owner\$.*?\$owner\$\s*;", t, re.IGNORECASE | re.DOTALL)
+    assert do_block, "catch-all DO block missing"
+    rest = t[: do_block.start()] + t[do_block.end():]
+    statements = [s.strip() for s in rest.split(";") if s.strip()]
     body = [s for s in statements if s.lower() not in ("begin", "commit")]
     assert statements[0].lower() == "begin" and statements[-1].lower() == "commit"
     assert body and all(re.match(r"^alter\s+(table|view|sequence|schema|function)\s", s, re.IGNORECASE) for s in body)
