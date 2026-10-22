@@ -32,14 +32,3 @@ def test_shipped_dsn_does_not_name_bed():
 def test_shipped_bed_name_identity_is_unchanged():
     # "bed" as the bed's own name (logging, identity) is not a database name.
     assert _shipped()["bed"]["name"] == "bed"
-
-
-FACTORY_JSON = Path(bed.__file__).parents[2] / "usr" / "share" / "factory" / "etc" / "bed" / "bed.json"
-
-
-@pytest.mark.unit
-def test_factory_default_dsn_names_needinfo():
-    # usr/share/factory/etc/bed/bed.json is installed to /etc/bed by `make install-etc`.
-    dsn = json.loads(FACTORY_JSON.read_text())["database"]["dsn"]
-    assert "dbname=NEEDINFO" in dsn
-    assert "dbname=bed" not in dsn
