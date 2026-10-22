@@ -19,6 +19,47 @@ from bbsengine6.startup import lib as startuplib
 BED_ROLE = "bed"
 
 
+def _is_owner_or_superuser(args, conn) -> bool:
+    """True when the connecting role may run the owner migration.
+
+    A superuser may. A member of the zoid6 owner role may. Membership is checked
+    against the owner role named in bbsengine6 (checksuperuser.OWNER_ROLE), so no
+    role name is hard-coded here.
+    """
+    from bbsengine6.backend.checksuperuser import OWNER_ROLE
+
+    with database.cursor(conn) as cur:
+        cur.execute(
+            "SELECT r.rolsuper OR pg_has_role(current_user, %s, 'MEMBER') "
+            "FROM pg_roles r WHERE r.rolname = current_user",
+            (OWNER_ROLE,),
+        )
+        row = cur.fetchone()
+    return bool(row and row[0])
+
+
+def _ensure_owner_migration(args, conn):
+    """Run bbsengine6's owner migration as the owner. Install only.
+
+    Moves the bank, member, flag, and message objects to zoid6, so zoid6-owned
+    SECURITY DEFINER functions can read them. The migration is idempotent and
+    carries its own begin/commit. Refuses unless the connecting role is a
+    superuser or a member of zoid6.
+    """
+    io.echo("{var:labelcolor}owner migration (zoid6): {var:valuecolor}", end="")
+    if not _is_owner_or_superuser(args, conn):
+        io.echo("{level.error} refused: connecting role is not a superuser or zoid6 member ", level="error")
+        return False
+    ok = database.importsql(
+        args, "owner_zoid6_migration.sql", conn=conn, rollback=False, package="bbsengine6"
+    )
+    if ok is False:
+        io.echo("{level.error} fail ", level="error")
+        return False
+    io.echo("{level.ok} ok  ")
+    return True
+
+
 def _ensure_bed_token_table(args, conn):
     """Create ``engine.__bed_token`` (hashed bearer tokens) as the owner.
 
@@ -175,6 +216,11 @@ def ensure_startup(args):
             if not ok:
                 conn.rollback()
                 io.echo("bed role setup failed", level="error")
+                return False
+            ok = _ensure_owner_migration(args, conn)
+            if not ok:
+                conn.rollback()
+                io.echo("owner migration failed", level="error")
                 return False
             ok = _ensure_bed_token_table(args, conn)
             if not ok:
