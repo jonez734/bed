@@ -11,6 +11,10 @@
     "user": "bed",
     "dsn": "host=localhost port=5432 dbname=bed user=bed"
   },
+  "session": {
+    "idle_minutes": 15,
+    "_comment": "Idle window for a logged-in session, in minutes. Applied to bbsengine6.session.configure() at startup. Default 15."
+  },
   "auth": {
     "token_ttl": 900,
     "token_persistence": "memory",

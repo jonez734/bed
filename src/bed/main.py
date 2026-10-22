@@ -506,6 +506,26 @@ def _apply_notify_config(cfg: dict) -> None:
     _bbs_io.set_bell_window_seconds(float(seconds))
 
 
+def _apply_session_config(cfg: dict) -> None:
+    """Apply ``session.*`` policy from a loaded config to bbsengine6.session.
+
+    ``session.idle_minutes`` is the session idle window. A missing section or
+    key keeps the bbsengine6 default (15 minutes). Bad values raise ValueError
+    before startup, the same as ``message.*``.
+    """
+    sess = cfg.get("session")
+    if not isinstance(sess, dict):
+        return
+    minutes = sess.get("idle_minutes")
+    if minutes is None:
+        return
+    if not isinstance(minutes, int) or isinstance(minutes, bool) or minutes < 1:
+        raise ValueError("session.idle_minutes must be an integer >= 1")
+    from bbsengine6.session import lib as _bbs_session
+
+    _bbs_session.configure(idle_minutes=minutes)
+
+
 def _apply_message_config(cfg: dict) -> None:
     """Apply ``message.*`` policy from a loaded config to bbsengine6.message.
 
@@ -1301,6 +1321,7 @@ async def main_async() -> None:
     _apply_auth_config(args, loaded_config)
     _apply_websocket_config(args, loaded_config)
     _apply_message_config(loaded_config)
+    _apply_session_config(loaded_config)
     _apply_notify_config(loaded_config)
     # Compute the final bind list after every config source has had
     # its say. ``_resolve_binds`` prefers ``--bind`` (CLI) > JSON
