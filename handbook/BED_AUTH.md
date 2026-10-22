@@ -470,3 +470,9 @@ seams:
    survival across nodes is a hard requirement; the cost is a
    shared `SessionRegistry` and a per-connection UUID replacing
    `id(websocket)`.
+
+## Known gaps
+
+See [KNOWN_GAPS.md](KNOWN_GAPS.md) for the bank function gap, the send and
+group operations not yet exposed over the WebSocket, and the multi-instance
+limits.
