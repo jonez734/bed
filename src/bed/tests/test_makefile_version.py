@@ -45,3 +45,27 @@ def test_deploy_venv_builds_bbsengine6_before_bed():
     text = _text()
     deploy_venv = text[text.index("deploy-venv: clean"):]
     assert deploy_venv.index("$(BBSENGINE_DIR)") < deploy_venv.index("$(CURDIR)")
+
+
+def _deploy_venv_block():
+    text = _text()
+    return text[text.index("deploy-venv: clean"):text.index("# Umbrella prod install")]
+
+
+@pytest.mark.unit
+def test_deploy_venv_installs_into_the_service_venv_by_default():
+    block = _deploy_venv_block()
+    assert "$(VENV_DIR)/bin/pip install" in block
+    assert "$(VIRTUAL_ENV)/bin/pip" not in block
+
+
+@pytest.mark.unit
+def test_deploy_venv_does_not_use_sudo():
+    # jam is in group bed and /var/lib/bed/venv is group-writable, so deploy needs no sudo.
+    assert "sudo" not in _deploy_venv_block()
+
+
+@pytest.mark.unit
+def test_venv_dir_is_the_single_source_of_truth():
+    # install and deploy-venv must agree on the venv path.
+    assert re.search(r"^VENV_DIR\s*\?=\s*/var/lib/bed/venv\s*$", _text(), re.MULTILINE)

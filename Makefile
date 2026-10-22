@@ -312,7 +312,7 @@ deploy-venv: clean clean-egg-info
 	$(MAKE) -C $(BBSENGINE_DIR) version
 	$(call PREPARE_BUILD,$(BBSENGINE_DIR))
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(BBSENGINE_DIR)
-	$(VIRTUAL_ENV)/bin/pip install $(PIP_UPGRADE_FLAG) $(WHEEL_DIR)/*.whl 2>/dev/null
+	$(VENV_DIR)/bin/pip install $(PIP_UPGRADE_FLAG) $(WHEEL_DIR)/*.whl 2>/dev/null
 	# TODO(verify-install): after this `pip install` of bbsengine6's
 	# wheel, compare the wheel's METADATA Version against
 	# `pip show bbsengine6`. Catches silent no-ops where pip reports
@@ -326,7 +326,7 @@ else
 	$(MAKE) version
 	$(call PREPARE_BUILD,$(CURDIR))
 	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
-	$(VIRTUAL_ENV)/bin/pip install $(PIP_UPGRADE_FLAG) $(WHEEL_DIR)/*.whl 2>/dev/null
+	$(VENV_DIR)/bin/pip install $(PIP_UPGRADE_FLAG) $(WHEEL_DIR)/*.whl 2>/dev/null
 	# TODO(verify-install): after this `pip install` of bed's wheel,
 	# compare the wheel's METADATA Version against `pip show bed`.
 	# Same rationale as the bbsengine6 check above. Editable branch
@@ -334,7 +334,7 @@ else
 	# so the comparison semantics differ — skip the check there.
 endif
 	-rm -rf $(WHEEL_DIR)
-	@echo "bed installed into active venv$(if $(EDITABLE), in dev/editable mode)"
+	@echo "bed installed into $(VENV_DIR)$(if $(EDITABLE), in dev/editable mode)"
 
 # Umbrella prod install: includes everything that needs sudo
 # AND the per-service venv. Reuses the existing install target.
