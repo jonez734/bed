@@ -30,3 +30,11 @@ def test_letteredolive_pin_names_a_staged_wheel():
     if not WHEELS.is_dir():
         pytest.skip("dist-wheels not present on this machine")
     assert (WHEELS / _pin("LO_WHEEL")).is_file()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("name", ["BED_WHEEL", "BBS_WHEEL", "LO_WHEEL"])
+def test_every_pin_names_a_staged_wheel(name):
+    if not WHEELS.is_dir():
+        pytest.skip("dist-wheels not present on this machine")
+    assert (WHEELS / _pin(name)).is_file(), _pin(name)
