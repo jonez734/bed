@@ -574,7 +574,11 @@ class BankService(BaseService):
             return err
         moniker = (message.get("moniker") or "").strip()
         try:
-            balance = self._get_bank().get_balance(moniker)
+            bank = self._get_bank()
+            # Existence is checked separately from the balance: get_balance
+            # returns 0 for a missing account, which must not look like a zero balance.
+            account = bank.account.get(moniker)
+            balance = bank.get_balance(moniker)
         except Exception as e:
             io.echo_traceback("bed.api.bank._handle_balance:")
             return error_envelope(
@@ -584,6 +588,7 @@ class BankService(BaseService):
             "type": "bank_balance",
             "moniker": moniker,
             "balance": int(balance),
+            "account": account is not None,
         }
 
     async def _handle_add(
