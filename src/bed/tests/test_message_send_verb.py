@@ -53,7 +53,7 @@ def test_successful_send_returns_the_message_id():
     svc._message_conn = MagicMock(return_value=conn)
     svc._check_access = MagicMock(return_value=(_state(), None))
     msg = {"type": "message_send", "sender": "alice", "recipients": ["bob"],
-           "content": "hello", "channel": "member:direct", "urgency": "NORMAL"}
+           "content": "hello", "channel": "member:direct", "urgency": "ROUTINE"}
     reply = asyncio.run(svc._handle_send(None, msg))
     assert reply["type"] == "message_send_result"
     assert reply["ok"] is True
@@ -67,7 +67,7 @@ def test_send_passes_the_token_hash_not_a_sender_name():
     svc._message_conn = MagicMock(return_value=conn)
     svc._check_access = MagicMock(return_value=(_state("tok-alice"), None))
     msg = {"type": "message_send", "sender": "alice", "recipients": ["bob"],
-           "content": "hi", "channel": "member:direct", "urgency": "NORMAL"}
+           "content": "hi", "channel": "member:direct", "urgency": "ROUTINE"}
     asyncio.run(svc._handle_send(None, msg))
     sql, params = cur.execute.call_args.args
     assert "engine.bed_message_send" in sql
@@ -80,7 +80,7 @@ def test_send_refused_without_recipients():
     svc = _service()
     svc._check_access = MagicMock(return_value=(_state(), None))
     msg = {"type": "message_send", "sender": "alice", "recipients": [],
-           "content": "hi", "channel": "member:direct", "urgency": "NORMAL"}
+           "content": "hi", "channel": "member:direct", "urgency": "ROUTINE"}
     reply = asyncio.run(svc._handle_send(None, msg))
     assert reply["ok"] is False
     assert reply["code"] == "missing_recipients"
@@ -91,7 +91,7 @@ def test_send_refused_without_content():
     svc = _service()
     svc._check_access = MagicMock(return_value=(_state(), None))
     msg = {"type": "message_send", "sender": "alice", "recipients": ["bob"],
-           "content": "   ", "channel": "member:direct", "urgency": "NORMAL"}
+           "content": "   ", "channel": "member:direct", "urgency": "ROUTINE"}
     reply = asyncio.run(svc._handle_send(None, msg))
     assert reply["ok"] is False
     assert reply["code"] == "missing_content"
@@ -102,7 +102,7 @@ def test_send_denied_by_access_gate_is_returned_as_forbidden():
     svc = _service()
     svc._check_access = MagicMock(return_value=(None, {"code": "forbidden", "message": "no", "recoverable": False}))
     msg = {"type": "message_send", "sender": "bob", "recipients": ["alice"],
-           "content": "hi", "channel": "member:direct", "urgency": "NORMAL"}
+           "content": "hi", "channel": "member:direct", "urgency": "ROUTINE"}
     reply = asyncio.run(svc._handle_send(None, msg))
     assert reply["ok"] is False
     assert reply["code"] == "forbidden"
@@ -117,7 +117,7 @@ def test_send_database_error_is_reported_not_raised():
     svc._message_conn = MagicMock(return_value=conn)
     svc._check_access = MagicMock(return_value=(_state(), None))
     msg = {"type": "message_send", "sender": "alice", "recipients": ["bob"],
-           "content": "hi", "channel": "member:direct", "urgency": "NORMAL"}
+           "content": "hi", "channel": "member:direct", "urgency": "ROUTINE"}
     reply = asyncio.run(svc._handle_send(None, msg))
     assert reply["ok"] is False
     assert "no live session" in reply["message"]

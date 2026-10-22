@@ -78,7 +78,9 @@ _WS_OP: Dict[str, str] = {
 # whether the operator passed ``--direct``; bed has no handler for
 # them, so routing through the daemon would just fail.
 _BED_ONLY_SUBCMDS = {"subscribe", "unsubscribe", "watch"}
-_DIRECT_ONLY_SUBCMDS = {"send", "mark_read", "mark_delivered"}
+# ``send`` is no longer direct-only: in bed mode it goes through the daemon's message_send verb.
+# ``--direct`` still stores through the local database.
+_DIRECT_ONLY_SUBCMDS = {"mark_read", "mark_delivered"}
 
 
 _BED_UNSUPPORTED_FMT = (
@@ -542,7 +544,7 @@ def _needs_auth(sub: str) -> bool:
     """
     if sub in _BED_ONLY_SUBCMDS:
         return True
-    if sub == "pending":
+    if sub in ("pending", "send"):
         return True
     return False
 
@@ -647,6 +649,41 @@ def _resolve_send_content(args: Any) -> str:
     return render_template(template, {})
 
 
+def _bed_send_client(args: Any) -> Any:
+    """A BedMessageServiceClient for the signed-in token (used by bed-mode send)."""
+    from bed.client import get_bed_connection
+    from bed.client.messageservice import BedMessageServiceClient
+
+    token = _token.read_token_file(getattr(args, "token_file", None)) or ""
+    return BedMessageServiceClient(
+        get_bed_connection(args),
+        token=token,
+        token_file=getattr(args, "token_file", None),
+    )
+
+
+def _message_send_via_bed(args: Any, actor: str, recipients: List[str], body: str) -> bool:
+    channel = (getattr(args, "channel", None) or "member:direct").strip()
+    urgency = (getattr(args, "urgency", None) or "ROUTINE").strip()
+    client = _bed_send_client(args)
+    reply = asyncio.run(
+        client.send_message(
+            recipients=recipients, content=body, channel=channel, urgency=urgency
+        )
+    )
+    if not reply.get("ok"):
+        io.echo(
+            f"send failed: {reply.get('code') or 'unknown'}: {reply.get('message') or ''}".rstrip(": "),
+            level="error",
+        )
+        return False
+    io.echo(
+        f"stored #{int(reply.get('message_id', 0))} channel={channel!r} urgency={urgency} "
+        f"to={','.join(recipients)}"
+    )
+    return True
+
+
 def message_send(args: Any, moniker: str, **kwargs: Any) -> bool:
     actor = _resolve_actor_moniker(args, fallback=moniker)
     recipients: List[str] = list(getattr(args, "recipients", []) or [])
@@ -659,6 +696,8 @@ def message_send(args: Any, moniker: str, **kwargs: Any) -> bool:
     if not _check_self_or_sysop(args, "send", actor, actor):
         return False
     body = _resolve_send_content(args)
+    if getattr(args, "_backend", "") == "bed" and body:
+        return _message_send_via_bed(args, actor, recipients, body)
     if not body:
         return False
     channel = (getattr(args, "channel", None) or "cli.message").strip()
