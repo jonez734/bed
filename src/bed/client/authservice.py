@@ -73,6 +73,8 @@ class BedAuthServiceClient:
             "token": reply.get("token", ""),
             "expires_at": reply.get("expires_at", ""),
             "balance": int(reply.get("balance", 0) or 0),
+            # The lastlogin before this password login (ISO), or None for a first login.
+            "last_login": reply.get("last_login"),
         }
 
     async def reconnect(self, token: str) -> Dict[str, Any]:
