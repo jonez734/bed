@@ -114,6 +114,7 @@ _TYPE_TO_OP: Dict[str, str] = {
     "message_subscribe": "subscribe",
     "message_unsubscribe": "unsubscribe",
     "message_list_pending": "list_pending",
+    "message_send": "send",
 }
 
 
@@ -388,6 +389,7 @@ class MessageService(BaseService):
         "message_subscribe",
         "message_unsubscribe",
         "message_list_pending",
+        "message_send",
     )
 
     def __init__(
@@ -784,6 +786,85 @@ class MessageService(BaseService):
         }
 
 
+    def _message_conn(self) -> Any:
+        """A database connection for the bed_message_send definer function (bed's own role)."""
+        from bbsengine6 import database
+
+        return database.connect(self.args, pool=getattr(self, "_pool", None))
+
+    async def _handle_send(
+        self, websocket: Any, message: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Send a message through engine.bed_message_send.
+
+        The sender is the authenticated session's member, read by the SQL from the token
+        hash. The wire ``sender`` is only used for the access gate; it must match the session.
+        """
+        state, err = self._check_access(websocket, "send", message)
+        if err is not None:
+            return {
+                "type": "message_send_result",
+                "ok": False,
+                "code": err.get("code"),
+                "message": err.get("message"),
+                "recoverable": err.get("recoverable", False),
+            }
+        recipients = [str(r).strip() for r in (message.get("recipients") or []) if str(r).strip()]
+        if not recipients:
+            return {
+                "type": "message_send_result",
+                "ok": False,
+                "code": "missing_recipients",
+                "message": "at least one recipient is required",
+                "recoverable": True,
+            }
+        content = (message.get("content") or "").strip()
+        if not content:
+            return {
+                "type": "message_send_result",
+                "ok": False,
+                "code": "missing_content",
+                "message": "content is required",
+                "recoverable": True,
+            }
+        channel = (message.get("channel") or "member:direct").strip()
+        urgency = (message.get("urgency") or "NORMAL").strip().upper()
+        token = getattr(state, "auth_service_token", None) or ""
+        try:
+            from bed.store.token_store import token_hash
+
+            with self._message_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT engine.bed_message_send(%s, %s, %s, %s, %s::citext[])",
+                    (token_hash(token), channel, content, urgency, recipients),
+                )
+                row = cur.fetchone()
+        except Exception as e:
+            io.echo_traceback("bed.api.message._handle_send:")
+            return {
+                "type": "message_send_result",
+                "ok": False,
+                "code": CODE_DATABASE_ERROR,
+                "message": str(e),
+                "recoverable": False,
+            }
+        message_id = int(row[0]) if row and row[0] else 0
+        if message_id == 0:
+            return {
+                "type": "message_send_result",
+                "ok": False,
+                "code": "not_sent",
+                "message": "no recipient survived expansion or blocking, or the rate limit was reached",
+                "recoverable": True,
+            }
+        return {
+            "type": "message_send_result",
+            "ok": True,
+            "message_id": message_id,
+            "channel": channel,
+        }
+
+
 # Op -> handler dispatch. Keeps handle_message() a flat dict lookup and
 # makes it obvious at import time that every op has exactly one
 # handler. Mirrors bed/api/bank.py:831-841.
@@ -791,4 +872,5 @@ _OP_TO_HANDLER = {
     "subscribe": MessageService._handle_subscribe,
     "unsubscribe": MessageService._handle_unsubscribe,
     "list_pending": MessageService._handle_list_pending,
+    "send": MessageService._handle_send,
 }
