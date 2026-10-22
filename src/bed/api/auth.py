@@ -435,6 +435,8 @@ class AuthService(BaseService):
         )
         env = self._auth_result_envelope(record, info, fresh=True)
         env["last_login"] = last_login
+        # The daemon's configured name, so clients can label it (for example "zoid6 bank").
+        env["bed_name"] = getattr(self.args, "bed_name", None) or None
         return env
 
     async def _handle_reconnect(
