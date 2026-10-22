@@ -4,6 +4,8 @@
 # WebSocket server that loads a router module dynamically
 
 import argparse
+import logging
+import logging.handlers
 import asyncio
 import errno
 import os
@@ -388,6 +390,38 @@ def _apply_bind_config(args: argparse.Namespace, cfg: dict) -> None:
     """Apply bind.host/bind.port from a loaded config when the CLI did not
     explicitly set them (i.e. args still equal argparse defaults)."""
     _apply_config_section(args, cfg, "bind", BIND_FIELDS)
+
+
+def bed_logger(args: argparse.Namespace) -> logging.Logger:
+    """The logger for this daemon, named from its configured bed name.
+
+    The journal prefix is the logger name, so a daemon's warnings and errors all carry
+    its name (for example ``zoid6[pid]:``), whichever bed module logged them.
+    """
+    name = getattr(args, "bed_name", None) or lib.DEFAULT_BED_NAME
+    return logging.getLogger(name)
+
+
+def bind_bed_log_name(name: str) -> logging.Logger:
+    """Make every bed warning and error carry ``name`` as the journal prefix.
+
+    Bed's module loggers are all named ``bed.*``. This attaches one syslog handler to the
+    ``bed`` logger whose formatter prints ``name`` (not the module name) as the identifier.
+    Lines from the ``bed`` tree then show ``<name>[pid]:`` in the journal.
+    """
+    from bbsengine6 import util as _bbs_util
+
+    logger = logging.getLogger("bed")
+    # Replace any handler bound by an earlier daemon in this process, so the prefix
+    # always matches the daemon that is running now.
+    for stale in [h for h in logger.handlers if getattr(h, "_bed_name", None) is not None]:
+        logger.removeHandler(stale)
+    named = logging.handlers.SysLogHandler(address="/dev/log")
+    named._bed_name = name
+    named.setFormatter(logging.Formatter(f"{name}[%(process)d]: %(levelname)s %(message)s"))
+    logger.addHandler(named)
+    logger.setLevel(logging.WARNING)
+    return logger
 
 
 def _apply_bed_name_config(args: argparse.Namespace, cfg: dict) -> None:
@@ -1317,6 +1351,7 @@ async def main_async() -> None:
     _apply_bind_config(args, loaded_config)
     _apply_bind_list_config(args, loaded_config)
     _apply_bed_name_config(args, loaded_config)
+    bind_bed_log_name(args.bed_name)
     _apply_database_config(args, loaded_config)
     _apply_auth_config(args, loaded_config)
     _apply_websocket_config(args, loaded_config)
