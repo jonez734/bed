@@ -54,3 +54,24 @@ def test_install_runs_wrapper_before_send():
     startup = importlib.import_module("bed.startup")
     src = inspect.getsource(startup._ensure_bed_token_table)
     assert src.index('"bed_sysop_check.sql"') < src.index('"bed_message_send.sql"')
+
+
+def test_wrapper_runs_checkmemberflag_as_zoid6_owner():
+    # checkmemberflag is not SECURITY DEFINER. Its reads of member_flag, member
+    # and map_member_flag run with the rights of whoever calls it. The wrapper
+    # is definer, so those reads run as its owner, zoid6. That only works if
+    # zoid6 owns every relation checkmemberflag reads.
+    text = _code((SQL_DIR / "bed_sysop_check.sql").read_text())
+    assert "SECURITY DEFINER" in text
+    assert re.search(r"OWNER\s+TO\s+zoid6", text, re.IGNORECASE)
+
+
+def test_owner_migration_covers_every_relation_checkmemberflag_reads():
+    import importlib
+    from pathlib import Path as _P
+    bbs = _P(importlib.import_module("bbsengine6").__file__).parent
+    migration = _code((bbs / "sql" / "owner_zoid6_migration.sql").read_text())
+    for rel in ("member_flag", "map_member_flag"):
+        assert re.search(rf"alter\s+table\s+engine\.{rel}\s+owner\s+to\s+zoid6", migration, re.IGNORECASE), rel
+    # engine.member is a view; it must move with the same owner migration.
+    assert re.search(r"alter\s+view\s+engine\.member\s+owner\s+to\s+zoid6", migration, re.IGNORECASE), "engine.member"
