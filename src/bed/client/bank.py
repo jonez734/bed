@@ -16,15 +16,17 @@ from bed.client.messages import BedMessageClient
 class BedBankClient(BedMessageClient):
     """Bank client for the empyre wire shape."""
 
-    async def get_balance_result(self, moniker: str) -> Dict[str, Any]:
+    async def get_balance_result(self, moniker: str, token: str = "") -> Dict[str, Any]:
         """Return ``{"balance": int, "account": bool}`` for ``moniker``.
 
         ``account`` is False when bed has no bank account for the moniker. A zero
         balance with ``account`` True is a real zero, not a missing account.
+        ``token`` is the session's bearer token; bed requires it on bank calls.
         """
-        reply = await self._request(
-            {"type": "bank_balance", "moniker": moniker}
-        )
+        message: Dict[str, Any] = {"type": "bank_balance", "moniker": moniker}
+        if token:
+            message["token"] = token
+        reply = await self._request(message)
         reply = reply or {}
         return {
             "balance": int(reply.get("balance", 0)),
