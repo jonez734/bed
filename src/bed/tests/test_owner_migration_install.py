@@ -78,3 +78,25 @@ def test_migration_file_is_only_owner_moves_in_one_transaction():
     assert statements[0].lower() == "begin" and statements[-1].lower() == "commit"
     assert body and all(re.match(r"^alter\s+(table|view|sequence|schema|function)\s", s, re.IGNORECASE) for s in body)
     assert not re.search(r"owner\s+to\s+bed\b", t, re.IGNORECASE)
+
+
+@pytest.mark.unit
+def test_owner_check_reads_a_dict_row():
+    """bbsengine6 cursors return dict rows; the check must read by column name."""
+    cur = MagicMock()
+    cur.fetchone.return_value = {"is_owner": True}
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cur
+    with patch.object(startup.database, "cursor") as dbc:
+        dbc.return_value.__enter__.return_value = cur
+        assert startup._is_owner_or_superuser(MagicMock(), conn) is True
+
+
+@pytest.mark.unit
+def test_owner_check_is_false_for_a_non_owner_dict_row():
+    cur = MagicMock()
+    cur.fetchone.return_value = {"is_owner": False}
+    conn = MagicMock()
+    with patch.object(startup.database, "cursor") as dbc:
+        dbc.return_value.__enter__.return_value = cur
+        assert startup._is_owner_or_superuser(MagicMock(), conn) is False

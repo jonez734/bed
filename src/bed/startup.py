@@ -30,12 +30,12 @@ def _is_owner_or_superuser(args, conn) -> bool:
 
     with database.cursor(conn) as cur:
         cur.execute(
-            "SELECT r.rolsuper OR pg_has_role(current_user, %s, 'MEMBER') "
+            "SELECT (r.rolsuper OR pg_has_role(current_user, %s, 'MEMBER')) AS is_owner "
             "FROM pg_roles r WHERE r.rolname = current_user",
             (OWNER_ROLE,),
         )
         row = cur.fetchone()
-    return bool(row and row[0])
+    return bool(row and row["is_owner"])
 
 
 def _ensure_owner_migration(args, conn):
