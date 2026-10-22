@@ -1,6 +1,10 @@
 PROJECT = bed
 OUTDIR = /srv/repo/$(PROJECT)/
-VERSION = $(shell date +%Y%m%d%H%M)
+# Build version: 0.0.2.dev<YYYYMMDDHHMMSS>, unique per build (shared script in the meta-repo).
+# Override WHEELS_DIR when building outside the meta-repo.
+WHEELS_DIR ?= $(CURDIR)/../dist-wheels
+VERSION_SCRIPT ?= $(CURDIR)/../scripts/next_version.sh
+VERSION ?= $(shell $(VERSION_SCRIPT) 0.0.2.dev $(WHEELS_DIR))
 
 PYTHON ?= python3.12
 RSYNC = rsync --chmod=F0644 --mkpath --archive --verbose
@@ -100,7 +104,7 @@ clean: clean-egg-info
 	-find . -type d -name .mypy_cache -exec rm -rf {} +
 
 version:
-	@echo '__version__ = "0.0.1.dev$(VERSION)"' > src/$(PROJECT)/_version.py
+	@echo '__version__ = "$(VERSION)"' > src/$(PROJECT)/_version.py
 	@echo '__datestamp__ = "$(VERSION)"' >> src/$(PROJECT)/_version.py
 	@echo '__githash__ = "'`git log -1 --format='%H' 2>/dev/null | cut -c 1-16`'"' >> src/$(PROJECT)/_version.py
 	@cat src/$(PROJECT)/_version.py
