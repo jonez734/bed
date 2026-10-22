@@ -163,3 +163,30 @@ prerequisites are:
 - `specs/` — per-service specs (each owns its own open
   follow-ups section).
 - `CHANGELOG.md` — release history.
+
+## [KHKP] `getch()` idle timer that blank input does not reset
+
+### Problem (summary)
+
+A user at a prompt who presses Enter on blank lines keeps the connection
+open indefinitely. The login prompt re-prompts on blank input without a
+limit, and a blank line at the main prompt is a no-op, so nothing counts
+idle time. A connection that is only ever sending blank lines holds its
+port open forever.
+
+### Wanted
+
+An idle timer in `getch()` (bbsengine6 `io/getch.py`) that measures time
+since the last *non-blank* input. Blank input must not reset it. When the
+timer expires, the session is closed (or returned to the login prompt, to be
+decided), so an idle client cannot hold a port open.
+
+### Notes
+
+- The session idle window (`session.idle_minutes`, 15 by default) already
+  expires the session row via `updatelastactivity`. That covers activity
+  that goes through a session, not the blank-line case at the prompt before
+  a session exists.
+- The timer belongs in `getch()` because that is where all prompts read
+  keys. Login and the main prompt both use it.
+- No prompt limit is wanted: the user has ruled out a cap on blank re-prompts.
