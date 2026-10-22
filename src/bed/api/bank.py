@@ -445,6 +445,7 @@ class BankService(BaseService):
         token_store: Optional[TokenStore] = None,
         instance_id: Optional[str] = None,
         clock: Optional[Any] = None,
+        bed_name: Optional[str] = None,
     ) -> None:
         """Construct a BankService.
 
@@ -462,6 +463,8 @@ class BankService(BaseService):
         self.token_store = token_store
         self.instance_id = str(instance_id) if instance_id else None
         self._clock = clock
+        # The daemon's configured name, carried in balance replies so clients can label them.
+        self._bed_name = (bed_name or "").strip() or None
 
     def _get_bank(self) -> Any:
         """Lazily construct the underlying bbsengine6 BankService.
@@ -600,6 +603,7 @@ class BankService(BaseService):
             "moniker": moniker,
             "balance": int(balance),
             "account": bool(exists),
+            "bed_name": self._bed_name,
         }
 
     async def _handle_add(

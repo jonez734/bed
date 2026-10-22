@@ -14,7 +14,7 @@ def _client(reply):
 
 def test_result_carries_balance_and_account_flag():
     r = asyncio.run(_client({"balance": 42, "account": True}).get_balance_result("alice"))
-    assert r == {"balance": 42, "account": True}
+    assert r == {"balance": 42, "account": True, "bed_name": None}
 
 
 def test_result_for_missing_account_is_account_false():

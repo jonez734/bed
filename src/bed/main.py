@@ -812,7 +812,10 @@ class BED:
                         ),
                     }
                 self.bank_service = BankService(
-                    db_args, self._session_registry, **bank_kwargs
+                    db_args,
+                    self._session_registry,
+                    bed_name=getattr(self.args, "bed_name", None),
+                    **bank_kwargs,
                 )
                 self.bank_service.register_all(self.server)
 

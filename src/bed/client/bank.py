@@ -31,6 +31,8 @@ class BedBankClient(BedMessageClient):
         return {
             "balance": int(reply.get("balance", 0)),
             "account": bool(reply.get("account", False)),
+            # The bed's configured name, or None for an older bed that does not send one.
+            "bed_name": reply.get("bed_name"),
         }
 
     async def get_balance(self, moniker: str) -> int:
