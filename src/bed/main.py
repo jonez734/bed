@@ -1048,6 +1048,7 @@ class BED:
             secret=secret_bytes,
             instance_id=instance_id,
             ttl_seconds=ttl,
+            bed_name=getattr(self.args, "bed_name", None),
         )
         io.echo(
             f"BED AuthService: instance={instance_id[:8]}… "

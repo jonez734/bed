@@ -237,6 +237,7 @@ class AuthService(BaseService):
         secret: bytes,
         instance_id: str,
         ttl_seconds: int = 900,
+        bed_name: Optional[str] = None,
         *,
         clock: Optional[Any] = None,
     ) -> None:
@@ -249,6 +250,8 @@ class AuthService(BaseService):
         self.secret = bytes(secret)
         self.instance_id = str(instance_id)
         self.ttl_seconds = max(1, int(ttl_seconds))
+        # The daemon's configured name, carried in the login reply for clients.
+        self.bed_name = (bed_name or "").strip() or None
         self._clock = clock
         self.server: Any = None
 
@@ -436,7 +439,7 @@ class AuthService(BaseService):
         env = self._auth_result_envelope(record, info, fresh=True)
         env["last_login"] = last_login
         # The daemon's configured name, so clients can label it (for example "zoid6 bank").
-        env["bed_name"] = getattr(self.args, "bed_name", None) or None
+        env["bed_name"] = self.bed_name
         return env
 
     async def _handle_reconnect(
