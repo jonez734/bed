@@ -38,6 +38,7 @@ def _ensure_bed_token_table(args, conn):
         "bed_message_read_functions.sql",
         "bed_message_send.sql",
         "bed_group_functions.sql",
+        "bed_bank_functions.sql",
         "bed_service_grants.sql",
     ):
         ok = database.importsql(args, sqlfile, conn=conn, rollback=False, package="bed")

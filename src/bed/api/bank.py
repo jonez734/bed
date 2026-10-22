@@ -477,6 +477,12 @@ class BankService(BaseService):
             self._bank = _BBSBankService(self.args)
         return self._bank
 
+    def _bank_conn(self) -> Any:
+        """A database connection for the bank definer functions (bed's own role)."""
+        from bbsengine6 import database
+
+        return database.connect(self.args, pool=getattr(self, "_pool", None))
+
     def _now(self) -> float:
         """Return the current UNIX timestamp, honoring ``clock`` if set."""
         if self._clock is not None:
@@ -573,22 +579,27 @@ class BankService(BaseService):
         if err is not None:
             return err
         moniker = (message.get("moniker") or "").strip()
+        token = getattr(state, "auth_service_token", None) or ""
         try:
-            bank = self._get_bank()
-            # Existence is checked separately from the balance: get_balance
-            # returns 0 for a missing account, which must not look like a zero balance.
-            account = bank.account.get(moniker)
-            balance = bank.get_balance(moniker)
+            from bed.store.token_store import token_hash
+
+            with self._bank_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT account_exists, balance FROM engine.bed_bank_balance(%s, %s)",
+                    (token_hash(token), moniker),
+                )
+                row = cur.fetchone()
         except Exception as e:
             io.echo_traceback("bed.api.bank._handle_balance:")
             return error_envelope(
                 CODE_DATABASE_ERROR, f"balance lookup failed: {e}"
             )
+        exists, balance = (row[0], row[1]) if row else (False, 0)
         return {
             "type": "bank_balance",
             "moniker": moniker,
             "balance": int(balance),
-            "account": account is not None,
+            "account": bool(exists),
         }
 
     async def _handle_add(

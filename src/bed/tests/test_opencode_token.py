@@ -313,6 +313,14 @@ def opencode_server_with_bank(
     )
     bank_service = _BankService(_argparse.Namespace(debug=False, pool=None), registry)
     bank_service._get_bank = MagicMock(return_value=bank_mock)
+    # Balance reads go through the bed_bank_balance definer function (Phase 1).
+    _bal_cur = MagicMock()
+    _bal_cur.fetchone.return_value = (True, 0)
+    _bal_conn = MagicMock()
+    _bal_conn.__enter__.return_value = _bal_conn
+    _bal_conn.cursor.return_value.__enter__.return_value = _bal_cur
+    bank_service._bank_conn = MagicMock(return_value=_bal_conn)
+    bank_mock.balance_conn = _bal_conn
     bank_service.secret = secret
     bank_service.token_store = token_store
     bank_service.instance_id = "opencode-bank-test"
@@ -470,8 +478,8 @@ class TestBankFlowViaOpenCodeToken(unittest.TestCase):
                 call.args[0] for call in echo.call_args_list if call.args
             )
             self.assertTrue(
-                bank_mock.get_balance.called,
-                "BankService.get_balance was never invoked; the wire call "
+                bank_mock.balance_conn.cursor.called,
+                "bed_bank_balance was never called; the wire call "
                 f"short-circuited with an error envelope. echoed:\n{echo_text}",
             )
             self.assertTrue(

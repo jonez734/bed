@@ -194,7 +194,12 @@ def test_handle_balance_happy_path():
 
     ws, sm = _make_session(moniker="alice")
     service = BankService(_make_args(), sm)
-    service._get_bank = MagicMock(return_value=_make_bank_mock(balance=123))
+    _cur = MagicMock()
+    _cur.fetchone.return_value = (True, 123)
+    _conn = MagicMock()
+    _conn.__enter__.return_value = _conn
+    _conn.cursor.return_value.__enter__.return_value = _cur
+    service._bank_conn = MagicMock(return_value=_conn)
 
     async def runner():
         return await service._handle_balance(
@@ -230,9 +235,12 @@ def test_handle_balance_db_error_envelope():
 
     ws, sm = _make_session(moniker="alice")
     service = BankService(_make_args(), sm)
-    fake_bank = MagicMock()
-    fake_bank.get_balance.side_effect = RuntimeError("db down")
-    service._get_bank = MagicMock(return_value=fake_bank)
+    cur = MagicMock()
+    cur.execute.side_effect = RuntimeError("db down")
+    conn = MagicMock()
+    conn.__enter__.return_value = conn
+    conn.cursor.return_value.__enter__.return_value = cur
+    service._bank_conn = MagicMock(return_value=conn)
 
     async def runner():
         return await service._handle_balance(
@@ -826,43 +834,6 @@ def test_handle_list_all_db_exception_envelope():
 # bed.api.bank.BankService — lazy bbsengine6 import
 
 
-def test_lazy_bank_construction_only_on_first_message():
-    """The underlying bbsengine6.bank.BankService is constructed lazily,
-    not at __init__, so registering BankService at bed startup is
-    cheap even if the DB is briefly unreachable."""
-    from bed.api import bank as bank_module
-    from bed.api.bank import BankService
-
-    ws, sm = _make_session(moniker="alice")
-    service = BankService(_make_args(), sm)
-    assert service._bank is None
-
-    fake_bank = MagicMock()
-    fake_bank.get_balance = MagicMock(return_value=0)
-
-    with patch.object(bank_module, "_BBSBankService", return_value=fake_bank) as mock_cls:
-        result = asyncio.run(
-            service._handle_balance(
-                ws, {"type": "bank_balance", "moniker": "alice"}
-            )
-        )
-        asyncio.run(
-            service._handle_balance(
-                ws, {"type": "bank_balance", "moniker": "alice"}
-            )
-        )
-
-    mock_cls.assert_called_once_with(service.args)
-    assert result["type"] == "bank_balance"
-    assert result["balance"] == 0
-    assert service._bank is fake_bank
-
-
-# =====================================================================
-# bed.api.bank.BankService — authentication gate
-# =====================================================================
-
-
 def test_unauthenticated_balance_returns_not_authenticated():
     from bed.api.bank import BankService
 
@@ -1205,8 +1176,12 @@ def test_sysop_can_query_other_member_balance():
 
     ws, sm = _make_session(moniker="sysop", is_sysop=True)
     service = BankService(_make_args(), sm)
-    bank = _make_bank_mock(balance=200)
-    service._get_bank = MagicMock(return_value=bank)
+    _cur = MagicMock()
+    _cur.fetchone.return_value = (True, 200)
+    _conn = MagicMock()
+    _conn.__enter__.return_value = _conn
+    _conn.cursor.return_value.__enter__.return_value = _cur
+    service._bank_conn = MagicMock(return_value=_conn)
 
     async def runner():
         return await service._handle_balance(
@@ -1217,7 +1192,7 @@ def test_sysop_can_query_other_member_balance():
     assert result["type"] == "bank_balance"
     assert result["moniker"] == "bob"
     assert result["balance"] == 200
-    bank.get_balance.assert_called_once_with("bob")
+    assert _cur.execute.call_args.args[1][1] == "bob"
 
 
 def test_sysop_can_add_funds_for_other_member():
@@ -2461,8 +2436,12 @@ def test_handle_balance_runs_with_valid_token():
         token_store=token_store,
         instance_id=instance_id,
     )
-    bank_mock = _make_bank_mock(balance=99)
-    with patch.object(service, "_get_bank", return_value=bank_mock), \
+    _cur = MagicMock()
+    _cur.fetchone.return_value = (True, 99)
+    _conn = MagicMock()
+    _conn.__enter__.return_value = _conn
+    _conn.cursor.return_value.__enter__.return_value = _cur
+    with patch.object(service, "_bank_conn", return_value=_conn), \
          _patch_access_returning(True), \
          patch("bed.api.bank.io.echo"):
         result = asyncio.run(
@@ -2472,7 +2451,7 @@ def test_handle_balance_runs_with_valid_token():
         )
     assert result["type"] == "bank_balance"
     assert result["balance"] == 99
-    bank_mock.get_balance.assert_called_once_with("alice")
+    assert _cur.execute.call_args.args[1][1] == "alice"
 
 
 def test_handle_balance_blocked_by_invalid_token():
