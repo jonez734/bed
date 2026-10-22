@@ -828,7 +828,7 @@ class MessageService(BaseService):
                 "recoverable": True,
             }
         channel = (message.get("channel") or "member:direct").strip()
-        urgency = (message.get("urgency") or "NORMAL").strip().upper()
+        urgency = (message.get("urgency") or "ROUTINE").strip().upper()
         token = getattr(state, "auth_service_token", None) or ""
         try:
             from bed.store.token_store import token_hash

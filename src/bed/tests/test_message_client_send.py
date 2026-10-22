@@ -24,14 +24,14 @@ def _client(reply=None, raises=None):
 @pytest.mark.unit
 def test_send_message_sends_the_wire_op_with_token_and_fields():
     client, conn = _client(reply={"type": "message_send_result", "ok": True, "message_id": 7})
-    asyncio.run(client.send_message(recipients=["bob"], content="hello", channel="member:direct", urgency="NORMAL"))
+    asyncio.run(client.send_message(recipients=["bob"], content="hello", channel="member:direct", urgency="ROUTINE"))
     sent = conn.send.await_args.args[0]
     assert sent["type"] == "message_send"
     assert sent["token"] == "tok-alice"
     assert sent["recipients"] == ["bob"]
     assert sent["content"] == "hello"
     assert sent["channel"] == "member:direct"
-    assert sent["urgency"] == "NORMAL"
+    assert sent["urgency"] == "ROUTINE"
 
 
 @pytest.mark.unit
@@ -47,7 +47,7 @@ def test_send_message_defaults_channel_and_urgency():
     asyncio.run(client.send_message(recipients=["bob"], content="hi"))
     sent = conn.send.await_args.args[0]
     assert sent["channel"] == "member:direct"
-    assert sent["urgency"] == "NORMAL"
+    assert sent["urgency"] == "ROUTINE"
 
 
 @pytest.mark.unit
@@ -56,3 +56,12 @@ def test_send_message_reports_bed_unavailable_without_raising():
     reply = asyncio.run(client.send_message(recipients=["bob"], content="hi"))
     assert reply["ok"] is False
     assert reply["code"] == "bed_unavailable"
+
+
+@pytest.mark.unit
+def test_default_urgency_is_a_value_the_database_enum_accepts():
+    # engine.notify_urgency_enum (bbsengine6 sql/message_enum.sql) accepts only these four.
+    enum_values = {"ROUTINE", "IMPORTANT", "URGENT", "CRITICAL"}
+    import inspect
+    default = inspect.signature(ms.BedMessageServiceClient.send_message).parameters["urgency"].default
+    assert default in enum_values

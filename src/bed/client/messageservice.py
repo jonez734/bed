@@ -265,7 +265,7 @@ class BedMessageServiceClient:
         recipients: list,
         content: str,
         channel: str = "member:direct",
-        urgency: str = "NORMAL",
+        urgency: str = "ROUTINE",
     ) -> Dict[str, Any]:
         """Send a message as the signed-in member. The server takes the sender from the session."""
         try:
