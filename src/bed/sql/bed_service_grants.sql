@@ -14,3 +14,7 @@ BEGIN
     EXECUTE format('REVOKE CREATE ON DATABASE %I FROM bed', current_database());
 END
 $$;
+
+-- bed does not need sysop. Its functions check sysop through the zoid6-owned
+-- wrapper bed_is_sysop, not through role membership. Revoke any earlier grant.
+REVOKE sysop FROM bed;
