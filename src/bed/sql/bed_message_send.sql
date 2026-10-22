@@ -63,7 +63,7 @@ BEGIN
         IF v_token = 'here' THEN
             RAISE EXCEPTION 'bed_message_send: @here is not yet supported for bed sends';
         ELSIF v_token = 'everyone' THEN
-            IF NOT (engine.checkmemberflag(v_sender, 'sysop') IS TRUE) THEN
+            IF NOT (engine.bed_is_sysop(v_sender) IS TRUE) THEN
                 RAISE EXCEPTION 'bed_message_send: only sysops may address @everyone';
             END IF;
             v_expanded := v_expanded || ARRAY(
@@ -74,7 +74,7 @@ BEGIN
             IF v_group_id IS NULL THEN
                 RAISE EXCEPTION 'bed_message_send: unknown group %', v_recipient;
             END IF;
-            IF NOT (engine.checkmemberflag(v_sender, 'sysop') IS TRUE)
+            IF NOT (engine.bed_is_sysop(v_sender) IS TRUE)
                AND NOT EXISTS (
                    SELECT 1 FROM engine.__message_group_member gm
                    WHERE gm.group_id = v_group_id AND gm.member_moniker = v_sender

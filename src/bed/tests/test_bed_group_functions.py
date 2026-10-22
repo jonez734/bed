@@ -44,7 +44,7 @@ def test_acting_moniker_from_session_row():
 
 def test_add_and_remove_require_sysop_or_member():
     text = _text()
-    assert len(re.findall(r"engine\.checkmemberflag\(\s*v_actor\s*,\s*'sysop'\s*\)", text, re.IGNORECASE)) >= 3
+    assert len(re.findall(r"engine\.bed_is_sysop\(\s*v_actor\s*\)", text, re.IGNORECASE)) >= 3
 
 
 def test_delete_requires_sysop_or_creator():

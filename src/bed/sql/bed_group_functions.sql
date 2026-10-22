@@ -71,7 +71,7 @@ BEGIN
         RAISE EXCEPTION 'bed_group_add_member: unknown group %', p_name;
     END IF;
 
-    IF NOT (engine.checkmemberflag(v_actor, 'sysop') IS TRUE)
+    IF NOT (engine.bed_is_sysop(v_actor) IS TRUE)
        AND NOT EXISTS (
            SELECT 1 FROM engine.__message_group_member gm
            WHERE gm.group_id = v_group_id AND gm.member_moniker = v_actor
@@ -109,7 +109,7 @@ BEGIN
         RETURN FALSE;
     END IF;
 
-    IF NOT (engine.checkmemberflag(v_actor, 'sysop') IS TRUE)
+    IF NOT (engine.bed_is_sysop(v_actor) IS TRUE)
        AND NOT EXISTS (
            SELECT 1 FROM engine.__message_group_member gm
            WHERE gm.group_id = v_group_id AND gm.member_moniker = v_actor
@@ -147,7 +147,7 @@ BEGIN
         RETURN FALSE;
     END IF;
 
-    IF NOT (engine.checkmemberflag(v_actor, 'sysop') IS TRUE) AND v_creator IS DISTINCT FROM v_actor THEN
+    IF NOT (engine.bed_is_sysop(v_actor) IS TRUE) AND v_creator IS DISTINCT FROM v_actor THEN
         RAISE EXCEPTION 'bed_group_delete: only sysops or the group creator may delete %', p_name;
     END IF;
 

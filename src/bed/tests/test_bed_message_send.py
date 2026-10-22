@@ -103,7 +103,7 @@ def test_no_row_stored_when_every_recipient_blocked():
 
 def test_everyone_limited_to_sysop_and_expands_approved_members():
     text = _text()
-    assert re.search(r"engine\.checkmemberflag\(\s*v_sender\s*,\s*'sysop'\s*\)", text, re.IGNORECASE)
+    assert re.search(r"engine\.bed_is_sysop\(\s*v_sender\s*\)", text, re.IGNORECASE)
     assert re.search(r"FROM\s+engine\.__member\s+\w+\s+WHERE\s+\w+\.approved\s*=\s*TRUE", text, re.IGNORECASE)
 
 

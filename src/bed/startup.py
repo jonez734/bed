@@ -34,6 +34,7 @@ def _ensure_bed_token_table(args, conn):
     for sqlfile in (
         "bed_token.sql",
         "bed_token_functions.sql",
+        "bed_sysop_check.sql",
         "bed_message_read_functions.sql",
         "bed_message_send.sql",
         "bed_group_functions.sql",
