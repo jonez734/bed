@@ -857,9 +857,12 @@ class MessageService(BaseService):
             from bed.store.token_store import token_hash
 
             with self._message_conn() as conn, conn.cursor() as cur:
+                # A sysop may name another sender; anyone else passes NULL, so the SQL uses the
+                # session member. The SQL checks the sysop flag again before it writes.
+                chosen = wire_sender if wire_sender and wire_sender.lower() != session_member.lower() else None
                 cur.execute(
-                    "SELECT engine.bed_message_send(%s, %s, %s, %s, %s::citext[])",
-                    (token_hash(token), channel, content, urgency, recipients),
+                    "SELECT engine.bed_message_send(%s, %s, %s, %s, %s::citext[], %s::citext)",
+                    (token_hash(token), channel, content, urgency, recipients, chosen),
                 )
                 row = cur.fetchone()
         except Exception as e:

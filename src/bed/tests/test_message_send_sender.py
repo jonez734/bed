@@ -49,9 +49,10 @@ def test_sender_defaults_to_the_session_member():
     svc._message_conn = MagicMock(return_value=conn)
     svc._check_access = MagicMock(return_value=(_state("alice"), None))
     _send(svc, {"recipients": ["bob"], "content": "hi"})
-    # The SQL receives the token hash; the sender itself is read from the session row.
+    # The SQL receives the token hash, and a NULL chosen sender: the session row decides.
     params = cur.execute.call_args.args[1]
-    assert len(params) == 5
+    assert len(params) == 6
+    assert params[5] is None
 
 
 @pytest.mark.unit

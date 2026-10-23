@@ -34,7 +34,10 @@ def test_send_function_signature_takes_hash_not_sender():
     assert m, "bed_message_send not defined"
     params = m.group(1)
     assert "p_token_hash bytea" in params
-    assert "sender" not in params.lower(), "sender must come from the session row, not a parameter"
+    # The only sender input is the optional p_sender, which the function honours only for a
+    # sysop session. Every other sender comes from the session row.
+    assert "p_sender citext DEFAULT NULL" in params
+    assert params.lower().count("sender") == 1, "p_sender is the only sender parameter"
 
 
 def test_sender_read_from_session_row_and_expiry_enforced():

@@ -12,13 +12,22 @@
 -- refused, not flattened. Named sources are not handled by this function.
 --
 -- Installed by ``bed --install`` as the owner. Idempotent.
+--
+-- p_sender is optional. NULL means the session member sends. A non-NULL p_sender
+-- must equal the session member, unless the session belongs to a sysop, in which
+-- case the sysop may send as p_sender. Any other use raises before a row is written.
+
+-- The 5-argument version is replaced by the 6-argument one. Dropping it first stops the old
+-- signature from staying callable beside the new one, which would bypass the sender check.
+DROP FUNCTION IF EXISTS engine.bed_message_send(bytea, text, text, text, citext[]);
 
 CREATE OR REPLACE FUNCTION engine.bed_message_send(
     p_token_hash bytea,
     p_channel text,
     p_content text,
     p_urgency text,
-    p_recipients citext[]
+    p_recipients citext[],
+    p_sender citext DEFAULT NULL
 )
 RETURNS bigint
 LANGUAGE plpgsql
@@ -43,6 +52,15 @@ BEGIN
 
     IF v_sender IS NULL THEN
         RAISE EXCEPTION 'bed_message_send: no live session for this token';
+    END IF;
+
+    -- Choose the sender. A non-sysop may only send as the session member; a sysop may
+    -- send as anyone. The check runs before any write, so a refused send stores nothing.
+    IF p_sender IS NOT NULL AND p_sender IS DISTINCT FROM v_sender THEN
+        IF NOT (engine.bed_is_sysop(v_sender) IS TRUE) THEN
+            RAISE EXCEPTION 'bed_message_send: only a sysop may send as another member';
+        END IF;
+        v_sender := p_sender;
     END IF;
 
     IF p_recipients IS NULL OR cardinality(p_recipients) = 0 THEN
@@ -150,4 +168,4 @@ ALTER FUNCTION engine.bed_message_send(bytea, text, text, text, citext[]) OWNER 
 
 REVOKE ALL ON FUNCTION engine.bed_message_send(bytea, text, text, text, citext[]) FROM PUBLIC;
 
-GRANT EXECUTE ON FUNCTION engine.bed_message_send(bytea, text, text, text, citext[]) TO bed;
+GRANT EXECUTE ON FUNCTION engine.bed_message_send(bytea, text, text, text, citext[], citext) TO bed;
