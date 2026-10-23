@@ -18,9 +18,12 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import stat
 import tempfile
-from typing import Any
+from typing import Any, Optional
+
+_ACCOUNT_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 def build_token_file_arg(parentparser: argparse.ArgumentParser) -> None:
@@ -42,6 +45,48 @@ def build_token_file_arg(parentparser: argparse.ArgumentParser) -> None:
             "any service requests."
         ),
     )
+    parentparser.add_argument(
+        "--account",
+        dest="account",
+        default=None,
+        help=(
+            "Login account whose token to use: reads bed-<NAME>.token in "
+            "the same directory as the default token file. Lets several "
+            "terminals stay logged in as different accounts. --token-file "
+            "takes precedence when both are given."
+        ),
+    )
+
+
+def validate_account_name(name: str) -> str:
+    """Return ``name`` if it is a safe account name, else raise ValueError.
+
+    Letters, digits, ``-`` and ``_``, 1 to 64 characters. Anything else (path
+    separators, dots, spaces) is refused so the name cannot leave the runtime
+    directory.
+    """
+    if not isinstance(name, str) or not _ACCOUNT_RE.match(name):
+        raise ValueError(
+            f"invalid account name {name!r}: use letters, digits, '-' and '_' (1-64 characters)"
+        )
+    return name
+
+
+def token_path_for(
+    account: Optional[str] = None, token_file: Optional[str] = None
+) -> str:
+    """Return the token-file path for an account.
+
+    Precedence: ``token_file`` (explicit path), then ``account`` (``bed-<account>.token``
+    beside the default file), then the default ``bed.token``.
+    """
+    if token_file:
+        return token_file
+    if account:
+        validate_account_name(account)
+        base = default_token_path()
+        return os.path.join(os.path.dirname(base), f"bed-{account}.token")
+    return default_token_path()
 
 
 def default_token_path() -> str:
@@ -142,4 +187,4 @@ def ensure_token_file_arg(args: Any) -> None:
     Done in-place so subcommands can pass ``args`` straight through.
     """
     if getattr(args, "token_file", None) is None:
-        args.token_file = default_token_path()
+        args.token_file = token_path_for(account=getattr(args, "account", None))
