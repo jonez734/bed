@@ -66,7 +66,7 @@ on one database.
 with no memberships. Sysop checks now go through the zoid6-owned
 `engine.bed_is_sysop` wrapper.
 
-## 6. bbsengine6 imports bed for the bank balance (accepted exception)
+## 6. bbsengine6 imports bed for the bank balance (done)
 
 **Accepted.** bbsengine6 must not depend on bed, but `member/lib.py::_bed_balance` and
 `_resolve_bed_token` import `bed.client` and `bed.tools._token` lazily. The balance is fetched
@@ -83,7 +83,11 @@ skipped and the reason is `no_bed_source`. The two live callers are the bottomba
 line in letteredolive. This changes the balance API and about 40 test cases, so it is planned
 separately. When it lands, close this section and move it to the closed sections, as section 5 does.
 
-**Status.** Open, accepted until the fix lands.
+**Done.** bbsengine6 no longer imports bed. `getbalance_info` takes `bed_fetch`, and with no
+fetch it reports `no_bed_source`. The shell supplies the fetch (`shell/lib.py::_bed_fetch`), and its
+bottombar and welcome lines pass it. bbsengine6 `1e26f83` (the bed-free balance and its tests),
+letteredolive `cfac5bd` (the shell's fetch), and `tests/test_no_bed_import_anywhere.py` keeps the
+rule enforced across the whole package.
 
 ## 7. Balance lookup on every bottombar redraw (deferred)
 
