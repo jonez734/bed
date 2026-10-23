@@ -104,6 +104,8 @@ NOTIFY_CHANNEL = "engine_message_recipient"
 
 
 CODE_MISSING_MONIKER = "missing_moniker"
+CODE_MISSING_RECIPIENTS = "missing_recipients"
+CODE_MISSING_CONTENT = "missing_content"
 
 
 # Map from WS ``type`` field to the domain verb understood by
@@ -353,9 +355,19 @@ def _validate_shape(
     """Validate the wire-shape invariants ``bbsengine6.message.access``
     intentionally does not check.
 
-    All three ops require a non-empty ``moniker``. Returns ``None`` on
-    success or an error envelope on failure.
+    The moniker ops (subscribe, unsubscribe, list_pending) require a
+    non-empty ``moniker``. ``send`` identifies the member by the token,
+    so it needs non-empty ``recipients`` and ``content`` instead.
+    Returns ``None`` on success or an error envelope on failure.
     """
+    if op == "send":
+        if not [r for r in (message.get("recipients") or []) if str(r).strip()]:
+            return error_envelope(
+                CODE_MISSING_RECIPIENTS, "at least one recipient is required"
+            )
+        if not (message.get("content") or "").strip():
+            return error_envelope(CODE_MISSING_CONTENT, "content is required")
+        return None
     moniker = (message.get("moniker") or "").strip()
     if not moniker:
         return error_envelope(
