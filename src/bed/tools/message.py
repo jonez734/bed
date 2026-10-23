@@ -835,13 +835,11 @@ def message_watch(args: Any, moniker: str, **kwargs: Any) -> bool:
                 pass
 
     io.echo(f"watching moniker={moniker!r}; Ctrl-C to stop")
+    # The tail and the socket close run on one loop: run_with_connection closes the connection
+    # when the tail ends, whether by Ctrl-C (KeyboardInterrupt) or Ctrl-D (EOFError).
     try:
-        asyncio.run(_tail())
-    except KeyboardInterrupt:
-        pass
-    try:
-        svc.unsubscribe(moniker)
-    except Exception:
+        run_with_connection(svc._conn, _tail)
+    except (KeyboardInterrupt, EOFError):
         pass
     io.echo("stopped watching")
     return True
