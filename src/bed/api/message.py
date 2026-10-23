@@ -517,6 +517,14 @@ class MessageService(BaseService):
                 if claims is not None:
                     message["claims"] = claims
 
+        if op == "send":
+            # The member is the validated token's moniker. A plain send names no sender, so the
+            # gate fills it in here and access() authorises the member as themselves.
+            claims = message.get("claims") or {}
+            session_member = (claims.get("moniker") or getattr(state, "moniker", "") or "").strip()
+            if not (message.get("sender") or "").strip():
+                message["sender"] = session_member
+
         err = _validate_shape(op, message)
         if err is not None:
             return state, err
