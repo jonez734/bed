@@ -839,6 +839,17 @@ class MessageService(BaseService):
                 "message": "content is required",
                 "recoverable": True,
             }
+        session_member = (getattr(state, "moniker", None) or "").strip()
+        wire_sender = (message.get("sender") or "").strip()
+        if wire_sender and wire_sender.lower() != session_member.lower():
+            if not getattr(state, "is_sysop", False):
+                return {
+                    "type": "message_send_result",
+                    "ok": False,
+                    "code": "forbidden",
+                    "message": "you may only send as yourself",
+                    "recoverable": False,
+                }
         channel = (message.get("channel") or "member:direct").strip()
         urgency = (message.get("urgency") or "ROUTINE").strip().upper()
         token = getattr(state, "auth_service_token", None) or ""
