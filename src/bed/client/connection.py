@@ -155,6 +155,9 @@ class BedConnection:
                 asyncio.TimeoutError,
                 WebSocketException,
             ) as exc:
+                # Close the socket on this loop before dropping it. Clearing the reference alone
+                # leaves an open socket for garbage collection to report as a ResourceWarning.
+                await self._close_socket(self._ws)
                 self._ws = None
                 self._stop_recv_loop()
                 raise BedUnavailable(
@@ -316,6 +319,10 @@ class BedConnection:
         self._stop_recv_loop()
         ws = self._ws
         self._ws = None
+        await self._close_socket(ws)
+
+    async def _close_socket(self, ws: Any) -> None:
+        """Close one websocket on the current loop. A None socket is a no-op; errors are logged."""
         if ws is None:
             return
         close = getattr(ws, "close", None)
