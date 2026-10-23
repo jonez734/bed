@@ -268,11 +268,16 @@ class BedConnection:
                 ws = self._ws
                 if ws is None or self._is_closed():
                     try:
-                        self._ws = await self._connect()
+                        dialed = await self._connect()
                     except BedUnavailable:
                         await asyncio.sleep(min(backoff, 10.0))
                         backoff = min(backoff * 2, 10.0)
                         continue
+                    if self._recv_stop.is_set():
+                        # A close started while this redial was in flight: do not keep the socket.
+                        await self._close_socket(dialed)
+                        return
+                    self._ws = dialed
                     backoff = 0.5
                     for hook in list(self._reconnect_hooks):
                         try:
@@ -312,11 +317,24 @@ class BedConnection:
     async def aclose(self) -> None:
         """Stop the receive loop and close the websocket on the current event loop.
 
-        Safe to call more than once, and when no socket is open. The socket is cleared, so a later
-        send dials again. Use it from the loop that opened the socket; :meth:`force_close` is for
-        tests and runs the close on a new loop.
+        The receive task is cancelled and awaited to completion before the socket is closed, so
+        nothing it does (including a redial) runs after this returns. Safe to call more than once,
+        and when no socket is open. The socket is cleared, so a later send dials again. Push
+        handlers are kept, so a later subscribe reopens with them. Use it from the loop that opened
+        the socket; :meth:`force_close` is for tests and runs the close on a new loop.
         """
-        self._stop_recv_loop()
+        if self._recv_stop is not None:
+            self._recv_stop.set()
+        task = self._recv_task
+        self._recv_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                io.echo(f"bed.client: receive task error on close: {e}", level="debug")
         ws = self._ws
         self._ws = None
         await self._close_socket(ws)
