@@ -65,6 +65,8 @@ _WS_OP: Dict[str, str] = {
     "subscribe": "subscribe",
     "unsubscribe": "unsubscribe",
     "pending": "list_pending",
+    "list": "list_pending",
+    "show": "list_pending",
     "watch": "subscribe",
 }
 
@@ -138,6 +140,17 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         parents=[common],
         help="List the pending message queue for a moniker",
     )
+    sub.add_parser(
+        "list",
+        parents=[common],
+        help="List the pending message queue (same as pending)",
+    )
+    show_p = sub.add_parser(
+        "show",
+        parents=[common],
+        help="Show one pending message by id",
+    )
+    show_p.add_argument("id", type=int, help="the message id to show")
 
     send_p = sub.add_parser(
         "send",
@@ -545,7 +558,7 @@ def _needs_auth(sub: str) -> bool:
     """
     if sub in _BED_ONLY_SUBCMDS:
         return True
-    if sub in ("pending", "send"):
+    if sub in ("pending", "list", "show", "send"):
         return True
     return False
 
@@ -845,11 +858,31 @@ def message_watch(args: Any, moniker: str, **kwargs: Any) -> bool:
     return True
 
 
+def message_show(args: Any, moniker: str, **kwargs: Any) -> bool:
+    """Print one pending message for ``moniker``, by id. Sends nothing."""
+    wanted = int(getattr(args, "id", 0) or 0)
+    if not _check_access(args, _WS_OP["show"], session_moniker=moniker, moniker=moniker):
+        return False
+    svc = _BedMessageFacade(args)
+    reply = svc.list_pending(moniker)
+    if not reply.get("ok"):
+        _render_soft_failure(reply)
+        return False
+    for m in reply.get("messages", []):
+        if int(m.get("id", -1)) == wanted:
+            _render_pending([m])
+            return True
+    io.echo(f"no pending message #{wanted}", level="error")
+    return False
+
+
 # CLI subcommand -> handler. Mirrors the bank tool's dispatch dict.
 _HANDLERS = {
     "subscribe": message_subscribe,
     "unsubscribe": message_unsubscribe,
     "pending": message_pending,
+    "list": message_pending,
+    "show": message_show,
     "send": message_send,
     "mark_read": message_mark_read,
     "mark_delivered": message_mark_delivered,
