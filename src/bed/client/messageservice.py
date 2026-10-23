@@ -266,18 +266,24 @@ class BedMessageServiceClient:
         content: str,
         channel: str = "member:direct",
         urgency: str = "ROUTINE",
+        sender: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Send a message as the signed-in member. The server takes the sender from the session."""
+        """Send a message as the signed-in member.
+
+        ``sender`` is sent only when set. The server decides whether it is allowed: a member's
+        sender must be their own moniker, and a sysop may name anyone.
+        """
+        msg: Dict[str, Any] = {
+            "type": "message_send",
+            "recipients": list(recipients),
+            "content": content,
+            "channel": channel,
+            "urgency": urgency,
+        }
+        if sender:
+            msg["sender"] = sender
         try:
-            return await self._send_authed(
-                {
-                    "type": "message_send",
-                    "recipients": list(recipients),
-                    "content": content,
-                    "channel": channel,
-                    "urgency": urgency,
-                }
-            )
+            return await self._send_authed(msg)
         except BedUnavailable as e:
             return {
                 "ok": False,

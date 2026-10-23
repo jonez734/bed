@@ -65,3 +65,17 @@ def test_default_urgency_is_a_value_the_database_enum_accepts():
     import inspect
     default = inspect.signature(ms.BedMessageServiceClient.send_message).parameters["urgency"].default
     assert default in enum_values
+
+
+@pytest.mark.unit
+def test_send_message_sends_the_chosen_sender_when_given():
+    client, conn = _client(reply={"ok": True})
+    asyncio.run(client.send_message(recipients=["bob"], content="hi", sender="ops"))
+    assert conn.send.await_args.args[0]["sender"] == "ops"
+
+
+@pytest.mark.unit
+def test_send_message_omits_sender_when_not_given():
+    client, conn = _client(reply={"ok": True})
+    asyncio.run(client.send_message(recipients=["bob"], content="hi"))
+    assert "sender" not in conn.send.await_args.args[0]
