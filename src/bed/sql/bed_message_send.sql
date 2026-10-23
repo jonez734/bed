@@ -6,8 +6,10 @@
 -- cannot name a different sender. The function runs as zoid6 (SECURITY
 -- DEFINER) with a fixed search_path, and bed holds EXECUTE only.
 --
--- Slice 1 accepts direct monikers only. Groups (@group), @here, @everyone and
--- named sources are refused until their slices land.
+-- Recipients: direct monikers pass through. @everyone (sysop only) expands to
+-- every approved member. @<group> expands one level to the group's members,
+-- for members of the group or sysops. @here is refused. Nested groups are
+-- refused, not flattened. Named sources are not handled by this function.
 --
 -- Installed by ``bed --install`` as the owner. Idempotent.
 
