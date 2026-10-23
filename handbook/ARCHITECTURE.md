@@ -135,6 +135,34 @@ consumer's own repo for per-file detail.
 
 Per-consumer pointer table is in `handbook/ADOPTERS.md`.
 
+## Client connection lifecycle
+
+A `BedConnection` owns one websocket. Its lifetime is the caller's
+responsibility, and it is released in one of three ways:
+
+- **`async with`** (preferred). `__aenter__` returns the connection and
+  `__aexit__` calls `aclose()`, which awaits the receive task to completion
+  and then closes the websocket on the current event loop. It runs whether
+  the body returns or raises.
+- **`run_with_connection(connection, factory)`** runs one call on its own
+  event loop and closes the connection on that loop before returning. The
+  one-shot CLI commands (`auth`, `message`, `bank`) and the shell use it.
+- **`force_close()`** is for tests. It runs the close on a new loop and must
+  not be used from production code.
+
+A failed `send` closes the socket it opened before raising `BedUnavailable`,
+so nothing is left for garbage collection to report.
+
+Message-family clients (`BedMessageClient` and its subclasses, such as
+`BedBankClient`) use the connection they are given. A caller that passes a
+`BedConnection` closes the same object the client uses. Passing `args` makes
+the client resolve its connection through the singleton. Earlier, a passed
+connection was silently replaced, so the caller closed a socket it had not
+opened.
+
+A receive task stops when `aclose()` runs. A redial that is in flight when a
+stop is requested closes the socket it dials, rather than keeping it.
+
 ## 6. See also
 
 - `handbook/BED_AUTH.md` — bearer-token wire protocol.
