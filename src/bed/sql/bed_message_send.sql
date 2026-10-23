@@ -164,8 +164,8 @@ BEGIN
 END
 $$;
 
-ALTER FUNCTION engine.bed_message_send(bytea, text, text, text, citext[]) OWNER TO zoid6;
+ALTER FUNCTION engine.bed_message_send(bytea, text, text, text, citext[], citext) OWNER TO zoid6;
 
-REVOKE ALL ON FUNCTION engine.bed_message_send(bytea, text, text, text, citext[]) FROM PUBLIC;
+REVOKE ALL ON FUNCTION engine.bed_message_send(bytea, text, text, text, citext[], citext) FROM PUBLIC;
 
 GRANT EXECUTE ON FUNCTION engine.bed_message_send(bytea, text, text, text, citext[], citext) TO bed;

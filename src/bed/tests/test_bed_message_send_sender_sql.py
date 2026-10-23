@@ -97,3 +97,46 @@ def test_old_five_argument_signature_is_only_named_in_the_drop():
     old = r"engine\.bed_message_send\(bytea,\s*text,\s*text,\s*text,\s*citext\[\]\)"
     assert not re.search(r"GRANT[^;]*" + old, text, re.IGNORECASE)
     assert re.search(r"DROP\s+FUNCTION\s+IF\s+EXISTS\s+" + old, text, re.IGNORECASE)
+
+
+def _statements_naming_send():
+    """Every non-comment statement that names engine.bed_message_send, as text."""
+    return [
+        s.strip()
+        for s in _text().split(";")
+        if "engine.bed_message_send(" in s
+    ]
+
+
+def test_owner_revoke_and_grant_all_name_the_six_argument_signature():
+    # The DROP may name the old signature. Every ALTER, REVOKE and GRANT must name the new one,
+    # or bed --install fails on the missing function (the install ran ALTER on the old form).
+    six = re.compile(
+        r"engine\.bed_message_send\(bytea,\s*text,\s*text,\s*text,\s*citext\[\],\s*citext\)",
+        re.IGNORECASE,
+    )
+    for stmt in _statements_naming_send():
+        head = stmt.lstrip().split()[0].upper()
+        if head == "DROP":
+            continue
+        if head == "CREATE":
+            # CREATE declares named parameters, so check the parameter list, not a type list.
+            assert "p_sender citext" in stmt and stmt.count("p_") >= 6, stmt[:90]
+            continue
+        assert six.search(stmt), f"{head} statement does not name the 6-argument signature: {stmt[:90]}"
+
+
+def test_alter_owner_is_the_six_argument_function():
+    assert re.search(
+        r"ALTER\s+FUNCTION\s+engine\.bed_message_send\(bytea,\s*text,\s*text,\s*text,\s*citext\[\],\s*citext\)\s+OWNER\s+TO\s+zoid6",
+        _text(),
+        re.IGNORECASE,
+    )
+
+
+def test_revoke_from_public_is_the_six_argument_function():
+    assert re.search(
+        r"REVOKE\s+ALL\s+ON\s+FUNCTION\s+engine\.bed_message_send\(bytea,\s*text,\s*text,\s*text,\s*citext\[\],\s*citext\)\s+FROM\s+PUBLIC",
+        _text(),
+        re.IGNORECASE,
+    )
