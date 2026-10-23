@@ -306,6 +306,35 @@ class BedConnection:
         except ValueError:
             pass
 
+    async def aclose(self) -> None:
+        """Stop the receive loop and close the websocket on the current event loop.
+
+        Safe to call more than once, and when no socket is open. The socket is cleared, so a later
+        send dials again. Use it from the loop that opened the socket; :meth:`force_close` is for
+        tests and runs the close on a new loop.
+        """
+        self._stop_recv_loop()
+        ws = self._ws
+        self._ws = None
+        if ws is None:
+            return
+        close = getattr(ws, "close", None)
+        if close is None:
+            return
+        try:
+            result = close()
+            if asyncio.iscoroutine(result) or isinstance(result, asyncio.Future):
+                await result
+        except Exception as e:
+            io.echo(f"bed.client: close error: {e}", level="debug")
+
+    async def __aenter__(self) -> "BedConnection":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        await self.aclose()
+        return False
+
     def force_close(self) -> None:
         """Close the current connection so the next send redials.
 
