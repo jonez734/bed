@@ -21,8 +21,13 @@ class BedMessageClient:
 
     _NO_DEFAULT = object()
 
-    def __init__(self, args: Any) -> None:
-        self._conn: BedConnection = get_bed_connection(args)
+    def __init__(self, connection_or_args: Any) -> None:
+        # A BedConnection is used as given, so the caller that opened it is the one that closes
+        # it. Anything else is treated as args and resolved through the singleton.
+        if isinstance(connection_or_args, BedConnection):
+            self._conn: BedConnection = connection_or_args
+        else:
+            self._conn = get_bed_connection(connection_or_args)
 
     async def _request(
         self,
