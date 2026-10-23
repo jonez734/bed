@@ -65,3 +65,31 @@ on one database.
 (`bed_service_grants.sql`), and the send and group smoke test passed afterward
 with no memberships. Sysop checks now go through the zoid6-owned
 `engine.bed_is_sysop` wrapper.
+
+## 6. bbsengine6 imports bed for the bank balance (accepted exception)
+
+**Accepted.** bbsengine6 must not depend on bed, but `member/lib.py::_bed_balance` and
+`_resolve_bed_token` import `bed.client` and `bed.tools._token` lazily. The balance is fetched
+over the WebSocket, and `getbalance` runs on every bottombar redraw, so the import is exercised
+at runtime. `bed` is not a declared dependency of bbsengine6, so a bbsengine6 install never pulls
+bed in; the import only works where bed is installed.
+
+The socket is now released through bed's `async with`, so the receive task stops and no
+`ResourceWarning` is left (bbsengine6 `730f398`). The dependency itself stays until the fix below.
+
+**Fix.** Move the bank-balance fetch to the caller. `getbalance_info` keeps the balance order and
+labels, and takes a `bed_fetch` callable that the shell supplies. With no `bed_fetch`, bed is
+skipped and the reason is `no_bed_source`. The two live callers are the bottombar and the welcome
+line in letteredolive. This changes the balance API and about 40 test cases, so it is planned
+separately. When it lands, close this section and move it to the closed sections, as section 5 does.
+
+**Status.** Open, accepted until the fix lands.
+
+## 7. Balance lookup on every bottombar redraw (deferred)
+
+**Deferred by decision.** The bottombar asks bed for the balance on each redraw, which opens a
+socket each time. Caching the balance (for example, refreshing on a timer or after a send) would
+cut the connection count. Behaviour is unchanged for now.
+
+**Fix.** Cache the balance per session and invalidate it on a message send or a bank change.
+Planned separately.
