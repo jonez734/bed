@@ -24,9 +24,9 @@ DB="zoid6"
 CONFIG="/etc/zoid6/zoid6.json"
 ROUTER="zoid6.api.handler.MessageRouter"
 
-BED_WHEEL="bed-0.0.2.dev20261023002609-py3-none-any.whl"
+BED_WHEEL="bed-0.0.2.dev20261023014927-py3-none-any.whl"
 BBS_WHEEL="bbsengine6-0.0.1.dev202610182201-py3-none-any.whl"
-LO_WHEEL="letteredolive-0.0.2.dev20261023010110-py3-none-any.whl"
+LO_WHEEL="letteredolive-0.0.2.dev20261023014932-py3-none-any.whl"
 
 DRY_RUN=0
 
