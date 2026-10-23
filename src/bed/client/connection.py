@@ -387,3 +387,18 @@ def _expected_result_type(request_type: str) -> Optional[str]:
     if request_type.endswith("_result"):
         return request_type
     return f"{request_type}_result"
+
+
+def run_with_connection(connection: "BedConnection", factory: Any) -> Any:
+    """Run one bed call on its own event loop, and close the connection on that same loop.
+
+    ``factory`` is a zero-argument callable returning the coroutine to run (for example
+    ``lambda: client.reconnect(token)``). The socket is closed when the call ends, whether it
+    returns or raises, so one-shot commands do not leave a websocket open after the loop ends.
+    """
+
+    async def _run() -> Any:
+        async with connection:
+            return await factory()
+
+    return asyncio.run(_run())

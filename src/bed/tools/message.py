@@ -55,6 +55,7 @@ from bed import _version as bed_version
 from bed.client.exceptions import BedUnavailable
 from bed.tools import _routing
 from bed.tools import _token
+from bed.client.connection import run_with_connection
 
 
 # CLI subcommand -> domain verb understood by bbsengine6.message.access.
@@ -411,7 +412,7 @@ def _authenticate_ws(args: Any) -> bool:
     from bed.client.authservice import BedAuthServiceClient
 
     client = BedAuthServiceClient(get_bed_connection(args))
-    reply = asyncio.run(client.reconnect(token))
+    reply = run_with_connection(client._conn, lambda: client.reconnect(token))
 
     if not reply.get("ok"):
         code = reply.get("code") or "unknown"
@@ -489,7 +490,7 @@ class _BedMessageFacade:
         self._conn = get_bed_connection(args)
 
     def _run(self, coro: Any) -> Any:
-        return asyncio.run(coro)
+        return run_with_connection(self._conn, lambda: coro)
 
     def subscribe(self, moniker: str) -> Dict[str, Any]:
         reply = self._run(self._client.subscribe(moniker))
@@ -666,10 +667,11 @@ def _message_send_via_bed(args: Any, actor: str, recipients: List[str], body: st
     channel = (getattr(args, "channel", None) or "member:direct").strip()
     urgency = (getattr(args, "urgency", None) or "ROUTINE").strip()
     client = _bed_send_client(args)
-    reply = asyncio.run(
-        client.send_message(
+    reply = run_with_connection(
+        client._conn,
+        lambda: client.send_message(
             recipients=recipients, content=body, channel=channel, urgency=urgency
-        )
+        ),
     )
     if not reply.get("ok"):
         io.echo(

@@ -26,6 +26,7 @@ from bbsengine6 import io
 from bbsengine6.util import inputpassword
 
 from bed.client.authservice import BedAuthServiceClient
+from bed.client.connection import run_with_connection
 from bed.client.exceptions import BedUnavailable
 from bed.tools import _routing
 from bed.tools import _token
@@ -293,7 +294,7 @@ def auth_login(args) -> bool:
     except RuntimeError:
         return False
     svc = _auth_service(args)
-    reply = asyncio.run(svc.login(moniker, password))
+    reply = run_with_connection(svc._conn, lambda: svc.login(moniker, password))
     if not reply.get("ok"):
         _render_soft_failure(reply)
         return False
@@ -309,7 +310,7 @@ def auth_reconnect(args) -> bool:
         io.echo("missing_token: token is required", level="error")
         return False
     svc = _auth_service(args)
-    reply = asyncio.run(svc.reconnect(token))
+    reply = run_with_connection(svc._conn, lambda: svc.reconnect(token))
     if not reply.get("ok"):
         _render_soft_failure(reply)
         return False
@@ -339,7 +340,7 @@ def auth_refresh(args) -> bool:
         io.echo("missing_token: token is required", level="error")
         return False
     svc = _auth_service(args)
-    reply = asyncio.run(svc.refresh(token))
+    reply = run_with_connection(svc._conn, lambda: svc.refresh(token))
     if not reply.get("ok"):
         _render_soft_failure(reply)
         return False
@@ -367,7 +368,7 @@ def auth_revoke(args) -> bool:
         io.echo("missing_token: token is required", level="error")
         return False
     svc = _auth_service(args)
-    reply = asyncio.run(svc.revoke(token))
+    reply = run_with_connection(svc._conn, lambda: svc.revoke(token))
     if not reply.get("ok"):
         _render_soft_failure(reply)
         code = reply.get("code") or "unknown"

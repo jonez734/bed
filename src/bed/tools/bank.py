@@ -38,6 +38,7 @@ from bed import _version as bed_version
 from bed.client.exceptions import BedUnavailable
 from bed.tools import _routing
 from bed.tools import _token
+from bed.client.connection import run_with_connection
 
 from bbsengine6.io import screen as bbsengine6_screen
 from bbsengine6.io import terminal as bbsengine6_terminal
@@ -271,7 +272,7 @@ def _authenticate_ws(args) -> bool:
     from bed.client.authservice import BedAuthServiceClient
 
     client = BedAuthServiceClient(get_bed_connection(args))
-    reply = asyncio.run(client.reconnect(token))
+    reply = run_with_connection(client._conn, lambda: client.reconnect(token))
 
     if not reply.get("ok"):
         code = reply.get("code") or "unknown"
@@ -390,7 +391,7 @@ class _BedBankFacade:
         )
 
     def _run(self, coro: Any) -> Any:
-        return asyncio.run(coro)
+        return run_with_connection(self._client._conn, lambda: coro)
 
     def get_balance(self, moniker: str) -> int:
         reply = self._run(self._client.get_balance(moniker))
