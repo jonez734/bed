@@ -26,7 +26,7 @@ ROUTER="zoid6.api.handler.MessageRouter"
 
 BED_WHEEL="bed-0.0.2.dev20261023173910-py3-none-any.whl"
 BBS_WHEEL="bbsengine6-0.0.1.dev202610182201-py3-none-any.whl"
-LO_WHEEL="letteredolive-0.0.2.dev20261023193115-py3-none-any.whl"
+LO_WHEEL="letteredolive-0.0.2.dev20261024155248-py3-none-any.whl"
 
 DRY_RUN=0
 
