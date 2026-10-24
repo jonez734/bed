@@ -67,5 +67,10 @@ def test_deploy_venv_does_not_use_sudo():
 
 @pytest.mark.unit
 def test_venv_dir_is_the_single_source_of_truth():
-    # install and deploy-venv must agree on the venv path.
-    assert re.search(r"^VENV_DIR\s*\?=\s*/var/lib/bed/venv\s*$", _text(), re.MULTILINE)
+    # install and deploy-venv must agree on the venv path: one VENV_DIR definition, whose
+    # default is /var/lib/bed/venv and which deploytool's DEPLOY_PREFIX may override.
+    assert re.search(
+        r"^VENV_DIR\s*\?=\s*\$\(or \$\(DEPLOY_PREFIX\),/var/lib/bed/venv\)\s*$",
+        _text(),
+        re.MULTILINE,
+    )

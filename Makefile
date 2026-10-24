@@ -172,8 +172,13 @@ uninstall-tmpfiles:
 	-sudo rm -f $(TMPFILES_DST)
 	@echo "Removed $(TMPFILES_DST)"
 
-VENV_DIR ?= /var/lib/bed/venv
+# deploytool's --prefix arrives as DEPLOY_PREFIX; it overrides the default venv path.
+VENV_DIR ?= $(or $(DEPLOY_PREFIX),/var/lib/bed/venv)
 VENV_OWNER ?= bed
+
+# Prints the resolved venv path and runs no recipe. Used by the Makefile tests.
+print-venv-dir:
+	@echo $(VENV_DIR)
 VENV_GROUP ?= bed
 
 WHEEL_DIR = /tmp/$(PROJECT)-$$
