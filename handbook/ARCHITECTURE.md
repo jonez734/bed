@@ -135,6 +135,24 @@ consumer's own repo for per-file detail.
 
 Per-consumer pointer table is in `handbook/ADOPTERS.md`.
 
+## Bank database contract (zoid6 definer functions)
+
+bed holds no table privileges on the bank tables. It calls zoid6-owned
+`SECURITY DEFINER` functions with the SHA-256 digest of the bearer token. The
+acting moniker and sysop status come from the verified token row
+(`engine.__bed_token`), never from the request.
+
+| Function | Purpose |
+| --- | --- |
+| `engine.bed_bank_balance(token_hash, moniker)` | one account's balance (`sql/bed_bank_functions.sql`) |
+| `engine.bed_bank_op(token_hash, op, args jsonb)` | every other bank operation, dispatched by `op` (`sql/bed_bank_op_functions.sql`) |
+
+`engine.bed_bank_op` takes an op name and a jsonb argument object, the way
+`bbsengine6.module.access()` takes an op. The ops are `add`, `remove`,
+`history`, `list_all`, `pending`, `transfer_request`, `transfer_approve` and
+`transfer_reject`. Each op enforces its own rule. An unknown op is refused.
+Execute is granted to `bed` only.
+
 ## Client connection lifecycle
 
 A `BedConnection` owns one websocket. Its lifetime is the caller's
