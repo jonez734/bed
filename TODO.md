@@ -11,7 +11,10 @@ relationship is now a one-line pointer at the consumer repo.
 
 ---
 
-## `_apply_auth_config` overwrites CLI `--bed-secret` with literal `~`
+## `_apply_auth_config` overwrites CLI `--bed-secret` with literal `~` (done)
+
+Status: fixed. The `_apply_*` functions expand `~` in the JSON value, and the
+`TestConfigFlag` regression tests pass. The remaining item is the README note below.
 
 ### Problem (summary)
 
@@ -37,13 +40,13 @@ comparison are in the same form. Two-line change per call site.
 
 ### Tasks
 
-- [ ] Apply Option D to `_apply_auth_config` (wrap
+- [x] Apply Option D to `_apply_auth_config` (wrap
       `auth["bed_secret_path"]` in `os.path.expanduser(...)`
       before assigning).
-- [ ] Apply the same fix to `_apply_bind_config` (expand
+- [x] Apply the same fix to `_apply_bind_config` (expand
       `bind.host`) and `_apply_database_config` (expand
       `database.host`).
-- [ ] Regression tests in `bed/src/bed/tests/test_bed.py::TestConfigFlag`:
+- [x] Regression tests in `bed/src/bed/tests/test_bed.py::TestConfigFlag`:
       - `test_config_does_not_overwrite_explicit_bed_secret`
       - `test_config_expands_tilde_in_bed_secret_path`
       - `test_config_default_bed_secret_is_preserved`.
@@ -68,7 +71,12 @@ comparison are in the same form. Two-line change per call site.
 
 ---
 
-## SIGTERM graceful shutdown + SIGKILL fallback gap
+## SIGTERM graceful shutdown + SIGKILL fallback gap (done)
+
+Status: shutdown uses SIGTERM, `bed.service` and `zoid6.service` set
+`KillSignal=SIGTERM` and `TimeoutStopSec=30s`, the stale-pidfile check is in
+`_write_pidfile`, and `tests/scripts/stop_bed.sh` escalates to SIGKILL. Open: the
+`--token-persistence=db` README note, and linger tuning (deferred).
 
 ### Why SIGTERM is the right primary signal
 
@@ -92,11 +100,11 @@ handles it correctly at `bed/src/bed/main.py` signal handlers.
 
 ### Tasks
 
-- [ ] **Stale-pidfile detection** at startup (Option A): `kill -0`
+- [x] **Stale-pidfile detection** at startup (Option A): `kill -0`
       check at the top of `main_async`; `O_EXCL` on the pidfile
       open so a racing second start errors out instead of
       overwriting.
-- [ ] **Process-group cleanup for `bed --foreground`** (Option C):
+- [x] **Process-group cleanup for `bed --foreground`** (Option C):
       `bed/tests/scripts/stop_bed.sh` sends SIGTERM to the bed
       pid, waits 5s for graceful shutdown, falls back to SIGKILL
       on the process group.
@@ -155,16 +163,9 @@ prerequisites are:
 
 ---
 
-## See also
+---
 
-- `SPEC.md` — entry-point spec, phase gates.
-- `handbook/ARCHITECTURE.md` — dep graph, prerequisites.
-- `handbook/BED_AUTH.md` — bearer-token protocol reference.
-- `specs/` — per-service specs (each owns its own open
-  follow-ups section).
-- `CHANGELOG.md` — release history.
-
-## [KHKP] `getch()` idle timer that blank input does not reset
+## `getch()` idle timer that blank input does not reset
 
 ### Problem (summary)
 
@@ -190,3 +191,14 @@ decided), so an idle client cannot hold a port open.
 - The timer belongs in `getch()` because that is where all prompts read
   keys. Login and the main prompt both use it.
 - No prompt limit is wanted: the user has ruled out a cap on blank re-prompts.
+
+---
+
+## See also
+
+- `SPEC.md` — entry-point spec, phase gates.
+- `handbook/ARCHITECTURE.md` — dep graph, prerequisites.
+- `handbook/BED_AUTH.md` — bearer-token protocol reference.
+- `specs/` — per-service specs (each owns its own open
+  follow-ups section).
+- `CHANGELOG.md` — release history.
