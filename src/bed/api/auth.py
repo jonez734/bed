@@ -213,6 +213,20 @@ def _deny_envelope(op: str) -> Dict[str, Any]:
     return forbidden("Operation not permitted for this token")
 
 
+def _peer_address(websocket: Any) -> Optional[str]:
+    """The client's socket address (host only), or None when the transport does not report one.
+
+    The websockets library exposes it as ``remote_address`` (a (host, port) tuple). bed sits
+    directly on the network with no proxy, so this is the address of the client itself.
+    """
+    peer = getattr(websocket, "remote_address", None)
+    if isinstance(peer, (tuple, list)) and peer:
+        return str(peer[0])
+    if isinstance(peer, str):
+        return peer
+    return None
+
+
 class AuthService(BaseService):
     """Issue, validate, refresh, revoke bearer tokens; rebind on reconnect.
 
@@ -316,7 +330,9 @@ class AuthService(BaseService):
             loginid=info.loginid,
         )
 
-    def _touch_lastlogin(self, token: str, moniker: str) -> Optional[str]:
+    def _touch_lastlogin(
+        self, token: str, moniker: str, remoteaddr: Optional[str] = None
+    ) -> Optional[str]:
         """Record this password login; return the lastlogin from before it (ISO), or None.
 
         Calls the zoid6-owned engine.bed_touch_lastlogin definer function with the token's
@@ -329,8 +345,8 @@ class AuthService(BaseService):
             with database.connect(self.args, pool=getattr(self.args, "pool", None)) as conn, \
                     database.cursor(conn) as cur:
                 cur.execute(
-                    "SELECT engine.bed_touch_lastlogin(%s, %s) AS previous",
-                    (token_hash(token), moniker),
+                    "SELECT engine.bed_touch_lastlogin(%s, %s, %s) AS previous",
+                    (token_hash(token), moniker, remoteaddr),
                 )
                 row = cur.fetchone()
                 conn.commit()
@@ -419,7 +435,9 @@ class AuthService(BaseService):
         record = self._mint_record(info, session_id, websocket_id)
         self._persist(record)
         state.auth_service_token = record.token
-        last_login = self._touch_lastlogin(record.token, info.moniker)
+        last_login = self._touch_lastlogin(
+            record.token, info.moniker, _peer_address(websocket)
+        )
         _debug_branch(
             self.args,
             op="login",

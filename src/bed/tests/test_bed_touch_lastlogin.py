@@ -59,3 +59,49 @@ def test_reconnect_does_not_touch_lastlogin():
     src = inspect.getsource(cls._reconnect_result_envelope)
     assert "last_login" not in src
     assert "bed_touch_lastlogin" not in src
+
+
+# --- Phase 3: client address and the login row ----------------------------------------------
+
+@pytest.mark.unit
+def test_touch_function_takes_the_client_address():
+    t = _code(SQL.read_text())
+    m = re.search(r"FUNCTION\s+engine\.bed_touch_lastlogin\s*\((.*?)\)\s*RETURNS",
+                  t, re.IGNORECASE | re.DOTALL)
+    assert m and "p_remoteaddr inet" in m.group(1), "bed_touch_lastlogin must take p_remoteaddr inet"
+
+
+@pytest.mark.unit
+def test_touch_function_sets_lastloginfrom_and_writes_the_login_row():
+    t = _code(SQL.read_text())
+    assert re.search(r"lastloginfrom\s*=\s*p_remoteaddr", t, re.IGNORECASE)
+    assert re.search(r"engine\.log_action\s*\(", t, re.IGNORECASE), "login must be written through log_action"
+    assert re.search(r"'login'", t)
+
+
+@pytest.mark.unit
+def test_touch_function_grant_is_signature_matched_to_the_new_arguments():
+    t = _code(SQL.read_text())
+    assert re.search(r"GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+engine\.bed_touch_lastlogin\(bytea,\s*citext,\s*inet\)\s+TO\s+bed",
+                     t, re.IGNORECASE)
+
+
+@pytest.mark.unit
+def test_caller_passes_the_websocket_peer_address():
+    from bed.api import auth as auth_mod
+    helper = inspect.getsource(auth_mod._peer_address)
+    assert "remote_address" in helper, "the peer address must come from the websocket"
+    handler = inspect.getsource(auth_mod.AuthService._handle_auth)
+    assert "_peer_address(websocket)" in handler
+    assert "_touch_lastlogin(" in handler
+
+
+@pytest.mark.unit
+def test_peer_address_is_read_from_the_websocket():
+    from bed.api import auth as auth_mod
+    class _WS:
+        remote_address = ("192.0.2.7", 51234)
+    assert auth_mod._peer_address(_WS()) == "192.0.2.7"
+    class _NoPeer:
+        pass
+    assert auth_mod._peer_address(_NoPeer()) is None

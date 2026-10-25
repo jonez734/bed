@@ -1,12 +1,17 @@
 -- bed/sql/bed_lastlogin_functions.sql
 -- Records a password login for bed. bed holds no table privileges on engine.__member.
--- The function takes the SHA-256 digest of the bearer token, reads the acting moniker from
--- the verified token row, and returns the lastlogin value from before this login. It then sets
--- lastlogin = now(). Only password logins call it; token reconnects do not.
+-- The function takes the SHA-256 digest of the bearer token, the moniker, and the client's
+-- socket address. It reads the acting moniker from the verified token row, and returns the
+-- lastlogin value from before this login. It then sets lastlogin = now() and
+-- lastloginfrom = the client address, and writes a 'login' row through engine.log_action.
+-- Only password logins call it; token reconnects do not.
 --
 -- Installed by ``bed --install`` as the owner. Idempotent.
+--
+-- The argument list changed (client address added). A sysop drops the old two-argument
+-- function once, before this file is loaded: see handbook/specs/pg-ident-auth.md.
 
-CREATE OR REPLACE FUNCTION engine.bed_touch_lastlogin(p_token_hash bytea, p_moniker citext)
+CREATE OR REPLACE FUNCTION engine.bed_touch_lastlogin(p_token_hash bytea, p_moniker citext, p_remoteaddr inet)
 RETURNS timestamptz
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -27,11 +32,14 @@ BEGIN
     END IF;
 
     SELECT m.lastlogin INTO v_previous FROM engine.__member m WHERE m.moniker = p_moniker;
-    UPDATE engine.__member SET lastlogin = now() WHERE moniker = p_moniker;
+    UPDATE engine.__member
+       SET lastlogin = now(), lastloginfrom = p_remoteaddr
+     WHERE moniker = p_moniker;
+    PERFORM engine.log_action(p_moniker, 'login', p_remoteaddr, NULL);
     RETURN v_previous;
 END
 $$;
 
-ALTER FUNCTION engine.bed_touch_lastlogin(bytea, citext) OWNER TO zoid6;
-REVOKE ALL ON FUNCTION engine.bed_touch_lastlogin(bytea, citext) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION engine.bed_touch_lastlogin(bytea, citext) TO bed;
+ALTER FUNCTION engine.bed_touch_lastlogin(bytea, citext, inet) OWNER TO zoid6;
+REVOKE ALL ON FUNCTION engine.bed_touch_lastlogin(bytea, citext, inet) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION engine.bed_touch_lastlogin(bytea, citext, inet) TO bed;
