@@ -87,7 +87,7 @@ def _ensure_bed_token_table(args, conn):
         if ok is False:
             io.echo(f"{{level.error}} fail ({sqlfile}) ", level="error")
             return False
-    io.echo("{{level.ok}} ok  ")
+    io.echo(f"{{level.ok}} ok  ")
     return True
 
 
@@ -109,11 +109,11 @@ def _ensure_bed_role(args, conn):
             createdb=False,
             createrole=False,
         ) is False:
-            io.echo("{{level.error}} fail ", level="error")
+            io.echo(f"{{level.error}} fail ", level="error")
             return False
-        io.echo("{{level.ok}} ok  ")
+        io.echo(f"{{level.ok}} ok  ")
     else:
-        io.echo("{{level.ok}} ok  ", level="ok")
+        io.echo(f"{{level.ok}} ok  ", level="ok")
 
     io.echo(
         f"{{var:labelcolor}}schema priv {{var:valuecolor}}engine{{var:labelcolor}}"
@@ -123,9 +123,9 @@ def _ensure_bed_role(args, conn):
     if database.manage_schema_priv(
         args, "grant", "usage", "engine", BED_ROLE, conn=conn
     ) is False:
-        io.echo("{{level.error}} fail ", level="error")
+        io.echo(f"{{level.error}} fail ", level="error")
         return False
-    io.echo("{{level.ok}} ok  ")
+    io.echo(f"{{level.ok}} ok  ")
     return True
 
 
