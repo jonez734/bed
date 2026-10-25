@@ -72,3 +72,6 @@ REVOKE ALL ON FUNCTION engine.bed_count_unread(citext) FROM PUBLIC;
 
 GRANT EXECUTE ON FUNCTION engine.bed_list_pending_page(citext, int, timestamptz, bigint, int) TO bed;
 GRANT EXECUTE ON FUNCTION engine.bed_count_unread(citext) TO bed;
+-- The shell runs as the member's login role (member group) and shows its own unread count.
+-- The function filters by recipient, so each member sees only their own count.
+GRANT EXECUTE ON FUNCTION engine.bed_count_unread(citext) TO member;

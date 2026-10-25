@@ -72,7 +72,7 @@ def test_functions_read_only_no_writes():
     assert not re.search(r"\b(INSERT|UPDATE|DELETE|TRUNCATE)\b", text, re.IGNORECASE)
 
 
-def test_execute_granted_to_bed_only_and_revoked_from_public():
+def test_execute_granted_to_bed_and_revoked_from_public():
     text = _text()
     assert re.search(r"REVOKE\s+ALL\s+ON\s+FUNCTION\s+engine\.bed_list_pending_page\(.*\)\s+FROM\s+PUBLIC", text, re.IGNORECASE | re.DOTALL)
     assert re.search(r"REVOKE\s+ALL\s+ON\s+FUNCTION\s+engine\.bed_count_unread\(.*\)\s+FROM\s+PUBLIC", text, re.IGNORECASE | re.DOTALL)
@@ -85,3 +85,14 @@ def test_owned_by_zoid6():
     # Functions are created by the owner role, so the file must not hand them to bed.
     assert not re.search(r"OWNER\s+TO\s+bed\b", text, re.IGNORECASE)
     assert "SET ROLE" not in text.upper()
+
+
+def test_count_unread_is_executable_by_member_for_the_shell():
+    """The letteredolive shell runs as the member's login role and shows the unread count. That
+    role reaches the function through the member group. The function filters by recipient, so a
+    member sees only their own count. bed_list_pending_page stays bed-only."""
+    text = _text()
+    assert re.search(r"GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+engine\.bed_count_unread\([^;]*\)\s+TO\s+member",
+                     text, re.IGNORECASE)
+    assert not re.search(r"GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+engine\.bed_list_pending_page\([^;]*\)\s+TO\s+member",
+                         text, re.IGNORECASE)
