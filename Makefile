@@ -1,10 +1,10 @@
 PROJECT = bed
 OUTDIR = /srv/repo/$(PROJECT)/
-# Build version: 0.0.2.dev<YYYYMMDDHHMMSS>, unique per build (shared script in the meta-repo).
+# Build version: 0.0.3.dev<YYYYMMDDHHMMSS>, unique per build (shared script in the meta-repo).
 # Override WHEELS_DIR when building outside the meta-repo.
 WHEELS_DIR ?= $(CURDIR)/../dist-wheels
 VERSION_SCRIPT ?= $(CURDIR)/../scripts/next_version.sh
-VERSION ?= $(shell $(VERSION_SCRIPT) 0.0.2.dev $(WHEELS_DIR))
+VERSION ?= $(shell $(VERSION_SCRIPT) 0.0.3.dev $(WHEELS_DIR))
 
 PYTHON ?= python3.12
 RSYNC = rsync --chmod=F0644 --mkpath --archive --verbose
