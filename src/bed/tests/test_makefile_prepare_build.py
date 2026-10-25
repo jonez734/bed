@@ -38,3 +38,26 @@ def test_stale_build_is_still_moved_when_owned_by_someone_else():
 def test_build_directory_is_recreated_after_the_move():
     block = _prepare_build_block()
     assert "mkdir -p $(1)/build" in block, block
+
+
+@pytest.mark.unit
+def test_clean_moves_build_aside_instead_of_deleting_it():
+    """deploy-venv depends on `clean`. `rm -rf build` fails on a tree the deploy user cannot
+    remove, which stops the deploy before PREPARE_BUILD runs. clean must rename build/ aside."""
+    text = MAKEFILE.read_text()
+    m = re.search(r"^clean:.*?(?=^\S)", text, re.MULTILINE | re.DOTALL)
+    assert m, "clean target not found"
+    body = m.group(0)
+    assert "rm -rf build " not in body and "rm -rf build\n" not in body, body
+    assert "build.stale" in body, body
+
+
+@pytest.mark.unit
+def test_clean_does_not_delete_the_tree_it_just_moved_aside():
+    """clean moves build/ to build.stale.<pid>. A later `rm -rf build.stale.*` in the same target
+    would delete that tree, so the removal must not cover build.stale."""
+    text = MAKEFILE.read_text()
+    m = re.search(r"^clean:.*?(?=^\S)", text, re.MULTILINE | re.DOTALL)
+    body = m.group(0)
+    removals = [l for l in body.splitlines() if "rm -rf" in l]
+    assert not any("build.stale" in l for l in removals), removals

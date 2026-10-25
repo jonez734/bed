@@ -96,7 +96,8 @@ clean-egg-info:
 	-rm -rf *.egg-info src/*.egg-info
 
 clean: clean-egg-info
-	-rm -rf build dist build.stale.* build.old
+	-if [ -d build ]; then mv build build.stale.$$$$; fi
+	-rm -rf dist build.old
 	-rm -rf *.egg-info
 	-find . -type d -name __pycache__ -exec rm -rf {} +
 	-find . -type d -name .pytest_cache -exec rm -rf {} +
