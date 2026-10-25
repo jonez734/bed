@@ -52,6 +52,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import secrets
 import sys
 import unittest
@@ -122,6 +123,37 @@ def _make_bank_mock(
     return bank
 
 
+class _FakeDefinerConn:
+    """Stands in for the bed definer connection. Serves engine.bed_bank_balance from the mock."""
+
+    def __init__(self, bank_mock):
+        self._bank = bank_mock
+        self._row = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def cursor(self):
+        return self
+
+    def __enter_cursor__(self):
+        return self
+
+    def execute(self, sql, params=None):
+        if "bed_bank_balance" in sql:
+            moniker = params[1] if params else ""
+            balance = self._bank.get_balance(moniker)
+            self._row = (True, balance)
+        else:
+            self._row = None
+
+    def fetchone(self):
+        return self._row
+
+
 async def _start_bed_with_bank(bank_mock: Any) -> tuple[Any, int]:
     """Spin up a WebSocketServer with both AuthService and BankService
     registered. The auth credential provider accepts the well-known
@@ -175,6 +207,10 @@ async def _start_bed_with_bank(bank_mock: Any) -> tuple[Any, int]:
 
     bank_service = BankService(MagicMock(), registry)
     bank_service._get_bank = MagicMock(return_value=bank_mock)
+    # Balance reads go through the bed definer function (engine.bed_bank_balance) on a
+    # connection from _bank_conn, not through _get_bank. Serve that path from the same
+    # mock so the wire tests see the configured balance.
+    bank_service._bank_conn = lambda: _FakeDefinerConn(bank_mock)
 
     # Bind to an ephemeral port ourselves so the test sees the same
     # port number the client will dial.
@@ -1314,6 +1350,14 @@ class _LiveSession:
         self._ws = await websockets.connect(
             f"ws://{LIVE_HOST}:{LIVE_PORT}/"
         )
+        # bed refuses bank requests from an unauthenticated connection, so log in first.
+        reply = await self.call({
+            "type": "auth",
+            "moniker": os.environ["BED_LIVE_MONIKER"],
+            "password": os.environ["BED_LIVE_PASSWORD"],
+        })
+        if reply.get("type") != "auth_result" or reply.get("success") is not True:
+            raise AssertionError(f"live login refused: {reply}")
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
@@ -1339,6 +1383,11 @@ class TestBankOperationsLive(unittest.IsolatedAsyncioTestCase):
         if not _live_daemon_reachable():
             self.skipTest(
                 f"no live bed/zoid6 daemon at {LIVE_HOST}:{LIVE_PORT}"
+            )
+        if not (os.environ.get("BED_LIVE_MONIKER") and os.environ.get("BED_LIVE_PASSWORD")):
+            self.skipTest(
+                "live bank tests need BED_LIVE_MONIKER and BED_LIVE_PASSWORD set; "
+                "bed refuses unauthenticated bank requests"
             )
         self.moniker = _unique_moniker()
 
