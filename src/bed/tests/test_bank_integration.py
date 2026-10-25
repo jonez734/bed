@@ -56,6 +56,8 @@ import os
 import secrets
 import sys
 import unittest
+
+import pytest
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, patch
 
@@ -1372,6 +1374,7 @@ class _LiveSession:
         return json.loads(raw)
 
 
+@pytest.mark.integration
 class TestBankOperationsLive(unittest.IsolatedAsyncioTestCase):
     """Integration tests against a live bed/zoid6 daemon.
 
