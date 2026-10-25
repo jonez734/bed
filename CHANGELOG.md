@@ -53,6 +53,56 @@ starting balance.
 
 `make version` stamps `0.0.3.dev<datestamp>`. `bbsengine6>=0.0.3.dev202610` is required.
 
+### feat(bank): bed serves the seven bank ops through `engine.bed_bank_op`
+
+One SECURITY DEFINER function dispatches `add`, `remove`, `history`, `list_all`, `pending`,
+`transfer_request`, `transfer_approve`, and `transfer_reject` by op name. bed holds EXECUTE
+only, with no table privileges on the bank tables. Each op enforces its own rule, and an
+unknown op is refused. `engine.bed_bank_balance` serves the balance read.
+
+### feat(bank): `bank.starting_balance` in `bed.json`, applied at startup
+
+The starting balance for new bank accounts comes from `bed.json` (default 100), applied to
+bbsengine6 at startup.
+
+### feat(auth): record the client address and the login row on password login
+
+`bed_touch_lastlogin(token_hash, moniker, remoteaddr)` writes the lastlogin and the login
+row through `engine.log_action`. The client address is the peer address of the websocket.
+
+### feat(auth): `--account NAME` selects `bed-NAME.token`, so terminals can hold different logins
+
+### feat(message): message sender must be the session member, unless a sysop names another
+
+`engine.bed_message_send` takes a chosen sender, honoured only for a sysop session. A
+non-sysop naming another sender is refused. The sender is otherwise the session member.
+The old `bed_message_send` signature is dropped; the grant names the new one.
+
+### feat(message): `bed` CLI takes `list` (alias of `pending`) and `show <id>`
+
+### feat(messages): member can run `bed_count_unread` for the letteredolive shell
+
+### feat(client): `BedConnection` supports `async with`; `aclose` closes the websocket on the loop that opened it
+
+One-shot `auth`, `message`, and `bank` commands close their websocket through
+`run_with_connection`. `message watch` ends on Ctrl-C or EOF and closes its socket. A failed
+send closes the websocket it opened, instead of leaving it for garbage collection.
+
+### fix(console): bed's startup and CLI markup renders (f-string level markup)
+
+### fix(make): the deploy wheel staging directory is per user and build output is cleared safely
+
+`WHEEL_DIR` is per user, so deploys do not collide in `/tmp`. `clean` and `PREPARE_BUILD` move
+`build/` aside rather than deleting it, and the build directory is group-writable, not sticky.
+
+### fix(make): `deploy --prefix` honours `DEPLOY_PREFIX` for bed's venv
+
+### build(bed): `setup.py` is a metadata-free shim; metadata lives in pyproject.toml
+
+### docs(bed): KNOWN_GAPS 6 records the bbsengine6 import of bed for the bank balance
+
+`KNOWN_GAPS` 6 is marked done, and its history is kept. Item 7 (the bottombar balance cache) is deferred.
+
 ### feat(token): hashed, install-time, restart-surviving bearer tokens
 
 - `--token-persistence=db` stores only the SHA-256 digest of each bearer
