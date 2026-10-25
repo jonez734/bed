@@ -861,8 +861,10 @@ class BED:
                 # untouched.
                 ws_id = str(websocket.id)
                 state = session_registry.get_by_websocket(ws_id)
-                if state is not None:
-                    set_current_role(state.moniker)
+                # The role is process-wide, so clear it first: a message with no bound
+                # session (auth, reconnect) must not run under the role a previous
+                # request left behind.
+                set_current_role(role_for_session(state))
 
             async def _post_dispatch(
                 websocket: Any,
@@ -1161,6 +1163,16 @@ def get_restart_config(
         )
 
     return autorestart, restart_delay, max_restarts, restart_on_bind_failure
+
+
+def role_for_session(state: Any) -> Optional[str]:
+    """The PostgreSQL role for a request, from the bound session.
+
+    A request with no bound session (auth, reconnect) gets no role, so it never runs under
+    a role a previous request left behind. The role is process-wide, so the caller sets it
+    on every message.
+    """
+    return state.moniker if state is not None else None
 
 
 def load_router_class(router_path: str) -> Type:
