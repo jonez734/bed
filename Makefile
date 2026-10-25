@@ -216,7 +216,7 @@ BBSENGINE_DIR = $(CURDIR)/../bbsengine6/py
 # hard error, not something to hide with `|| true`, because the chmod
 # that follows then fails with a less useful EPERM.
 PREPARE_BUILD = \
-	if [ -d $(1)/build ] && [ ! -O $(1)/build ]; then \
+	if [ -d $(1)/build ] && { [ ! -O $(1)/build ] || [ ! -w $(1)/build ]; }; then \
 		mv $(1)/build $(1)/build.stale.$$$$ || exit 1; \
 	fi; \
 	mkdir -p $(1)/build && chmod g-s,+t $(1)/build
