@@ -330,6 +330,26 @@ class AuthService(BaseService):
             loginid=info.loginid,
         )
 
+    def _login_balance(self, token: str, moniker: str) -> Optional[int]:
+        """Read the member's balance through engine.bed_bank_balance, after the token exists.
+
+        Returns None on failure. A balance read must never block the login, so the error is
+        logged and the reply carries no balance.
+        """
+        try:
+            from bed.api.login_balance import read_login_balance
+            from bed.store.token_store import token_hash
+
+            return read_login_balance(
+                args=self.args,
+                pool=getattr(self.args, "pool", None),
+                token_hash=token_hash(token),
+                moniker=moniker,
+            )
+        except Exception as e:
+            io.echo(f"AuthService: login balance read failed for {moniker!r}: {e}", level="error")
+            return None
+
     def _touch_lastlogin(
         self, token: str, moniker: str, remoteaddr: Optional[str] = None
     ) -> Optional[str]:
@@ -440,6 +460,10 @@ class AuthService(BaseService):
         last_login = self._touch_lastlogin(
             record.token, info.moniker, _peer_address(websocket)
         )
+        balance = self._login_balance(record.token, info.moniker)
+        if balance is not None:
+            state.balance = balance
+            info.balance = balance
         _debug_branch(
             self.args,
             op="login",
