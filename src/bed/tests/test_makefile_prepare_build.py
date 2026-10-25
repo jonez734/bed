@@ -71,3 +71,13 @@ def test_build_directory_does_not_set_the_sticky_bit():
     block = _prepare_build_block()
     assert "+t" not in block, block
     assert "g-s" in block, "setgid must still be dropped so SELinux accepts new files"
+
+
+@pytest.mark.unit
+def test_build_directory_clears_setgid_so_staging_does_not_inherit_it():
+    """setuptools creates its staging directories under build/, and they inherit setgid from
+    their parent. The egg-info to dist-info rename then fails (EPERM) on this SELinux/BTRFS setup,
+    where setgid can be cleared but not set. PREPARE_BUILD clears setgid on build/, and the new
+    subdirectories then come out plain."""
+    block = _prepare_build_block()
+    assert "g-s" in block, block
