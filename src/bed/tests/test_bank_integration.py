@@ -1371,7 +1371,11 @@ class _LiveSession:
         assert self._ws is not None
         await self._ws.send(json.dumps(payload))
         raw = await asyncio.wait_for(self._ws.recv(), timeout=timeout)
-        return json.loads(raw)
+        reply = json.loads(raw)
+        # Surface bed's own error (code and message) in any failing assertion.
+        if reply.get("type") == "error":
+            reply = {**reply, "_bed_error": f"{reply.get('code')}: {reply.get('message')}"}
+        return reply
 
 
 @pytest.mark.integration
