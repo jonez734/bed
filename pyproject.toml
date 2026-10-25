@@ -26,7 +26,7 @@ classifiers = [
     "Topic :: Terminals",
 ]
 dependencies = [
-    "bbsengine6>=0.0.1.dev202606",
+    "bbsengine6>=0.0.2.dev202610",
     "websockets>=12.0",
 ]
 
