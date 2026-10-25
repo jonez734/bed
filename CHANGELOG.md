@@ -12,6 +12,47 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### fix(bank): bank and message calls keep bed's login role
+
+bed's bank, message, and auth connections pass `set_role=False`, so they run as
+bed's login role. The daemon sets the process-wide role to the logged-in member for
+each request; inheriting it made every bank and message call fail with "permission
+denied to set role". Requires bbsengine6 0.0.3.
+
+### fix(auth): the role is cleared for requests with no bound session
+
+Pre-dispatch sets the role from the bound session and clears it otherwise, via
+`role_for_session`. An `auth` request no longer runs under the role a previous
+member's request left behind.
+
+### fix(auth): token store and reconnect keep bed's login role
+
+`DBTokenStore.put` and `get` pass `set_role=False`. `put` runs right after a login
+mints a token, so inheriting the member role failed the login after the token was
+issued.
+
+### feat(auth): the login balance is read through `engine.bed_bank_balance`
+
+Password login and reconnect read the balance after the token exists, through the
+definer function on a `set_role=False` connection (`bed/api/login_balance.py`). The
+credential provider no longer calls bbsengine6's direct-table `getcredits`.
+
+### fix(auth): password login reports sysop from `member.is_sysop`
+
+The provider read only the `SYSOP` flag, so a member granted sysop through the role
+logged in with `is_sysop=False`. It now uses `member.is_sysop` (flag or role).
+
+### test(bank): live bank suite matches the running daemon
+
+`test_live_pending` compares `is_sysop` with the login reply. `test_live_history`
+uses the stored transaction names (`deposit` and `withdrawal`). The round-trip test
+logs in and carries the token on its bank messages, with balances relative to the
+starting balance.
+
+### chore(version): 0.0.3.dev series
+
+`make version` stamps `0.0.3.dev<datestamp>`. `bbsengine6>=0.0.3.dev202610` is required.
+
 ### feat(token): hashed, install-time, restart-surviving bearer tokens
 
 - `--token-persistence=db` stores only the SHA-256 digest of each bearer

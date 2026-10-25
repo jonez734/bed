@@ -93,7 +93,8 @@ bed service.
 
 | Bed service / feature | Needs from bbsengine6 | Status |
 |---|---|---|
-| `AuthService` | `bbsengine6.member.{checkpassword,issysop,getcredits,moniker_exists}` | done |
+| `AuthService` | `bbsengine6.member.{checkpassword,is_sysop,moniker_exists}` | done |
+| `AuthService` (login balance) | `engine.bed_bank_balance` via `bed/api/login_balance.py` | done |
 | `MessageService` | `bbsengine6.net.transport.send_to` | done |
 | `MessageService` | `bbsengine6.message.{get,set,bump,clear}_local_unread_count` | done |
 | `MessageService` | `engine.__message_recipient` table + PG NOTIFY trigger | done |
@@ -152,6 +153,16 @@ acting moniker and sysop status come from the verified token row
 `history`, `list_all`, `pending`, `transfer_request`, `transfer_approve` and
 `transfer_reject`. Each op enforces its own rule. An unknown op is refused.
 Execute is granted to `bed` only.
+
+### Which role each connection runs as
+
+The daemon sets the process-wide PostgreSQL role to the logged-in member for each
+request that has a bound session, and clears it otherwise (`role_for_session` in
+`bed/main.py`). bed's own connections never take the member role: they pass
+`set_role=False` (`bbsengine6.database.connect`), so they run as bed's login role.
+That covers the bank, message, and token-store connections, the login sysop check,
+and the login balance read. Taking a member role would fail, because bed's login
+role is not allowed to assume one.
 
 ## Client connection lifecycle
 

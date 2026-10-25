@@ -29,8 +29,10 @@ S→C {"type":"auth_result","success":true,"moniker":"alice","is_sysop":false,
 `balance` is included in the `auth_result` envelope for backward
 compatibility with thin clients that already parse the legacy
 `DefaultRouter._handle_auth` shape (it was always `0` there). It is
-populated from `bbsengine6.member.getcredits` when the credential
-provider can resolve it.
+populated after the token is minted, through `engine.bed_bank_balance` on a
+connection that keeps bed's login role (`bed/api/login_balance.py`). A read
+failure is logged and the reply carries no balance; it never blocks login.
+Reconnect reads the balance the same way.
 
 ### Reconnect (no password)
 
