@@ -95,7 +95,7 @@ class MonikerOnlyCredentialProvider:
             )
             return None
 
-        is_sysop = bool(member.issysop(args, moniker=moniker, pool=pool))
+        is_sysop = bool(member.is_sysop(args, moniker=moniker, pool=pool))
         loginid = _lookup_loginid(args, moniker, pool=pool)
         return MemberInfo(
             moniker=moniker, is_sysop=is_sysop, balance=None, loginid=loginid
@@ -135,7 +135,7 @@ class PasswordCredentialProvider:
             return None
         if not ok:
             return None
-        is_sysop = bool(member.issysop(args, moniker=moniker, pool=pool))
+        is_sysop = bool(member.is_sysop(args, moniker=moniker, pool=pool))
         # The balance is read after the token is minted, through engine.bed_bank_balance
         # (see bed.api.login_balance). bbsengine6's getcredits reads the direct table on a
         # connection that inherits the member role, so it is not used here.
