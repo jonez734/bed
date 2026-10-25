@@ -180,9 +180,15 @@ VENV_OWNER ?= bed
 # Prints the resolved venv path and runs no recipe. Used by the Makefile tests.
 print-venv-dir:
 	@echo $(VENV_DIR)
+
+# Prints the per-user wheel staging directory. Used by the Makefile tests.
+print-wheel-dir:
+	@echo $(WHEEL_DIR)
 VENV_GROUP ?= bed
 
-WHEEL_DIR = /tmp/$(PROJECT)-$$
+# Per-user wheel staging under /tmp. $$ in a Makefile variable is a literal $, so the
+# user name is taken from `id -un` at parse time instead.
+WHEEL_DIR = /tmp/$(PROJECT)-$(shell id -un)
 BBSENGINE_DIR = $(CURDIR)/../bbsengine6/py
 
 # Make sure $(1)/build/ exists with mode 1775 (sticky + rwxrwxr-x) before
