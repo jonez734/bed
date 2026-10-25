@@ -1385,6 +1385,8 @@ class _LiveSession:
         })
         if reply.get("type") != "auth_result" or reply.get("success") is not True:
             raise AssertionError(f"live login refused: {reply}")
+        # The account's sysop status as the server reports it; tests compare against this.
+        self.is_sysop = bool(reply.get("is_sysop"))
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
@@ -1525,11 +1527,12 @@ class TestBankOperationsLive(unittest.IsolatedAsyncioTestCase):
         # We just inserted two rows for this brand-new moniker; the
         # history must contain both, in newest-first order.
         self.assertGreaterEqual(len(reply["transactions"]), 2)
+        # bed_bank_op stores add as 'deposit' and remove as 'withdrawal' (the schema's names).
         types = [
             t.get("transactiontype") for t in reply["transactions"][:2]
         ]
-        self.assertIn("debit", types)
-        self.assertIn("credit", types)
+        self.assertIn("withdrawal", types)
+        self.assertIn("deposit", types)
 
     async def test_live_transfer_request(self):
         sender = _unique_moniker()
@@ -1568,7 +1571,8 @@ class TestBankOperationsLive(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(reply["type"], "bank_pending")
         self.assertEqual(reply["moniker"], self.moniker)
-        self.assertFalse(reply["is_sysop"])
+        # The server reports the bound session's sysop status, so compare with the login's.
+        self.assertEqual(reply["is_sysop"], s.is_sysop)
         self.assertIsInstance(reply["transfers"], list)
 
     async def test_live_list_all_returns_accounts(self):
@@ -1624,6 +1628,19 @@ class TestBankOperationsLive(unittest.IsolatedAsyncioTestCase):
         args.bed_probe_timeout = 0.25
 
         conn = BedConnection(args)
+        # Log in over the same wire first: bed rejects bank calls without a bound session or a
+        # token, so the bank messages below must carry the token the login returns.
+        login = await conn.send({
+            "type": "auth",
+            "moniker": os.environ["BED_LIVE_MONIKER"],
+            "password": os.environ["BED_LIVE_PASSWORD"],
+        })
+        if login.get("type") != "auth_result" or login.get("success") is not True:
+            raise AssertionError(f"live login refused: {login}")
+        token = login["token"]
+        # Read the starting balance first: other live tests may have seeded this account.
+        before = await conn.send({"type": "bank_balance", "moniker": self.moniker, "token": token})
+        start = int(before.get("balance", 0)) if before.get("type") == "bank_balance" else 0
         # First call: create the account and verify the new balance.
         try:
             add = await conn.send(
@@ -1632,6 +1649,7 @@ class TestBankOperationsLive(unittest.IsolatedAsyncioTestCase):
                     "moniker": self.moniker,
                     "amount": 2,
                     "description": "live-bed-conn",
+                    "token": token,
                 }
             )
         except Exception as e:
@@ -1653,10 +1671,10 @@ class TestBankOperationsLive(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(add["type"], "bank_add")
         self.assertEqual(add["moniker"], self.moniker)
         self.assertEqual(add["amount"], 2)
-        self.assertEqual(add["new_balance"], 2)
+        self.assertEqual(add["new_balance"], start + 2)
 
         bal = await conn.send(
-            {"type": "bank_balance", "moniker": self.moniker}
+            {"type": "bank_balance", "moniker": self.moniker, "token": token}
         )
         self.assertEqual(bal["type"], "bank_balance")
-        self.assertEqual(bal["balance"], 2)
+        self.assertEqual(bal["balance"], start + 2)
