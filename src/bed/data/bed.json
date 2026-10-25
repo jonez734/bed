@@ -61,14 +61,18 @@
         "name": "system:announcements",
         "createdby": "zoid6:casino",
         "announce_only": true,
-        "announcers": ["sysop"],
+        "announcers": [
+          "sysop"
+        ],
         "description": "System-wide announcements (sysop/announcer-only publishing)"
       }
     ],
     "_comment_auto_seed": "Channels seeded at BED startup. The auto_seed list is shared across all modules; each entry's createdby must be namespaced per its owning module (e.g., 'zoid6:casino', 'empyre:router'). Namespaced daemon members are auto-created via bbsengine6.member.lib.register_module_member when they don't exist (warn-and-skip on failure). Seeds are idempotent (skipped when the channel name already exists)."
   },
   "message": {
-    "everyone_allowed_roles": ["sysop"],
+    "everyone_allowed_roles": [
+      "sysop"
+    ],
     "pending_max_age_days": 0,
     "_comment": "Roles allowed to address @everyone in a message. Supported: sysop. Applied to bbsengine6.message.configure() at startup. Non-matching senders get a denied result; nothing is stored."
   },
@@ -77,18 +81,28 @@
     "_comment": "Terminal bell for new messages. One bell per window: notifications that arrive within bell_window_seconds of the first share that bell. Applied to bbsengine6.io.set_bell_window_seconds() at startup. Must be >= 0."
   },
   "bind": [
-    {"host": "127.0.0.1", "port": 8765},
-    {"host": "::1", "port": 8765}
+    {
+      "host": "127.0.0.1",
+      "port": 8765
+    },
+    {
+      "host": "::1",
+      "port": 8765
+    }
   ],
   "websocket": {
     "ping_interval": 60,
     "ping_timeout": 600,
-    "_comment": "WebSocket keepalive (seconds), forwarded to websockets.serve(). The websockets library default of 20s/20s is too aggressive for terminal clients (casino_client, etc.) whose main loop interleaves blocking stdin reads — pings go unanswered during those reads, the server hits the 20s timeout, and the next client send gets ConnectionClosedError 1011. 60s/600s gives the operator 10 minutes between actions before the server considers the connection dead."
+    "_comment": "WebSocket keepalive (seconds), forwarded to websockets.serve(). The websockets library default of 20s/20s is too aggressive for terminal clients (casino_client, etc.) whose main loop interleaves blocking stdin reads \u2014 pings go unanswered during those reads, the server hits the 20s timeout, and the next client send gets ConnectionClosedError 1011. 60s/600s gives the operator 10 minutes between actions before the server considers the connection dead."
   },
   "postoffice": {
     "enabled": false,
     "modulepath": "postoffice.api.handler",
     "description": "Postoffice service (IMAP mail polling and notifications) -- disabled pending integration",
     "required": false
+  },
+  "bank": {
+    "starting_balance": 100,
+    "_comment": "Balance a new member's bank account starts with. Applied to bbsengine6.bank.configure() at startup. Default 100."
   }
 }

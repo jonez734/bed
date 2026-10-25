@@ -540,6 +540,24 @@ def _apply_notify_config(cfg: dict) -> None:
     _bbs_io.set_bell_window_seconds(float(seconds))
 
 
+def _apply_bank_config(cfg: dict) -> None:
+    """Apply ``bank.*`` policy from a loaded config to bbsengine6.bank.
+
+    ``bank.starting_balance`` is the balance a new member's bank account starts with. A missing
+    section or key keeps the bbsengine6 default (100). A bad value raises ValueError before
+    startup, the same as ``session.idle_minutes``.
+    """
+    bank_cfg = cfg.get("bank")
+    if not isinstance(bank_cfg, dict):
+        return
+    starting = bank_cfg.get("starting_balance")
+    if starting is None:
+        return
+    from bbsengine6 import bank as _bbs_bank
+
+    _bbs_bank.configure(starting_balance=starting)
+
+
 def _apply_session_config(cfg: dict) -> None:
     """Apply ``session.*`` policy from a loaded config to bbsengine6.session.
 
@@ -1361,6 +1379,7 @@ async def main_async() -> None:
     _apply_websocket_config(args, loaded_config)
     _apply_message_config(loaded_config)
     _apply_session_config(loaded_config)
+    _apply_bank_config(loaded_config)
     _apply_notify_config(loaded_config)
     # Compute the final bind list after every config source has had
     # its say. ``_resolve_binds`` prefers ``--bind`` (CLI) > JSON
