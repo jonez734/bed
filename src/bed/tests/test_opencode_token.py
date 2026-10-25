@@ -314,8 +314,23 @@ def opencode_server_with_bank(
     bank_service = _BankService(_argparse.Namespace(debug=False, pool=None), registry)
     bank_service._get_bank = MagicMock(return_value=bank_mock)
     # Balance reads go through the bed_bank_balance definer function (Phase 1).
+    # Route each statement to the matching definer result: bed_bank_balance returns an
+    # (account_exists, balance) row; bed_bank_op returns one jsonb result per op.
+    _op_state = {"row": (True, 0)}
+    bank_mock.executed_ops = []
+
+    def _execute(sql_text, params=None):
+        if "engine.bed_bank_op" in sql_text:
+            bank_mock.executed_ops.append(params[1] if params else None)
+            _op_state["row"] = (
+                {"success": True, "new_balance": 1, "message": "credit"},
+            )
+        else:
+            _op_state["row"] = (True, 0)
+
     _bal_cur = MagicMock()
-    _bal_cur.fetchone.return_value = (True, 0)
+    _bal_cur.execute.side_effect = _execute
+    _bal_cur.fetchone.side_effect = lambda: _op_state["row"]
     _bal_conn = MagicMock()
     _bal_conn.__enter__.return_value = _bal_conn
     _bal_conn.cursor.return_value.__enter__.return_value = _bal_cur
@@ -482,9 +497,10 @@ class TestBankFlowViaOpenCodeToken(unittest.TestCase):
                 "bed_bank_balance was never called; the wire call "
                 f"short-circuited with an error envelope. echoed:\n{echo_text}",
             )
-            self.assertTrue(
-                bank_mock.add_funds.called,
-                "BankService.add_funds was never invoked; the wire call "
+            self.assertIn(
+                "add",
+                bank_mock.executed_ops,
+                "the server never ran the bed_bank_op 'add' op; the wire call "
                 f"short-circuited with an error envelope. echoed:\n{echo_text}",
             )
             self.assertNotIn(

@@ -484,7 +484,9 @@ class BankService(BaseService):
         """A database connection for the bank definer functions (bed's own role)."""
         from bbsengine6 import database
 
-        return database.connect(self.args, pool=getattr(self, "_pool", None))
+        return database.connect(
+            self.args, pool=getattr(self, "_pool", None), set_role=False
+        )
 
     def _now(self) -> float:
         """Return the current UNIX timestamp, honoring ``clock`` if set."""

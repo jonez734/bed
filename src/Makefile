@@ -131,7 +131,7 @@ uninstall-etc:
 	@echo "Removed $(ETC_DIR)"
 
 version:
-	@echo '__version__ = "0.0.1.dev$(VERSION)"' > $(PROJECT)/_version.py
+	@echo '__version__ = "0.0.2.dev$(VERSION)"' > $(PROJECT)/_version.py
 	@echo 'githash = "'`git log -1 --format='%H' 2>/dev/null | cut -c 1-16`'"' >> $(PROJECT)/_version.py
 	@echo 'datestamp = "$(VERSION)"' >> $(PROJECT)/_version.py
 

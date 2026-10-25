@@ -810,7 +810,9 @@ class MessageService(BaseService):
         """A database connection for the bed_message_send definer function (bed's own role)."""
         from bbsengine6 import database
 
-        return database.connect(self.args, pool=getattr(self, "_pool", None))
+        return database.connect(
+            self.args, pool=getattr(self, "_pool", None), set_role=False
+        )
 
     async def _handle_send(
         self, websocket: Any, message: Dict[str, Any]

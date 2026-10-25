@@ -342,7 +342,9 @@ class AuthService(BaseService):
             from bed.store.token_store import token_hash
             from bbsengine6 import database
 
-            with database.connect(self.args, pool=getattr(self.args, "pool", None)) as conn, \
+            with database.connect(
+                self.args, pool=getattr(self.args, "pool", None), set_role=False
+            ) as conn, \
                     database.cursor(conn) as cur:
                 cur.execute(
                     "SELECT engine.bed_touch_lastlogin(%s, %s, %s) AS previous",
