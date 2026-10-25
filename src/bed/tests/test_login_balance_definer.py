@@ -65,3 +65,17 @@ class TestPasswordLoginDoesNotCallGetcredits(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReconnectBalanceDefiner(unittest.TestCase):
+    def test_reconnect_does_not_call_getcredits(self):
+        import inspect
+        from bed.api import auth
+
+        src = inspect.getsource(auth.AuthService._handle_reconnect)
+        self.assertNotIn(
+            "getcredits(", src,
+            "reconnect must read the balance through engine.bed_bank_balance, not "
+            "bbsengine6's direct-table getcredits",
+        )
+

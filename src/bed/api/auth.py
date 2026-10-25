@@ -591,15 +591,7 @@ class AuthService(BaseService):
             )
             return err
 
-        pool = getattr(self.args, "pool", None)
-        balance: Optional[int] = None
-        try:
-            from bbsengine6 import member as _bbs_member
-            balance = _bbs_member.getcredits(
-                self.args, membermoniker=store_record.moniker, pool=pool
-            )
-        except Exception:
-            balance = None
+        balance: Optional[int] = self._login_balance(token, store_record.moniker)
         info = MemberInfo(
             moniker=store_record.moniker,
             is_sysop=store_record.is_sysop,

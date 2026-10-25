@@ -203,7 +203,7 @@ class DBTokenStore:
         from bbsengine6.database import connect, cursor as _cursor
 
         pool = self._pool()
-        with connect(self._args, pool=pool) as conn:
+        with connect(self._args, pool=pool, set_role=False) as conn:
             with _cursor(conn) as cur:
                 cur.execute(_store.put_sql(), _store.put_params(record))
 
@@ -211,7 +211,7 @@ class DBTokenStore:
         from bbsengine6.database import connect, cursor as _cursor
 
         pool = self._pool()
-        with connect(self._args, pool=pool) as conn:
+        with connect(self._args, pool=pool, set_role=False) as conn:
             with _cursor(conn) as cur:
                 cur.execute(_store.get_sql(), _store.get_params(token))
                 row = cur.fetchone()
