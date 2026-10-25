@@ -195,6 +195,8 @@ BBSENGINE_DIR = $(CURDIR)/../bbsengine6/py
 #     SELinux-enforcing + NoNewPrivs containers (we lack CAP_FSETID).
 #   - group write (g+w): any user in the build group can rebuild
 #     without needing to chown.
+#   - no sticky bit: with +t, a user can only remove entries it owns, so the
+#     deploy user cannot clear build/ files left by another account.
 # The chmod is expressed as `chmod g-s,+t` (drop the setgid bit the
 # parent dir inherited onto the freshly-mkdir'd build/, then add the
 # sticky bit). The numeric form `chmod 1775` is functionally equivalent
@@ -220,7 +222,7 @@ PREPARE_BUILD = \
 	if [ -d $(1)/build ] && { [ ! -O $(1)/build ] || [ ! -w $(1)/build ]; }; then \
 		mv $(1)/build $(1)/build.stale.$$$$ || exit 1; \
 	fi; \
-	mkdir -p $(1)/build && chmod g-s,+t $(1)/build
+	mkdir -p $(1)/build && chmod g-s,g+w,-t $(1)/build
 
 install-venv: clean-egg-info
 	@command -v sudo >/dev/null 2>&1 || { echo "Error: sudo required"; exit 1; }

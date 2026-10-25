@@ -61,3 +61,13 @@ def test_clean_does_not_delete_the_tree_it_just_moved_aside():
     body = m.group(0)
     removals = [l for l in body.splitlines() if "rm -rf" in l]
     assert not any("build.stale" in l for l in removals), removals
+
+
+@pytest.mark.unit
+def test_build_directory_does_not_set_the_sticky_bit():
+    """The sticky bit stops other accounts from removing or renaming entries they do not own. The
+    build directory is shared between the deploy user and the account that ran an earlier build,
+    so it must not be sticky. SELinux needs setgid off; that is the only attribute to drop."""
+    block = _prepare_build_block()
+    assert "+t" not in block, block
+    assert "g-s" in block, "setgid must still be dropped so SELinux accepts new files"
