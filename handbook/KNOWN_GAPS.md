@@ -97,3 +97,13 @@ cut the connection count. Behaviour is unchanged for now.
 
 **Fix.** Cache the balance per session and invalidate it on a message send or a bank change.
 Planned separately.
+
+## 8. Opencode token harness does not serve the bank op path
+
+`src/bed/tests/test_opencode_token.py::TestBankFlowViaOpenCodeToken::test_balance_then_add_should_both_succeed`
+fails after the bank handlers moved to `engine.bed_bank_op` (bed 8f86712 and the Phase 7 routing). The
+harness builds its own `BankService` and does not register it on the server it starts, so the balance
+query reaches an unpatched `database.connect` with no pool. Passing on HEAD confirms the cause is the
+routing change, not the server. The fix is to build the harness's bank handler the way the production
+server does, or to give the harness a definer connection that serves `bed_bank_balance` and
+`bed_bank_op`. Until then this one test is expected to fail.

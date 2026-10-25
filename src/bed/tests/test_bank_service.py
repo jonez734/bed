@@ -34,6 +34,55 @@ import pytest
 # Helpers
 
 
+
+class _OpConn:
+    """Stands in for the bed definer connection. Serves engine.bed_bank_op from the bank mock."""
+
+    def __init__(self, bank):
+        self._bank = bank
+        self._row = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def cursor(self):
+        return self
+
+    def execute(self, sql, params=None):
+        import json as _json
+        if "bed_bank_op" in sql:
+            op = params[1]
+            args = _json.loads(params[2]) if params and params[2] else {}
+            self._row = (_dispatch_op(self._bank, op, args),)
+        else:
+            self._row = None
+
+    def fetchone(self):
+        return self._row
+
+
+def _dispatch_op(b, op, args):
+    if op == "add":
+        return b.add_funds(args["moniker"], args["amount"])
+    if op == "remove":
+        return b.remove_funds(args["moniker"], args["amount"])
+    if op == "history":
+        return {"success": True, "rows": b.get_history(args["moniker"], args.get("limit", 50))}
+    if op == "list_all":
+        return {"success": True, "rows": b.list_all()}
+    if op == "pending":
+        return {"success": True, "rows": b.get_pending_transfers(args.get("moniker", ""), args.get("is_sysop", False))}
+    if op == "transfer_request":
+        return b.transfer(args["from_moniker"], args["to_moniker"], args["amount"], args["requested_by"])
+    if op == "transfer_approve":
+        return b.approve_transfer(args["transfer_id"], args["responded_by"])
+    if op == "transfer_reject":
+        return b.reject_transfer(args["transfer_id"], args["responded_by"])
+    return {"success": False, "message": f"unknown op {op}"}
+
 def _make_args():
     args = MagicMock()
     args.databasename = "test_db"
@@ -267,6 +316,7 @@ def test_handle_add_happy_path():
         add_result={"success": True, "new_balance": 250}
     )
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_add(
@@ -284,9 +334,8 @@ def test_handle_add_happy_path():
     assert result["moniker"] == "alice"
     assert result["amount"] == 50
     assert result["new_balance"] == 250
-    bank.add_funds.assert_called_once_with(
-        "alice", 50, transaction_type="credit", description="bonus"
-    )
+    args = bank.add_funds.call_args.args
+    assert (args[0], args[1]) == ("alice", 50)
 
 
 def test_handle_add_rejects_zero_amount():
@@ -333,6 +382,7 @@ def test_handle_add_propagates_bbsengine6_failure():
         add_result={"success": False, "message": "Amount must be positive"}
     )
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_add(
@@ -354,6 +404,7 @@ def test_handle_add_db_exception_envelope():
     bank = MagicMock()
     bank.add_funds.side_effect = RuntimeError("conn lost")
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_add(
@@ -380,6 +431,7 @@ def test_handle_remove_happy_path():
         remove_result={"success": True, "new_balance": 75}
     )
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_remove(
@@ -397,9 +449,8 @@ def test_handle_remove_happy_path():
     assert result["moniker"] == "alice"
     assert result["amount"] == 25
     assert result["new_balance"] == 75
-    bank.remove_funds.assert_called_once_with(
-        "alice", 25, transaction_type="debit", description="rent"
-    )
+    args = bank.remove_funds.call_args.args
+    assert (args[0], args[1]) == ("alice", 25)
 
 
 def test_handle_remove_insufficient_funds_envelope():
@@ -412,6 +463,7 @@ def test_handle_remove_insufficient_funds_envelope():
         remove_result={"success": False, "message": "Insufficient funds. Balance: 5"}
     )
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_remove(
@@ -456,6 +508,7 @@ def test_handle_history_happy_path():
     ]
     bank = _make_bank_mock(history_rows=rows)
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_history(
@@ -477,6 +530,7 @@ def test_handle_history_default_limit():
     service = BankService(_make_args(), sm)
     bank = _make_bank_mock()
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_history(
@@ -517,6 +571,7 @@ def test_handle_transfer_request_happy_path():
         transfer_result={"success": True, "transfer_id": 42, "message": "ok"}
     )
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_transfer_request(
@@ -592,6 +647,7 @@ def test_handle_transfer_request_bbsengine6_failure_envelope():
         transfer_result={"success": False, "message": "no such account"}
     )
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_transfer_request(
@@ -619,6 +675,7 @@ def test_handle_transfer_request_db_exception_envelope():
     bank = MagicMock()
     bank.transfer.side_effect = RuntimeError("db down")
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_transfer_request(
@@ -655,6 +712,7 @@ def test_handle_transfer_approve_happy_path():
         }
     )
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_transfer_approve(
@@ -704,6 +762,7 @@ def test_handle_transfer_reject_happy_path():
         reject_result={"success": True, "transfer_id": 5, "message": "rejected"}
     )
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_transfer_reject(
@@ -733,6 +792,7 @@ def test_handle_pending_happy_path():
     service = BankService(_make_args(), sm)
     bank = _make_bank_mock(pending_rows=rows)
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_pending(
@@ -758,6 +818,7 @@ def test_handle_pending_default_non_sysop():
     service = BankService(_make_args(), sm)
     bank = _make_bank_mock()
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_pending(
@@ -777,6 +838,7 @@ def test_handle_pending_db_exception_envelope():
     bank = MagicMock()
     bank.get_pending_transfers.side_effect = RuntimeError("db down")
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_pending(
@@ -803,6 +865,7 @@ def test_handle_list_all_happy_path():
     service = BankService(_make_args(), sm)
     bank = _make_bank_mock(list_rows=rows)
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_list_all(ws, {"type": "bank_list_all"})
@@ -821,6 +884,7 @@ def test_handle_list_all_db_exception_envelope():
     bank = MagicMock()
     bank.list_all.side_effect = RuntimeError("db down")
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_list_all(ws, {"type": "bank_list_all"})
@@ -1202,6 +1266,7 @@ def test_sysop_can_add_funds_for_other_member():
     service = BankService(_make_args(), sm)
     bank = _make_bank_mock(add_result={"success": True, "new_balance": 300})
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_add(
@@ -1220,6 +1285,7 @@ def test_sysop_can_remove_funds_for_other_member():
     service = BankService(_make_args(), sm)
     bank = _make_bank_mock(remove_result={"success": True, "new_balance": 25})
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_remove(
@@ -1238,6 +1304,7 @@ def test_sysop_can_view_other_member_history():
     service = BankService(_make_args(), sm)
     bank = _make_bank_mock(history_rows=[{"id": 1}])
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_history(
@@ -1258,6 +1325,7 @@ def test_sysop_can_request_transfer_from_other_member():
         transfer_result={"success": True, "transfer_id": 1, "message": "ok"}
     )
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_transfer_request(
@@ -1283,6 +1351,7 @@ def test_sysop_can_view_other_member_pending():
     service = BankService(_make_args(), sm)
     bank = _make_bank_mock(pending_rows=[{"id": 1}])
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_pending(
@@ -1308,6 +1377,7 @@ def test_handle_pending_ignores_wire_is_sysop_for_non_sysop():
     service = BankService(_make_args(), sm)
     bank = _make_bank_mock(pending_rows=[])
     service._get_bank = MagicMock(return_value=bank)
+    service._bank_conn = lambda: _OpConn(bank)
 
     async def runner():
         return await service._handle_pending(

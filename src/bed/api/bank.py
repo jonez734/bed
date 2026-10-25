@@ -575,6 +575,28 @@ class BankService(BaseService):
         handler = _OP_TO_HANDLER[op]
         return await handler(self, websocket, message)
 
+    def _bank_op(self, state: Any, op: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Run one bank operation through engine.bed_bank_op and return its result.
+
+        The acting moniker and sysop status come from the verified token row inside the
+        database. bed passes only the token digest, the op name and the arguments.
+        """
+        import json as _json
+
+        from bed.store.token_store import token_hash
+
+        token = getattr(state, "auth_service_token", None) or ""
+        with self._bank_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT engine.bed_bank_op(%s, %s, %s::jsonb)",
+                (token_hash(token), op, _json.dumps(args, default=str)),
+            )
+            row = cur.fetchone()
+        result = row[0] if row else None
+        if isinstance(result, str):
+            result = _json.loads(result)
+        return result or {"success": False, "message": "bank op returned nothing"}
+
     async def _handle_balance(
         self, websocket: Any, message: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -616,16 +638,13 @@ class BankService(BaseService):
         amount = int(message.get("amount", 0))
         description = (message.get("description") or "credit").strip() or "credit"
         try:
-            result = self._get_bank().add_funds(
-                moniker,
-                amount,
-                transaction_type="credit",
-                description=description,
-            )
+            result = self._bank_op(state, "add", {
+                "moniker": moniker, "amount": amount, "description": description,
+            })
         except Exception as e:
             io.echo_traceback("bed.api.bank._handle_add:")
             return error_envelope(
-                CODE_DATABASE_ERROR, f"add_funds failed: {e}"
+                CODE_DATABASE_ERROR, f"add failed: {e}"
             )
         if not result.get("success"):
             return error_envelope(
@@ -649,16 +668,13 @@ class BankService(BaseService):
         amount = int(message.get("amount", 0))
         description = (message.get("description") or "debit").strip() or "debit"
         try:
-            result = self._get_bank().remove_funds(
-                moniker,
-                amount,
-                transaction_type="debit",
-                description=description,
-            )
+            result = self._bank_op(state, "remove", {
+                "moniker": moniker, "amount": amount, "description": description,
+            })
         except Exception as e:
             io.echo_traceback("bed.api.bank._handle_remove:")
             return error_envelope(
-                CODE_DATABASE_ERROR, f"remove_funds failed: {e}"
+                CODE_DATABASE_ERROR, f"remove failed: {e}"
             )
         if not result.get("success"):
             return error_envelope(
@@ -681,7 +697,9 @@ class BankService(BaseService):
         moniker = (message.get("moniker") or "").strip()
         limit = int(message.get("limit", 50))
         try:
-            rows = self._get_bank().get_history(moniker, limit)
+            rows = self._bank_op(state, "history", {
+                "moniker": moniker, "limit": limit,
+            }).get("rows", [])
         except Exception as e:
             io.echo_traceback("bed.api.bank._handle_history:")
             return error_envelope(
@@ -706,9 +724,12 @@ class BankService(BaseService):
             (message.get("requested_by") or "").strip() or state.moniker
         )
         try:
-            result = self._get_bank().transfer(
-                from_moniker, to_moniker, amount, requested_by
-            )
+            result = self._bank_op(state, "transfer_request", {
+                "from_moniker": from_moniker,
+                "to_moniker": to_moniker,
+                "amount": amount,
+                "requested_by": requested_by,
+            })
         except Exception as e:
             io.echo_traceback("bed.api.bank._handle_transfer_request:")
             return error_envelope(
@@ -740,9 +761,10 @@ class BankService(BaseService):
             (message.get("responded_by") or "").strip() or state.moniker
         )
         try:
-            result = self._get_bank().approve_transfer(
-                transfer_id, responded_by
-            )
+            result = self._bank_op(state, "transfer_approve", {
+                "transfer_id": transfer_id,
+                "responded_by": responded_by,
+            })
         except Exception as e:
             io.echo_traceback("bed.api.bank._handle_transfer_approve:")
             return error_envelope(
@@ -779,9 +801,10 @@ class BankService(BaseService):
             (message.get("responded_by") or "").strip() or state.moniker
         )
         try:
-            result = self._get_bank().reject_transfer(
-                transfer_id, responded_by
-            )
+            result = self._bank_op(state, "transfer_reject", {
+                "transfer_id": transfer_id,
+                "responded_by": responded_by,
+            })
         except Exception as e:
             io.echo_traceback("bed.api.bank._handle_transfer_reject:")
             return error_envelope(
@@ -808,9 +831,9 @@ class BankService(BaseService):
         # ``is_sysop`` field, so a non-sysop session cannot escalate.
         is_sysop = bool(state.is_sysop)
         try:
-            rows = self._get_bank().get_pending_transfers(
-                moniker, is_sysop
-            )
+            rows = self._bank_op(state, "pending", {
+                "moniker": moniker, "is_sysop": is_sysop,
+            }).get("rows", [])
         except Exception as e:
             io.echo_traceback("bed.api.bank._handle_pending:")
             return error_envelope(
@@ -830,7 +853,7 @@ class BankService(BaseService):
         if err is not None:
             return err
         try:
-            rows = self._get_bank().list_all()
+            rows = self._bank_op(state, "list_all", {}).get("rows", [])
         except Exception as e:
             io.echo_traceback("bed.api.bank._handle_list_all:")
             return error_envelope(
