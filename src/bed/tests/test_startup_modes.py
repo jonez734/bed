@@ -31,11 +31,9 @@ def test_buildargs_defines_install_flag():
 def test_runtime_does_not_run_bootstrap():
     args = _args(install=False)
     with patch.object(bedstartup.startuplib, "runmodule") as bootstrap, \
-         patch.object(bedstartup.bbsmodule, "runmodule") as casino, \
          patch.object(bedstartup, "verify_install", return_value=True) as verify:
         assert bedstartup.ensure_startup(args) is True
     bootstrap.assert_not_called()
-    casino.assert_not_called()
     verify.assert_called_once()
 
 
@@ -45,12 +43,10 @@ def test_install_runs_full_bootstrap():
          patch.object(bedstartup.database, "getpool") as getpool, \
          patch.object(bedstartup.database, "connect") as connect, \
          patch.object(bedstartup, "_ensure_bed_role", return_value=True), \
-         patch.object(bedstartup.bbsmodule, "runmodule", return_value=True) as casino, \
          patch.object(bedstartup, "verify_install") as verify:
         connect.return_value.__enter__.return_value = MagicMock()
         assert bedstartup.ensure_startup(args) is True
     bootstrap.assert_called_once()
-    casino.assert_called_once()
     verify.assert_not_called()
 
 

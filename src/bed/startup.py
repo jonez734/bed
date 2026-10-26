@@ -12,7 +12,7 @@ import sys
 
 import psycopg
 
-from bbsengine6 import database, io, module as bbsmodule
+from bbsengine6 import database, io
 from bbsengine6.startup import lib as startuplib
 
 
@@ -162,10 +162,11 @@ def verify_install(args) -> bool:
 def ensure_startup(args):
     """Start-up entry point.
 
-    With ``args.install`` set, runs the full bootstrap (bbsengine6 startup,
-    the bed role, casino). Otherwise only verifies the install is present
-    via :func:`verify_install`, so the service start path needs no
-    superuser and no DDL.
+    With ``args.install`` set, runs the owner bootstrap (bbsengine6 startup,
+    the bed role, the owner migration, the token table). Casino's setup is
+    not part of it. Otherwise only verifies the install is present via
+    :func:`verify_install`, so the service start path needs no superuser
+    and no DDL.
 
     Idempotent: safe to call repeatedly.  Returns True on success, False
     on failure.  Non-interactive: does not parse arguments or call
@@ -241,12 +242,7 @@ def ensure_startup(args):
             level="error",
         )
         return False
-    # conn released; casino.startup.main opens its own pool/conn lifecycle.
-
-    casino_result = bbsmodule.runmodule(args, "casino.startup.main")
-    if casino_result is not True:
-        io.echo("casino startup failed", level="error")
-        return False
+    # Casino setup is not bed's job; it is run by the zoid6 install owner.
 
     io.echo("bed startup complete", level="ok")
     return True

@@ -103,16 +103,14 @@ class TestBedStartupMain(unittest.IsolatedAsyncioTestCase):
 
     @patch("bed.startup.database")
     @patch("bed.startup.startuplib")
-    @patch("bed.startup.bbsmodule")
     def test_main_runs_bbsengine6_startup_then_bed_role(
-        self, mock_bbsmodule, mock_startuplib, mock_db
+        self, mock_startuplib, mock_db
     ):
-        """main() calls bbsengine6 startup, ensures the bed role, then
-        dispatches to casino.startup.main."""
+        """main() calls bbsengine6 startup, then ensures the bed role.
+        bed does not run casino's setup."""
         from bed.startup import main, BED_ROLE
 
         mock_startuplib.runmodule.return_value = True
-        mock_bbsmodule.runmodule.return_value = True
         mock_startuplib.buildargs.return_value = MagicMock()
 
         mock_pool = MagicMock()
@@ -134,7 +132,6 @@ class TestBedStartupMain(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result)
         mock_startuplib.runmodule.assert_called_once_with(args, "main")
-        mock_bbsmodule.runmodule.assert_called_once_with(args, "casino.startup.main")
         mock_db.rolexists.assert_called_with(args, BED_ROLE, conn=mock_conn)
         mock_conn.commit.assert_called_once()
 

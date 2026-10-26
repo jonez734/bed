@@ -82,7 +82,7 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         action="store_true",
         default=False,
         help=(
-            "Run the full bbsengine6 bootstrap and casino setup, then exit. "
+            "Run the full bbsengine6 bootstrap and bed setup, then exit. "
             "Run once per install as the install owner (zoid6). The service "
             "start path does not run this."
         ),
