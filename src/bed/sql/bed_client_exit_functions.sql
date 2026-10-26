@@ -3,7 +3,7 @@
 -- this SECURITY DEFINER function with the SHA-256 digest of the bearer token, the moniker,
 -- the reason, and the client's address. The function checks the moniker against the verified
 -- token row, then writes a 'client_exit' row through engine.log_action, which validates the
--- reason against the fixed vocabulary (quit, eof, intr, idle, auth_failed, error).
+-- reason against the fixed vocabulary (quit, eof, intr, idle, ws_error, auth_failed, error).
 --
 -- Installed by ``bed --install`` as the owner. Idempotent.
 

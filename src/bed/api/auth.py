@@ -920,7 +920,7 @@ class AuthService(BaseService):
 
 
 # The fixed vocabulary of client exit reasons. Must match engine.log_action (log_action.sql).
-CLIENT_EXIT_REASONS = frozenset({"quit", "eof", "intr", "idle", "auth_failed", "error"})
+CLIENT_EXIT_REASONS = frozenset({"quit", "eof", "intr", "idle", "ws_error", "auth_failed", "error"})
 
 # makes it obvious at import time that every op has exactly one handler.
 _OP_TO_HANDLER = {

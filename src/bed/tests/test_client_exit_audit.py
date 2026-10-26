@@ -41,6 +41,11 @@ def test_reason_vocabulary_matches_the_database_function():
     assert db_reasons == set(CLIENT_EXIT_REASONS)
 
 
+def test_ws_error_is_a_client_exit_reason_in_both_places():
+    assert "ws_error" in CLIENT_EXIT_REASONS
+    assert "'ws_error'" in LOG_ACTION.read_text()
+
+
 def test_client_exit_action_is_allowed_by_the_database_function():
     assert "'client_exit'" in LOG_ACTION.read_text()
 
