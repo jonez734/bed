@@ -1350,7 +1350,14 @@ def _reload_config_and_apply(
 
 async def main_async() -> None:
     """Async main entry point."""
+    from . import _version as bed_version
+
     parser = argparse.ArgumentParser(description="BED - BBS Engine Daemon")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"bed {bed_version.__version__}",
+    )
     buildargs(parser)
     args = parser.parse_args()
 
