@@ -175,10 +175,6 @@ side idle detection is a separate feature.
 **Missing.** Against `zoid6test`, the casino suite has 16 failing tests, all in the casino test tree.
 They are deferred, not fixed, because none is a casino runtime bug that users can reach.
 
-- `test_blackjack_flow.py::test_betlog_view`: the test reads `datepostedlocal` from `casino.betlog`,
-  which joins `engine.__member` on `loginid = CURRENT_USER`. The test runs as `opencode`, which has no
-  matching member row, so the column is NULL. The engine creates member roles (`m_<moniker>`) only
-  through `engine.createpgrole`, and no test account has one on `zoid6test`.
 - `test_player_stats_integration.py` (2 tests): pass alone and on a clean HEAD export, but fail in the
   full suite run from the working tree. Order-dependent; not isolated.
 - `test_registered_types_have_handlers.py::test_handler_registrations_are_answered_by_a_branch_or_a_game_handler`:
@@ -188,6 +184,8 @@ They are deferred, not fixed, because none is a casino runtime bug that users ca
 **What happens.** These tests fail in a full run against `zoid6test`. Passing runs cover the surrender
 rule, table attrs, and the Decimal surrender refund.
 
-**Fix.** For `test_betlog_view`, have `jam` create the role for a script-created test account
-(`engine.createpgrole('alice')`), and point the test at `m_alice`. For the two order-dependent groups,
-find the shared state by bisecting the full run, then isolate the fixture that leaks it.
+**Fix.** For the two order-dependent groups, find the shared state by bisecting the full run, then
+isolate the fixture that leaks it.
+
+`test_betlog_view` no longer switches role. `datepostedlocal` stays NULL unless the connected role has
+a member row with a timezone set; the test checks the column exists instead.
