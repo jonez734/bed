@@ -108,3 +108,20 @@ Resolved in the harness, not the server. The harness's fake definer connection n
 jsonb success result and records the op name. The assertion checks that the server ran the `add` op,
 not that the client-side `BankService.add_funds` mock was called, since the wire facade sends the add to
 the server and never calls that mock.
+
+## 9. casino token test fails only in the full suite (open)
+
+**Missing.** Nothing yet explains why
+`casino/src/casino/tests/test_casino_client_token.py::test_send_with_token_injects_token`
+fails only in the full casino non-integration run. It passes alone, in its own module, and with every
+other module paired with it. It passes in the full run at HEAD.
+
+**What happens.** The failure is `RuntimeWarning: coroutine 'AsyncMockMixin._execute_mock_call' was
+never awaited`, raised while that test runs. Several pre-existing casino tests (broadcast, handler, and
+integration tests that use `AsyncMock`) leave coroutines unawaited, and the garbage collector reports
+them during whichever test is running. Ruled out: the `io` stream bindings (`_current_input_stream` and
+`_current_output_stream`) are not rebound by any test in the run, and the failure reproduces with the
+new casino blackjack tests excluded.
+
+**Fix.** Find the test that leaves the coroutine unawaited (await it, or assert on it), then rerun the
+full suite. Until then the test stays failing; it is not skipped.
