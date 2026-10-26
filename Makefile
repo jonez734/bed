@@ -7,6 +7,10 @@ VERSION_SCRIPT ?= $(CURDIR)/../scripts/next_version.sh
 VERSION ?= $(shell $(VERSION_SCRIPT) 0.0.3.dev $(WHEELS_DIR))
 
 PYTHON ?= python3.12
+# Interpreter for the --no-isolation wheel builds. Pinned to the system python3.12,
+# not whatever python3.12 is first on PATH: under an activated venv that is the venv's
+# interpreter, which has neither setuptools nor build. Override with BUILD_PYTHON=...
+BUILD_PYTHON ?= /usr/bin/python3.12
 RSYNC = rsync --chmod=F0644 --mkpath --archive --verbose
 
 .PHONY: all help clean build ensure-repo ensure-build-dir version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon setup-db deploy deploy-venv deploy-prod commit-version clean-egg-info stale-build
@@ -251,10 +255,10 @@ install-venv: clean-egg-info
 	rm -f $(WHEEL_DIR)/*.whl
 	$(MAKE) -C $(BBSENGINE_DIR) version
 	$(call PREPARE_BUILD,$(BBSENGINE_DIR))
-	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(BBSENGINE_DIR)
+	$(BUILD_PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(BBSENGINE_DIR)
 	$(MAKE) version
 	$(call PREPARE_BUILD,$(CURDIR))
-	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
+	$(BUILD_PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
 	sudo -u $(VENV_OWNER) $(VENV_DIR)/bin/pip install $(PIP_UPGRADE_FLAG) $(WHEEL_DIR)/*.whl
 	# TODO(verify-install): this `sudo -u <owner> pip install` runs as
 	# VENV_OWNER, not the active operator, so the verify check has to be
@@ -336,7 +340,7 @@ deploy-venv: clean clean-egg-info
 	@rm -f $(WHEEL_DIR)/*.whl
 	$(MAKE) -C $(BBSENGINE_DIR) version
 	$(call PREPARE_BUILD,$(BBSENGINE_DIR))
-	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(BBSENGINE_DIR)
+	$(BUILD_PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(BBSENGINE_DIR)
 	$(VENV_DIR)/bin/pip install $(PIP_UPGRADE_FLAG) $(WHEEL_DIR)/*.whl 2>/dev/null
 	# TODO(verify-install): after this `pip install` of bbsengine6's
 	# wheel, compare the wheel's METADATA Version against
@@ -350,7 +354,7 @@ ifeq ($(EDITABLE),1)
 else
 	$(MAKE) version
 	$(call PREPARE_BUILD,$(CURDIR))
-	$(PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
+	$(BUILD_PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
 	$(VENV_DIR)/bin/pip install $(PIP_UPGRADE_FLAG) $(WHEEL_DIR)/*.whl 2>/dev/null
 	# TODO(verify-install): after this `pip install` of bed's wheel,
 	# compare the wheel's METADATA Version against `pip show bed`.
