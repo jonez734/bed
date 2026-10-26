@@ -9,7 +9,7 @@ VERSION ?= $(shell $(VERSION_SCRIPT) 0.0.3.dev $(WHEELS_DIR))
 PYTHON ?= python3.12
 RSYNC = rsync --chmod=F0644 --mkpath --archive --verbose
 
-.PHONY: all help clean build ensure-repo ensure-build-dir version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon setup-db deploy deploy-venv deploy-prod commit-version clean-egg-info
+.PHONY: all help clean build ensure-repo ensure-build-dir version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon setup-db deploy deploy-venv deploy-prod commit-version clean-egg-info stale-build
 
 all: help
 
@@ -95,8 +95,19 @@ PIP_UPGRADE_FLAG := $(if $(filter 1,$(DEPLOY_UPGRADE)),--upgrade,)
 clean-egg-info:
 	-rm -rf *.egg-info src/*.egg-info
 
-clean: clean-egg-info
-	-if [ -d build ]; then mv build build.stale.$$$$; fi
+# Move aside any build/dist/egg-info directory the project holds before a build.
+# A tree left by another user cannot be deleted, but renaming it needs only write
+# access to this project directory. The stale tree is kept under *.stale.<timestamp>.
+stale-build:
+	@ts=$$(date +%Y%m%d%H%M%S); \
+	for d in build dist src/*.egg-info *.egg-info; do \
+		for x in $$d; do \
+			[ -e "$$x" ] || continue; \
+			mv "$$x" "$$x.stale.$$ts" && echo "stale-build: moved $$x -> $$x.stale.$$ts"; \
+		done; \
+	done
+
+clean: stale-build clean-egg-info
 	-rm -rf dist build.old
 	-rm -rf *.egg-info
 	-find . -type d -name __pycache__ -exec rm -rf {} +
