@@ -109,7 +109,7 @@ jsonb success result and records the op name. The assertion checks that the serv
 not that the client-side `BankService.add_funds` mock was called, since the wire facade sends the add to
 the server and never calls that mock.
 
-## 9. casino token test fails only in the full suite (open)
+## 9. casino token test fails only in the full suite (closed)
 
 **Missing.** Nothing yet explains why
 `casino/src/casino/tests/test_casino_client_token.py::test_send_with_token_injects_token`
@@ -123,5 +123,8 @@ them during whichever test is running. Ruled out: the `io` stream bindings (`_cu
 `_current_output_stream`) are not rebound by any test in the run, and the failure reproduces with the
 new casino blackjack tests excluded.
 
-**Fix.** Find the test that leaves the coroutine unawaited (await it, or assert on it), then rerun the
-full suite. Until then the test stays failing; it is not skipped.
+**Status: closed.** The orphaned coroutines came from the test stubs, not from the client. Some
+tests stubbed `receive_loop` and `disconnect` with `AsyncMock`, and `run()` cancels or skips those,
+leaving coroutines nothing awaited. They are now finished coroutine functions, and the test's own
+event loop is drained (pending tasks cancelled and awaited) before it closes. The full casino suite
+raises no "never awaited" warnings. Fixed in casino `301db3a`.
