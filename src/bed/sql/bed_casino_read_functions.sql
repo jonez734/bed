@@ -11,6 +11,36 @@
 --
 -- Installed by ``bed --install`` as the owner. Idempotent.
 
+CREATE OR REPLACE FUNCTION engine.bed_casino_table_shape(t casino.__table)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = engine, public, pg_temp
+AS $$
+    SELECT jsonb_build_object(
+        'moniker', t.moniker,
+        'game_type', t.type,
+        'min_bet', t.minimumbet,
+        'max_bet', t.maximumbet,
+        'owner', t.ownermoniker,
+        'status', t.status,
+        'hidden', coalesce(t.hidden, false),
+        'location', t.location,
+        'phase', 'waiting',
+        'players', coalesce((SELECT jsonb_agg(m.playermoniker ORDER BY m.joinedat)
+                             FROM casino.map_cardtable_player m
+                             WHERE m.cardtablemoniker = t.moniker AND m.role = 'player'), '[]'::jsonb),
+        'spectators', coalesce((SELECT jsonb_agg(m.playermoniker ORDER BY m.joinedat)
+                                FROM casino.map_cardtable_player m
+                                WHERE m.cardtablemoniker = t.moniker AND m.role = 'spectator'), '[]'::jsonb)
+    )
+$$;
+
+ALTER FUNCTION engine.bed_casino_table_shape(casino.__table) OWNER TO zoid6;
+REVOKE ALL ON FUNCTION engine.bed_casino_table_shape(casino.__table) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION engine.bed_casino_table_shape(casino.__table) TO bed;
+
 CREATE OR REPLACE FUNCTION engine.bed_casino_read(p_token_hash bytea, p_op text, p_args jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -32,28 +62,18 @@ BEGIN
     v_sysop := engine.bed_is_sysop(v_actor) IS TRUE;
 
     IF p_op = 'list_tables' THEN
-        SELECT coalesce(jsonb_agg(to_jsonb(x) ORDER BY x.moniker), '[]'::jsonb) INTO v_rows
-        FROM (
-            SELECT moniker, type, minimumbet, maximumbet, ownermoniker, ownersince,
-                   accountid, cheat, cheatpercent, attrs, shoe_cards, shoe_uses,
-                   location, status, hidden
-            FROM casino.__table
-            WHERE (p_args->>'game_type' IS NULL OR type = p_args->>'game_type')
-              AND (v_sysop OR hidden IS NULL OR hidden = false)
-        ) x;
+        SELECT coalesce(jsonb_agg(engine.bed_casino_table_shape(t) ORDER BY t.moniker), '[]'::jsonb) INTO v_rows
+        FROM casino.__table t
+        WHERE (p_args->>'game_type' IS NULL OR t.type = p_args->>'game_type')
+          AND (v_sysop OR t.hidden IS NULL OR t.hidden = false);
         RETURN jsonb_build_object('success', true, 'tables', v_rows);
     END IF;
 
     IF p_op = 'get_table' THEN
-        SELECT to_jsonb(x) INTO v_row
-        FROM (
-            SELECT moniker, type, minimumbet, maximumbet, ownermoniker, ownersince,
-                   accountid, cheat, cheatpercent, attrs, shoe_cards, shoe_uses,
-                   location, status, hidden
-            FROM casino.__table
-            WHERE moniker = p_args->>'moniker'
-              AND (v_sysop OR hidden IS NULL OR hidden = false)
-        ) x;
+        SELECT engine.bed_casino_table_shape(t) INTO v_row
+        FROM casino.__table t
+        WHERE t.moniker = p_args->>'moniker'
+          AND (v_sysop OR t.hidden IS NULL OR t.hidden = false);
         RETURN jsonb_build_object('success', true, 'table', v_row);
     END IF;
 

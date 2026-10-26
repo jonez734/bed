@@ -92,7 +92,7 @@ def test_call_passes_token_digest_op_and_args_not_moniker():
     assert digest == token_hash("tok-abc")
     assert op == "list_tables"
     assert json.loads(args) == {"game_type": "blackjack"}
-    assert out == {"type": "casino_list_tables", "success": True, "tables": []}
+    assert out == {"type": "table_list", "tables": []}
 
 
 @pytest.mark.unit
@@ -107,14 +107,14 @@ def test_call_sends_no_plaintext_token_to_the_database():
 def test_result_from_database_is_returned_with_the_message_type():
     svc, _ = _svc({"success": False, "message": "Status must be open or closed"})
     out = svc._call("bed_casino_op", "update", "tok", {}, "casino_update_table")
-    assert out == {"type": "casino_update_table", "success": False, "message": "Status must be open or closed"}
+    assert out == {"type": "error", "code": "update_failed", "message": "Status must be open or closed"}
 
 
 @pytest.mark.unit
 def test_string_jsonb_result_is_decoded():
-    svc, _ = _svc(json.dumps({"success": True, "table": {"moniker": "t1"}}))
+    svc, _ = _svc(json.dumps({"success": True, "table": {"moniker": "t1"}, "message": "ok"}))
     out = svc._call("bed_casino_op", "create", "tok", {}, "casino_create_table")
-    assert out["table"] == {"moniker": "t1"}
+    assert out == {"type": "table_created", "moniker": "t1", "location": "", "hidden": False, "message": "ok"}
 
 
 @pytest.mark.unit
@@ -197,3 +197,29 @@ def test_no_casino_service_flag_exists():
     lib.buildargs(p)
     assert p.parse_args([]).no_casino_service is False
     assert p.parse_args(["--no-casino-service"]).no_casino_service is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("msg_type,result,expected", [
+    ("casino_list_tables", {"success": True, "tables": [{"moniker": "t1"}]},
+     {"type": "table_list", "tables": [{"moniker": "t1"}]}),
+    ("casino_create_table", {"success": True, "table": {"moniker": "t1", "location": "table-1", "hidden": True}, "message": "Table t1 created"},
+     {"type": "table_created", "moniker": "t1", "location": "table-1", "hidden": True, "message": "Table t1 created"}),
+    ("casino_create_table", {"success": False, "exists": True, "message": "Table t1 already exists", "table": {"moniker": "t1"}},
+     {"type": "table_exists", "moniker": "t1", "message": "Table t1 already exists"}),
+    ("casino_update_table", {"success": True, "message": "Table updated"},
+     {"type": "table_updated", "moniker": "", "message": "Table updated"}),
+])
+def test_reply_matches_what_the_client_reads(msg_type, result, expected):
+    from bed.api.casino import _client_reply
+
+    op = _TYPE_TO_CALL[msg_type][1]
+    assert _client_reply(msg_type, op, result) == expected
+
+
+@pytest.mark.unit
+def test_failed_join_returns_an_error_envelope_with_the_op():
+    from bed.api.casino import _client_reply
+
+    out = _client_reply("casino_join_table", "join", {"success": False, "message": "Table not found"})
+    assert out == {"type": "error", "code": "join_failed", "message": "Table not found"}

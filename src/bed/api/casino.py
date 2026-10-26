@@ -104,7 +104,13 @@ class CasinoService(BaseService):
             return err
         token = getattr(state, "auth_service_token", None) or ""
         args = {k: v for k, v in message.items() if k not in ("type", "token", "claims")}
-        return self._call(fn, op, token, args, msg_type)
+        result = self._call(fn, op, token, args, msg_type)
+        # The database does not echo the moniker on these replies; the request names it.
+        if msg_type == "casino_update_table" and result.get("type") == "table_updated":
+            result["moniker"] = args.get("moniker", "")
+        if msg_type == "casino_create_table" and result.get("type") == "table_exists" and not result.get("moniker"):
+            result["moniker"] = args.get("moniker", "")
+        return result
 
     def _call(self, fn: str, op: str, token: str, args: Dict[str, Any], msg_type: str) -> Dict[str, Any]:
         from bed.store.token_store import token_hash
@@ -124,4 +130,33 @@ class CasinoService(BaseService):
             result = _json.loads(result)
         if not isinstance(result, dict):
             return error_envelope(CODE_DATABASE_ERROR, f"{op} returned nothing")
-        return {"type": msg_type, **result}
+        return _client_reply(msg_type, op, result)
+
+
+def _client_reply(msg_type: str, op: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """Shape a database result into the reply the casino client already reads.
+
+    The client's table handlers expect: ``table_list`` with ``tables`` for a lobby listing;
+    ``table_created`` (moniker, location, hidden, message) or ``table_exists`` for a create;
+    ``table_updated`` (moniker, message) for an update. A failed op keeps the database's
+    ``success: false`` and ``message`` so the client shows the refusal.
+    """
+    if not result.get("success", False):
+        out = {"type": "error", "code": f"{op}_failed", "message": result.get("message", f"{op} failed")}
+        if result.get("exists"):
+            out = {"type": "table_exists", "moniker": (result.get("table") or {}).get("moniker", ""),
+                   "message": result.get("message", "")}
+        return out
+    if msg_type == "casino_list_tables":
+        return {"type": "table_list", "tables": result.get("tables", [])}
+    if msg_type == "casino_create_table":
+        table = result.get("table") or {}
+        return {"type": "table_created", "moniker": table.get("moniker", ""),
+                "location": table.get("location", ""), "hidden": bool(table.get("hidden", False)),
+                "message": result.get("message", "")}
+    if msg_type == "casino_update_table":
+        return {"type": "table_updated", "moniker": result.get("moniker", ""),
+                "message": result.get("message", "")}
+    if msg_type == "casino_get_table":
+        return {"type": "table_info", "table": result.get("table")}
+    return {"type": msg_type, **result}
