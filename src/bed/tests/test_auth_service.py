@@ -1954,6 +1954,7 @@ class TestAuthTypeToOpMapping(unittest.TestCase):
                 "reconnect": "reconnect",
                 "auth_refresh": "refresh",
                 "auth_revoke": "revoke",
+                "client_exit": "client_exit",
             },
         )
 

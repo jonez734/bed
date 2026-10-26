@@ -82,6 +82,8 @@ def _ensure_bed_token_table(args, conn):
         "bed_bank_functions.sql",
         "bed_bank_op_functions.sql",
         "bed_lastlogin_functions.sql",
+        "bed_client_exit_functions.sql",
+        "bed_login_failed_functions.sql",
         "bed_service_grants.sql",
     ):
         ok = database.importsql(args, sqlfile, conn=conn, rollback=False, package="bed")

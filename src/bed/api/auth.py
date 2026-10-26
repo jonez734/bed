@@ -35,6 +35,7 @@ from bbsengine6.auth import access as _auth_access
 from .credential_provider import CredentialProvider
 from .errors import (
     CODE_BAD_CREDENTIALS,
+    CODE_INVALID_REQUEST,
     CODE_FORBIDDEN,
     CODE_INSTANCE_MISMATCH,
     CODE_MISSING_CREDENTIALS,
@@ -191,6 +192,7 @@ _TYPE_TO_OP: Dict[str, str] = {
     "reconnect": "reconnect",
     "auth_refresh": "refresh",
     "auth_revoke": "revoke",
+    "client_exit": "client_exit",
 }
 
 
@@ -240,7 +242,7 @@ class AuthService(BaseService):
     compatible because the codec is JSON).
     """
 
-    HANDLED_TYPES = ("auth", "reconnect", "auth_refresh", "auth_revoke")
+    HANDLED_TYPES = ("auth", "reconnect", "auth_refresh", "auth_revoke", "client_exit")
 
     def __init__(
         self,
@@ -437,6 +439,7 @@ class AuthService(BaseService):
                 token="",
                 extra={"moniker": moniker},
             )
+            self._record_login_failed(moniker, message.get("remoteaddr"))
             return error_envelope(
                 CODE_BAD_CREDENTIALS,
                 "Invalid moniker or password",
@@ -857,10 +860,68 @@ class AuthService(BaseService):
 
 
 # Op -> handler dispatch. Keeps handle_message() a flat dict lookup and
+    def _record_login_failed(self, moniker: str, remoteaddr: Optional[str]) -> None:
+        """Write a login_failed row for a rejected password. Never blocks the reply."""
+        try:
+            from bbsengine6 import database
+
+            with database.connect(
+                self.args, pool=getattr(self.args, "pool", None), set_role=False
+            ) as conn, database.cursor(conn) as cur:
+                cur.execute(
+                    "SELECT engine.bed_login_failed(%s, %s)", (moniker, remoteaddr)
+                )
+                conn.commit()
+        except Exception as e:
+            io.echo(f"AuthService: login_failed not recorded for {moniker}: {e}", level="warning")
+
+    async def _handle_client_exit(
+        self, websocket: Any, message: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Record why a client ended. The reason must be in the fixed vocabulary.
+
+        The token is verified by the database function (engine.bed_client_exit), which also
+        checks that the moniker is the token's own. A client whose session is already gone
+        cannot write a row; the caller then keeps the reason in its own log.
+        """
+        reason = str(message.get("reason") or "")
+        if reason not in CLIENT_EXIT_REASONS:
+            return error_envelope(
+                CODE_INVALID_REQUEST, f"unknown client_exit reason {reason!r}", recoverable=False
+            )
+        token = message.get("token") or ""
+        moniker = (message.get("moniker") or "").strip()
+        if not token or not moniker:
+            return error_envelope(
+                CODE_TOKEN_INVALID, "token and moniker required", recoverable=False
+            )
+        remoteaddr = (message.get("remoteaddr") or None)
+        try:
+            from bed.store.token_store import token_hash
+            from bbsengine6 import database
+
+            with database.connect(
+                self.args, pool=getattr(self.args, "pool", None), set_role=False
+            ) as conn, database.cursor(conn) as cur:
+                cur.execute(
+                    "SELECT engine.bed_client_exit(%s, %s, %s, %s)",
+                    (token_hash(token), moniker, reason, remoteaddr),
+                )
+                conn.commit()
+        except Exception as e:
+            io.echo(f"AuthService: client_exit not recorded for {moniker}: {e}", level="warning")
+            return {"type": "client_exit_result", "success": False, "message": str(e)}
+        return {"type": "client_exit_result", "success": True}
+
+
+# The fixed vocabulary of client exit reasons. Must match engine.log_action (log_action.sql).
+CLIENT_EXIT_REASONS = frozenset({"quit", "eof", "intr", "idle", "auth_failed", "error"})
+
 # makes it obvious at import time that every op has exactly one handler.
 _OP_TO_HANDLER = {
     "login": AuthService._handle_auth,
     "reconnect": AuthService._handle_reconnect,
     "refresh": AuthService._handle_auth_refresh,
     "revoke": AuthService._handle_auth_revoke,
+    "client_exit": AuthService._handle_client_exit,
 }

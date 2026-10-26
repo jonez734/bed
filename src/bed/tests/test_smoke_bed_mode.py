@@ -158,7 +158,7 @@ class TestBedModeLoginSanity(unittest.IsolatedAsyncioTestCase):
         """``list_services`` on a server with only AuthService
         registered returns ``{"type": "services",
         "services": ["auth", "auth_refresh", "auth_revoke",
-        "reconnect"]}`` (sorted message-type keys). The actual
+        "client_exit", "reconnect"]}`` (sorted message-type keys). The actual
         wire shape comes from
         ``bbsengine6.net.transport.WebSocketServer._handle_list_services``
         (``bbsengine6/net/transport.py:751-769``): ``type`` is
@@ -189,5 +189,5 @@ class TestBedModeLoginSanity(unittest.IsolatedAsyncioTestCase):
         # sorted by ``_handle_list_services``.
         self.assertEqual(
             set(services),
-            {"auth", "reconnect", "auth_refresh", "auth_revoke"},
+            {"auth", "reconnect", "auth_refresh", "auth_revoke", "client_exit"},
         )

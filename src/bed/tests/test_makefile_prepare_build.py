@@ -48,8 +48,12 @@ def test_clean_moves_build_aside_instead_of_deleting_it():
     m = re.search(r"^clean:.*?(?=^\S)", text, re.MULTILINE | re.DOTALL)
     assert m, "clean target not found"
     body = m.group(0)
+    # clean depends on stale-build, which renames build/ aside (no rm of build/ in clean).
+    assert "stale-build" in body, body
     assert "rm -rf build " not in body and "rm -rf build\n" not in body, body
-    assert "build.stale" in body, body
+    sb = re.search(r"^stale-build:.*?(?=^\S)", text, re.MULTILINE | re.DOTALL)
+    assert sb, "stale-build target not found"
+    assert "mv " in sb.group(0) and "build" in sb.group(0), sb.group(0)
 
 
 @pytest.mark.unit
