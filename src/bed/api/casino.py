@@ -4,8 +4,8 @@ bed holds no table privileges on casino tables. Each WebSocket message is author
 gates as bank (session, wire token, session token, shape), then bed passes only the SHA-256 digest
 of the bearer token, the op name, and the arguments to the database:
 
-    engine.bed_casino_read(token_hash, op, args)   list_tables, get_table
-    engine.bed_casino_op(token_hash, op, args)     create, update, join, leave
+    engine.casino_read(token_hash, op, args)   list_tables, get_table
+    engine.casino_op(token_hash, op, args)     create, update, join, leave
 
 The acting moniker and sysop status come from engine.__bed_token and the sysop flag inside the
 database, never from the request. The database function's jsonb result is returned unchanged.
@@ -23,12 +23,12 @@ from .handler import BaseService
 
 # WebSocket type -> (database function, op name)
 _TYPE_TO_CALL: Dict[str, tuple[str, str]] = {
-    "casino_list_tables": ("bed_casino_read", "list_tables"),
-    "casino_get_table": ("bed_casino_read", "get_table"),
-    "casino_create_table": ("bed_casino_op", "create"),
-    "casino_update_table": ("bed_casino_op", "update"),
-    "casino_join_table": ("bed_casino_op", "join"),
-    "casino_leave_table": ("bed_casino_op", "leave"),
+    "casino_list_tables": ("casino_read", "list_tables"),
+    "casino_get_table": ("casino_read", "get_table"),
+    "casino_create_table": ("casino_op", "create"),
+    "casino_update_table": ("casino_op", "update"),
+    "casino_join_table": ("casino_op", "join"),
+    "casino_leave_table": ("casino_op", "leave"),
 }
 
 

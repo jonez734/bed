@@ -840,7 +840,7 @@ class BED:
                 self.bank_service.register_all(self.server)
 
             # Casino table ops (casino_list_tables, casino_create_table, ...). Same token
-            # wiring as bank; the authorisation lives in engine.bed_casino_read/op.
+            # wiring as bank; the authorisation lives in engine.casino_read/op.
             if not getattr(self.args, "no_casino_service", False):
                 casino_kwargs: Dict[str, Any] = {}
                 if self.auth_service is not None and self.token_store is not None:

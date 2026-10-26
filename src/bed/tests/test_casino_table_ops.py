@@ -1,4 +1,4 @@
-"""bed's CasinoService serves casino table ops through engine.bed_casino_read / bed_casino_op.
+"""bed's CasinoService serves casino table ops through engine.casino_read / casino_op.
 
 Each WebSocket type maps to one database function and one op name. The service passes only the
 SHA-256 digest of the bearer token, the op name, and the message's arguments. The acting moniker
@@ -18,12 +18,12 @@ from bed.api.casino import CasinoService, _TYPE_TO_CALL
 from bed.store.token_store import token_hash
 
 EXPECTED = {
-    "casino_list_tables": ("bed_casino_read", "list_tables"),
-    "casino_get_table": ("bed_casino_read", "get_table"),
-    "casino_create_table": ("bed_casino_op", "create"),
-    "casino_update_table": ("bed_casino_op", "update"),
-    "casino_join_table": ("bed_casino_op", "join"),
-    "casino_leave_table": ("bed_casino_op", "leave"),
+    "casino_list_tables": ("casino_read", "list_tables"),
+    "casino_get_table": ("casino_read", "get_table"),
+    "casino_create_table": ("casino_op", "create"),
+    "casino_update_table": ("casino_op", "update"),
+    "casino_join_table": ("casino_op", "join"),
+    "casino_leave_table": ("casino_op", "leave"),
 }
 
 
@@ -85,9 +85,9 @@ def test_handled_types_are_the_six_casino_messages():
 @pytest.mark.unit
 def test_call_passes_token_digest_op_and_args_not_moniker():
     svc, conn = _svc({"success": True, "tables": []})
-    out = svc._call("bed_casino_read", "list_tables", "tok-abc", {"game_type": "blackjack"}, "casino_list_tables")
+    out = svc._call("casino_read", "list_tables", "tok-abc", {"game_type": "blackjack"}, "casino_list_tables")
     sql, params = conn.cur.executed[0]
-    assert "engine.bed_casino_read(%s, %s, %s::jsonb)" in sql
+    assert "engine.casino_read(%s, %s, %s::jsonb)" in sql
     digest, op, args = params
     assert digest == token_hash("tok-abc")
     assert op == "list_tables"
@@ -98,7 +98,7 @@ def test_call_passes_token_digest_op_and_args_not_moniker():
 @pytest.mark.unit
 def test_call_sends_no_plaintext_token_to_the_database():
     svc, conn = _svc({"success": True})
-    svc._call("bed_casino_op", "create", "tok-secret", {"moniker": "t"}, "casino_create_table")
+    svc._call("casino_op", "create", "tok-secret", {"moniker": "t"}, "casino_create_table")
     _, params = conn.cur.executed[0]
     assert "tok-secret" not in json.dumps([str(p) for p in params])
 
@@ -106,14 +106,14 @@ def test_call_sends_no_plaintext_token_to_the_database():
 @pytest.mark.unit
 def test_result_from_database_is_returned_with_the_message_type():
     svc, _ = _svc({"success": False, "message": "Status must be open or closed"})
-    out = svc._call("bed_casino_op", "update", "tok", {}, "casino_update_table")
+    out = svc._call("casino_op", "update", "tok", {}, "casino_update_table")
     assert out == {"type": "error", "code": "update_failed", "message": "Status must be open or closed"}
 
 
 @pytest.mark.unit
 def test_string_jsonb_result_is_decoded():
     svc, _ = _svc(json.dumps({"success": True, "table": {"moniker": "t1"}, "message": "ok"}))
-    out = svc._call("bed_casino_op", "create", "tok", {}, "casino_create_table")
+    out = svc._call("casino_op", "create", "tok", {}, "casino_create_table")
     assert out == {"type": "table_created", "moniker": "t1", "location": "", "hidden": False, "message": "ok"}
 
 
@@ -129,7 +129,7 @@ def test_database_error_becomes_an_error_envelope_with_the_op_name():
             return False
 
     svc._conn = lambda: _Boom()
-    out = svc._call("bed_casino_op", "join", "tok", {}, "casino_join_table")
+    out = svc._call("casino_op", "join", "tok", {}, "casino_join_table")
     assert "join failed" in json.dumps(out)
     assert "permission denied" in json.dumps(out)
 
