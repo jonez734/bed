@@ -15,7 +15,7 @@ CREATE OR REPLACE FUNCTION engine.bed_casino_read(p_token_hash bytea, p_op text,
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = engine, casino, public, pg_temp
+SET search_path = engine, public, pg_temp
 AS $$
 DECLARE
     v_actor citext;

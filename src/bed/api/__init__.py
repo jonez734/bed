@@ -3,6 +3,7 @@
 
 from .auth import AuthService, TokenError, _decode_token, _encode_token
 from .bank import BankService
+from .casino import CasinoService
 from .credential_provider import (
     CredentialProvider,
     MonikerOnlyCredentialProvider,

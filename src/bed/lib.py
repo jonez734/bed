@@ -267,6 +267,14 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         "fanout to connected WebSocket clients).",
     )
     parentparser.add_argument(
+        "--no-casino-service",
+        dest="no_casino_service",
+        action="store_true",
+        default=False,
+        help="Disable the in-process CasinoService (casino_list_tables / casino_get_table / "
+        "casino_create_table / casino_update_table / casino_join_table / casino_leave_table).",
+    )
+    parentparser.add_argument(
         "--no-bank-service",
         dest="no_bank_service",
         action="store_true",

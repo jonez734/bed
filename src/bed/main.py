@@ -25,6 +25,7 @@ from ._configpath import resolve_config_path
 from .api import (
     AuthService,
     BankService,
+    CasinoService,
     InMemoryTokenStore,
     DBTokenStore,
     MessageService,
@@ -648,6 +649,7 @@ class BED:
         self.message_service: Optional[MessageService] = None
         self._message_listener_task: Optional[asyncio.Task] = None
         self.bank_service: Optional[BankService] = None
+        self.casino_service: Optional[Any] = None
         self._ping_service: Optional[PingService] = None
         self._session_registry: Optional[SessionRegistry] = None
         self._gc_task: Optional[asyncio.Task] = None
@@ -836,6 +838,21 @@ class BED:
                     **bank_kwargs,
                 )
                 self.bank_service.register_all(self.server)
+
+            # Casino table ops (casino_list_tables, casino_create_table, ...). Same token
+            # wiring as bank; the authorisation lives in engine.bed_casino_read/op.
+            if not getattr(self.args, "no_casino_service", False):
+                casino_kwargs: Dict[str, Any] = {}
+                if self.auth_service is not None and self.token_store is not None:
+                    casino_kwargs = {
+                        "secret": getattr(self.auth_service, "secret", None),
+                        "token_store": self.token_store,
+                        "instance_id": getattr(self.auth_service, "instance_id", None),
+                    }
+                self.casino_service = CasinoService(
+                    db_args, self._session_registry, **casino_kwargs
+                )
+                self.casino_service.register_all(self.server)
 
             # PingService is registered LAST so its ``["ping"]`` entry
             # overwrites whatever the router (or bbsengine6's built-in
