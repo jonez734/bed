@@ -92,6 +92,21 @@ class CasinoService(BaseService):
         check_claims_routable("CasinoService", self.HANDLED_TYPES, _TYPE_TO_CALL)
         server.register_service(self, list(self.HANDLED_TYPES))
 
+    def _turn_seconds_refusal(self, value: Any) -> Optional[Dict[str, Any]]:
+        """Refuse a turn_seconds that is not an integer, is negative, or is above the ceiling."""
+        from casino.config import get_max_turn_seconds
+
+        ceiling = get_max_turn_seconds(self.args)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return {"type": "error", "code": "invalid_request",
+                    "message": "turn_seconds must be an integer number of seconds"}
+        if value < 0:
+            return {"type": "error", "code": "invalid_request", "message": "turn_seconds cannot be negative"}
+        if value > ceiling:
+            return {"type": "error", "code": "turn_seconds_over_ceiling",
+                    "message": f"turn_seconds {value} is above the sysop ceiling of {ceiling} seconds"}
+        return None
+
     async def handle_message(
         self, server: Any, websocket: Any, path: str, message: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
@@ -107,6 +122,12 @@ class CasinoService(BaseService):
             return err
         token = getattr(state, "auth_service_token", None) or ""
         args = {k: v for k, v in message.items() if k not in ("type", "token", "claims")}
+        # The play clock's ceiling is sysop config (casino.clock.max_turn_seconds). The database
+        # stores whatever it is given, so the refusal happens here, before any write.
+        if msg_type in ("casino_create_table", "casino_update_table") and "turn_seconds" in args:
+            refusal = self._turn_seconds_refusal(args["turn_seconds"])
+            if refusal is not None:
+                return refusal
         result = self._call(fn, op, token, args, msg_type)
         # The database does not echo the moniker on these replies; the request names it.
         if msg_type == "casino_update_table" and result.get("type") == "table_updated":

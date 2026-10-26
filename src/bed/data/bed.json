@@ -42,6 +42,10 @@
       "surrender_allowed": "early",
       "surrender_multiplier": 0.5,
       "_comment_surrender_multiplier": "Forfeit fraction on late surrender; 0.5 matches Las Vegas Strip / Atlantic City / Macau standard (Wizard of Odds, Vegas Advantage)."
+    },
+    "clock": {
+      "max_turn_seconds": 120,
+      "_comment_max_turn_seconds": "Sysop ceiling for a table's turn_seconds (the play clock). 0 disables the clock on every table. Read by casino.config.get_max_turn_seconds."
     }
   },
   "channel": {
