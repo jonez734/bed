@@ -128,3 +128,44 @@ tests stubbed `receive_loop` and `disconnect` with `AsyncMock`, and `run()` canc
 leaving coroutines nothing awaited. They are now finished coroutine functions, and the test's own
 event loop is drained (pending tasks cancelled and awaited) before it closes. The full casino suite
 raises no "never awaited" warnings. Fixed in casino `301db3a`.
+
+## 10. Play clock is configured and enforced at create and update, but not yet played (open)
+
+**Missing.** A table's `turn_seconds` is stored and capped by the sysop ceiling
+(`casino.clock.max_turn_seconds`, set in `bed.json` and `zoid6.json`), but nothing runs the clock.
+No deadline is stored on a seat (`acts_by`), the engine does not act when it expires, and the
+client shows no countdown.
+
+**What happens.** A table can be created or updated with a `turn_seconds`, and the value is refused
+above the ceiling. Nothing else changes: a human seat is never timed out, and no penalty is applied.
+
+**Fix.** Store the deadline on the seat when it is the seat's turn. The engine applies the table's
+penalty (`skip` by default, or `remove`, chosen per table) when it expires, and records it in the
+round log. Auto-play is excluded for pro games. Bots never wait on the clock. The client displays
+the countdown on the bottom bar and in the table view.
+
+## 11. Seat modules (dealer, player, bot) are planned, not built (open)
+
+**Missing.** Table seats do not name a dealer or player module. There is no `casino.seat_module`
+registry, no install command, no `bots_allowed`, `bot_max_percent`, `min_players`, or `max_players`
+columns, and no bot player.
+
+**What happens.** Every seat is human, and the game code makes all decisions itself. The
+`dealermodule` and `playermodule` columns exist but nothing reads them.
+
+**Fix.** Build the shared seat-module layer first (registry, install through `module.load` and
+`module.check`, and a per-game contract check). Then move blackjack, tictactoe, yahtzee, slots, and
+poker onto seats in that order, one at a time, each with its own tests.
+
+## 12. Player listing and the `client_exit` idle reason (open)
+
+**Missing.** The client cannot list the players at a table (`casino_list_players` does not exist),
+and the `idle` exit reason is valid in `log_action` but nothing records it. The client does not
+detect idle itself.
+
+**What happens.** A client that sits idle until the server closes its session exits with no reason
+recorded, or with `error`.
+
+**Fix.** Add `casino_list_players`, served through a read op with the kind (human or bot) shown on
+every row. For idle, the client records `idle` when the server reports an inactivity close. Client-
+side idle detection is a separate feature.
