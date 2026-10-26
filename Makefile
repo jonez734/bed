@@ -7,13 +7,15 @@ VERSION_SCRIPT ?= $(CURDIR)/../scripts/next_version.sh
 VERSION ?= $(shell $(VERSION_SCRIPT) 0.0.3.dev $(WHEELS_DIR))
 
 PYTHON ?= python3.12
-# Interpreter for the --no-isolation wheel builds. Pinned to the system python3.12,
-# not whatever python3.12 is first on PATH: under an activated venv that is the venv's
-# interpreter, which has neither setuptools nor build. Override with BUILD_PYTHON=...
-BUILD_PYTHON ?= /usr/bin/python3.12
+# Interpreter for the --no-isolation wheel builds: a private build venv that holds
+# build and setuptools, created under the per-user wheel dir. It does not depend on
+# which user runs the deploy, or on user-site installs (`build` lives only in one
+# user's ~/.local). Override with BUILD_PYTHON=... to use an existing interpreter.
+BUILD_VENV ?= $(WHEEL_DIR)/buildenv
+BUILD_PYTHON ?= $(BUILD_VENV)/bin/python
 RSYNC = rsync --chmod=F0644 --mkpath --archive --verbose
 
-.PHONY: all help clean build ensure-repo ensure-build-dir version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon setup-db deploy deploy-venv deploy-prod commit-version clean-egg-info stale-build
+.PHONY: all help clean build build-env ensure-repo ensure-build-dir version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon setup-db deploy deploy-venv deploy-prod commit-version clean-egg-info stale-build
 
 all: help
 
@@ -335,7 +337,15 @@ uninstall: uninstall-systemd uninstall-venv uninstall-tmpfiles uninstall-sysuser
 # of from a freshly-built wheel. See the EDITABLE detection block
 # above `clean-egg-info` for accepted names and the venv-targeting
 # behavior change.
-deploy-venv: clean clean-egg-info
+# Create the build venv (once per user) with build + setuptools + wheel.
+build-env:
+	@mkdir -p $(WHEEL_DIR)
+	@if [ ! -x "$(BUILD_VENV)/bin/python" ]; then \
+		$(PYTHON) -m venv "$(BUILD_VENV)" || { echo "build-env: cannot create $(BUILD_VENV)" >&2; exit 1; }; \
+	fi
+	@$(BUILD_VENV)/bin/python -m pip install --quiet --upgrade build setuptools wheel
+
+deploy-venv: clean clean-egg-info build-env
 	@mkdir -p $(WHEEL_DIR)
 	@rm -f $(WHEEL_DIR)/*.whl
 	$(MAKE) -C $(BBSENGINE_DIR) version
