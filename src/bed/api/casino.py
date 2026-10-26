@@ -60,7 +60,7 @@ class CasinoService(BaseService):
 
         The session, wire-token, session-token, and shape checks are reused from the bank
         service. The authorisation step is not: bbsengine6.bank.access knows bank verbs only.
-        Casino's own rule (owner, sysop, hidden tables) is enforced inside engine.bed_casino_*,
+        Casino's own rule (owner, sysop, hidden tables) is enforced inside engine.casino_*,
         where the acting moniker is read from the verified token.
         """
         from . import bank as _bank
