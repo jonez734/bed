@@ -34,6 +34,8 @@ from bbsengine6.auth import access as _auth_access
 
 from .credential_provider import CredentialProvider
 from .errors import (
+    unrouted_claim,
+    check_claims_routable,
     CODE_BAD_CREDENTIALS,
     CODE_INVALID_REQUEST,
     CODE_FORBIDDEN,
@@ -242,7 +244,7 @@ class AuthService(BaseService):
     compatible because the codec is JSON).
     """
 
-    HANDLED_TYPES = ("auth", "reconnect", "auth_refresh", "auth_revoke", "client_exit")
+    HANDLED_TYPES = tuple(_TYPE_TO_OP.keys())
 
     def __init__(
         self,
@@ -273,6 +275,7 @@ class AuthService(BaseService):
 
     def register_all(self, server: Any) -> None:
         self.server = server
+        check_claims_routable("AuthService", self.HANDLED_TYPES, _TYPE_TO_OP)
         server.register_service(self, list(self.HANDLED_TYPES))
 
     def _now(self) -> float:
@@ -396,6 +399,8 @@ class AuthService(BaseService):
         msg_type = message.get("type")
         op = _TYPE_TO_OP.get(msg_type)
         if op is None:
+            if msg_type in self.HANDLED_TYPES:
+                return unrouted_claim("AuthService", msg_type)
             return None
         handler = _OP_TO_HANDLER[op]
         return await handler(self, websocket, message)

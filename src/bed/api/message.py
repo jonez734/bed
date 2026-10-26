@@ -85,6 +85,8 @@ from bbsengine6.message import get_pending_page
 
 from .auth import TokenError, _decode_token
 from .errors import (
+    unrouted_claim,
+    check_claims_routable,
     CODE_DATABASE_ERROR,
     CODE_INSTANCE_MISMATCH,
     CODE_TOKEN_EXPIRED,
@@ -397,12 +399,7 @@ class MessageService(BaseService):
     depth against stale or compromised sessions).
     """
 
-    HANDLED_TYPES = (
-        "message_subscribe",
-        "message_unsubscribe",
-        "message_list_pending",
-        "message_send",
-    )
+    HANDLED_TYPES = tuple(_TYPE_TO_OP.keys())
 
     def __init__(
         self,
@@ -445,6 +442,7 @@ class MessageService(BaseService):
 
     def register_all(self, server: Any) -> None:
         self.server = server
+        check_claims_routable("MessageService", self.HANDLED_TYPES, _TYPE_TO_OP)
         server.register_service(self, list(self.HANDLED_TYPES))
 
     def _now(self) -> float:
@@ -688,6 +686,8 @@ class MessageService(BaseService):
         msg_type = message.get("type")
         op = _TYPE_TO_OP.get(msg_type)
         if op is None:
+            if msg_type in self.HANDLED_TYPES:
+                return unrouted_claim("MessageService", msg_type)
             return None
         handler = _OP_TO_HANDLER[op]
         return await handler(self, websocket, message)

@@ -63,6 +63,8 @@ from bbsengine6.bank import access as _bank_access
 
 from .auth import TokenError, _decode_token
 from .errors import (
+    unrouted_claim,
+    check_claims_routable,
     CODE_DATABASE_ERROR,
     CODE_INSTANCE_MISMATCH,
     CODE_TOKEN_EXPIRED,
@@ -565,6 +567,7 @@ class BankService(BaseService):
         return state, None
 
     def register_all(self, server: Any) -> None:
+        check_claims_routable("BankService", self.HANDLED_TYPES, _TYPE_TO_OP)
         server.register_service(self, list(self.HANDLED_TYPES))
 
     async def handle_message(
@@ -573,6 +576,8 @@ class BankService(BaseService):
         msg_type = message.get("type")
         op = _TYPE_TO_OP.get(msg_type)
         if op is None:
+            if msg_type in self.HANDLED_TYPES:
+                return unrouted_claim("BankService", msg_type)
             return None
         handler = _OP_TO_HANDLER[op]
         return await handler(self, websocket, message)

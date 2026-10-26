@@ -13,6 +13,7 @@ CODE_INSTANCE_MISMATCH = "bed_instance_mismatch"
 CODE_NOT_AUTHENTICATED = "not_authenticated"
 CODE_BAD_CREDENTIALS = "bad_credentials"
 CODE_INVALID_REQUEST = "invalid_request"
+CODE_UNHANDLED_TYPE = "unhandled_type"
 CODE_BED_SECRET_INSECURE = "bed_secret_insecure"
 CODE_MISSING_CREDENTIALS = "missing_credentials"
 CODE_DATABASE_ERROR = "database_error"
@@ -74,3 +75,32 @@ def scrub_token(obj: Any) -> Any:
     if isinstance(obj, tuple):
         return tuple(scrub_token(v) for v in obj)
     return obj
+
+
+def unrouted_claim(service_name: str, msg_type: str):
+    """Reply for a type a service claims (HANDLED_TYPES) but cannot route.
+
+    A None return would make the transport send nothing, so the client waits forever. This
+    returns an explicit error and logs it, so a mismatch between a service's claims and its map
+    is visible on the wire and in the daemon log.
+    """
+    from bbsengine6 import io
+
+    io.echo(
+        f"{service_name}: claimed type {msg_type!r} has no route; replying unhandled_type",
+        level="error",
+    )
+    return error_envelope(
+        CODE_UNHANDLED_TYPE,
+        f"{service_name} claims {msg_type!r} but has no handler for it",
+        recoverable=False,
+    )
+
+
+def check_claims_routable(service_name: str, claimed, routes) -> None:
+    """Refuse at registration a service that claims a type it cannot route."""
+    missing = sorted(set(claimed) - set(routes))
+    if missing:
+        raise RuntimeError(
+            f"{service_name} claims types with no route: {', '.join(missing)}"
+        )

@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional
 
 from bbsengine6 import io
 
-from .errors import CODE_DATABASE_ERROR, error_envelope
+from .errors import CODE_DATABASE_ERROR, check_claims_routable, error_envelope, unrouted_claim
 from .handler import BaseService
 
 # WebSocket type -> (database function, op name)
@@ -89,6 +89,7 @@ class CasinoService(BaseService):
         return database.connect(self.args, pool=getattr(self, "_pool", None), set_role=False)
 
     def register_all(self, server: Any) -> None:
+        check_claims_routable("CasinoService", self.HANDLED_TYPES, _TYPE_TO_CALL)
         server.register_service(self, list(self.HANDLED_TYPES))
 
     async def handle_message(
@@ -97,6 +98,8 @@ class CasinoService(BaseService):
         msg_type = message.get("type")
         call = _TYPE_TO_CALL.get(msg_type)
         if call is None:
+            if msg_type in self.HANDLED_TYPES:
+                return unrouted_claim("CasinoService", msg_type)
             return None
         fn, op = call
         state, err = self._check_access(websocket, op, message)
