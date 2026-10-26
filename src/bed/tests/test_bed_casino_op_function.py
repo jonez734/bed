@@ -65,6 +65,12 @@ def test_unknown_op_is_refused():
     assert "unknown op %" in _text()
 
 
+def test_every_refusal_names_the_failing_op():
+    t = _text()
+    assert "bed_casino_op(%): forbidden', p_op" in t
+    assert "bed_casino_op(%): no live session for this token', p_op" in t
+
+
 def test_install_loads_the_casino_op_function_after_read():
     src = inspect.getsource(startup._ensure_bed_token_table)
     assert "bed_casino_op_functions.sql" in src

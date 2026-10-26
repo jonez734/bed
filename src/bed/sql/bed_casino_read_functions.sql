@@ -27,7 +27,7 @@ BEGIN
     FROM engine.__bed_token t
     WHERE t.token_hash = p_token_hash AND t.expires_at > now();
     IF v_actor IS NULL THEN
-        RAISE EXCEPTION 'bed_casino_read: no live session for this token';
+        RAISE EXCEPTION 'bed_casino_read(%): no live session for this token', p_op;
     END IF;
     v_sysop := engine.bed_is_sysop(v_actor) IS TRUE;
 

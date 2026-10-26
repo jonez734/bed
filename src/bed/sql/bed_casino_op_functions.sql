@@ -38,14 +38,14 @@ BEGIN
     FROM engine.__bed_token t
     WHERE t.token_hash = p_token_hash AND t.expires_at > now();
     IF v_actor IS NULL THEN
-        RAISE EXCEPTION 'bed_casino_op: no live session for this token';
+        RAISE EXCEPTION 'bed_casino_op(%): no live session for this token', p_op;
     END IF;
     v_sysop := engine.bed_is_sysop(v_actor) IS TRUE;
 
     IF p_op = 'create' THEN
         v_owner := coalesce(p_args->>'owner', v_actor::text);
         IF NOT v_sysop AND v_actor IS DISTINCT FROM v_owner THEN
-            RAISE EXCEPTION 'bed_casino_op: forbidden';
+            RAISE EXCEPTION 'bed_casino_op(%): forbidden', p_op;
         END IF;
         v_type := p_args->>'game_type';
         v_min := coalesce((p_args->>'min_bet')::numeric, 10);
@@ -89,7 +89,7 @@ BEGIN
             RETURN jsonb_build_object('success', false, 'message', 'Table not found');
         END IF;
         IF NOT v_sysop AND v_actor IS DISTINCT FROM v_owner THEN
-            RAISE EXCEPTION 'bed_casino_op: forbidden';
+            RAISE EXCEPTION 'bed_casino_op(%): forbidden', p_op;
         END IF;
         IF p_args ? 'status' AND (p_args->>'status') NOT IN ('open', 'closed') THEN
             RETURN jsonb_build_object('success', false, 'message', 'Status must be open or closed');
@@ -120,7 +120,7 @@ BEGIN
     IF p_op = 'leave' THEN
         v_target := coalesce(p_args->>'player', v_actor::text);
         IF NOT v_sysop AND v_actor IS DISTINCT FROM v_target THEN
-            RAISE EXCEPTION 'bed_casino_op: forbidden';
+            RAISE EXCEPTION 'bed_casino_op(%): forbidden', p_op;
         END IF;
         DELETE FROM casino.map_cardtable_player
             WHERE cardtablemoniker = p_args->>'moniker' AND playermoniker = v_target;
