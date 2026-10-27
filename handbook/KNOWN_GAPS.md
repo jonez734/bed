@@ -144,18 +144,25 @@ penalty (`skip` by default, or `remove`, chosen per table) when it expires, and 
 round log. Auto-play is excluded for pro games. Bots never wait on the clock. The client displays
 the countdown on the bottom bar and in the table view.
 
-## 11. Seat modules (dealer, player, bot) are planned, not built (open)
+## 11. Seat modules and bots (partly done)
 
-**Missing.** Table seats do not name a dealer or player module. There is no `casino.seat_module`
-registry, no install command, no `bots_allowed`, `bot_max_percent`, `min_players`, or `max_players`
-columns, and no bot player.
+**Done.** `casino/seats.py` holds each game's seat counts, and `join_table` enforces them. Bots are
+real members with their own bank accounts and are created explicitly (`add_bot`), in one action
+(`fill_bots`), or removed (`remove_bot`). Bots are clocked like humans. Blackjack runs several seats in
+one round: it settles once, after every seat has acted, and a second seat's bet joins the open round.
+The game state lists every seat and whether it has acted.
 
-**What happens.** Every seat is human, and the game code makes all decisions itself. The
-`dealermodule` and `playermodule` columns exist but nothing reads them.
+**Still open.**
+- Poker, slots, yahtzee, and tictactoe do not yet read the seat module for their dealer or player
+  logic. Only the join capacity uses it.
+- Bot play is not built. A bot does not decide its own moves: it seats and is clocked, but it does not
+  hit, stand, or bet on its own. Until a bot plays, a bot's turn ends by the clock penalty.
+- Only blackjack is multi-seat. Poker is already multi-seat through its own code; the others are single
+  seat.
+- The `dealermodule` and `playermodule` columns on `casino.__table` are still unread.
 
-**Fix.** Build the shared seat-module layer first (registry, install through `module.load` and
-`module.check`, and a per-game contract check). Then move blackjack, tictactoe, yahtzee, slots, and
-poker onto seats in that order, one at a time, each with its own tests.
+**Fix.** Give bots a decision function per game, driven when the seat's turn comes up. Move the
+remaining games onto the seat-module contract one at a time, each with its own tests.
 
 ## 12. Player listing and exit reasons (partly done)
 
