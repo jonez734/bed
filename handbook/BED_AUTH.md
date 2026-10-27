@@ -58,6 +58,38 @@ S→C {"type":"auth_result","success":true,"token":"…","expires_at":"…"}
 `auth_refresh` requires the **original** socket. A `reconnect` from a
 new socket is the only path that rebinds.
 
+Clients refresh before expiry, not after. The casino client checks the
+token's `expires_at` claim before each menu command and rotates a token
+that expires within 120 seconds, over its own socket. A refresh that
+fails (`token_expired`, `not_authenticated`) sends the client back to a
+password login; the client does not keep using the old token.
+
+### Client exit (`client_exit`)
+
+A client reports why it ended so ops can count each cause:
+
+```json
+C→S {"type":"client_exit","token":"…","moniker":"alice","reason":"ws_error","remoteaddr":"…"}
+S→C {"type":"client_exit_result","success":true}
+```
+
+`reason` must be one of the fixed vocabulary below. bed refuses any other
+value with `invalid_request`, and `engine.log_action` enforces the same
+list in the database.
+
+| reason        | meaning                                                                     |
+|---------------|-----------------------------------------------------------------------------|
+| `quit`        | the user chose to leave                                                     |
+| `eof`         | end of input                                                                |
+| `intr`        | interrupted (Ctrl-C)                                                        |
+| `idle`        | the server closed the socket for keepalive (close code 1011)                |
+| `ws_error`    | the websocket failed after login: any abnormal close other than 1000, 1001, or 1011, or a connection error |
+| `auth_failed` | the session never authenticated                                             |
+| `error`       | an unexpected client error                                                  |
+
+The reason is recorded only when the session was live (a token exists). A
+client that fails before login records nothing on the server.
+
 ### Logout
 
 ```json

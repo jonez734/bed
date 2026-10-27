@@ -157,18 +157,19 @@ columns, and no bot player.
 `module.check`, and a per-game contract check). Then move blackjack, tictactoe, yahtzee, slots, and
 poker onto seats in that order, one at a time, each with its own tests.
 
-## 12. Player listing and the `client_exit` idle reason (open)
+## 12. Player listing and exit reasons (partly done)
 
-**Missing.** The client cannot list the players at a table (`casino_list_players` does not exist),
-and the `idle` exit reason is valid in `log_action` but nothing records it. The client does not
-detect idle itself.
+**Done.** The client lists the players at a table with `P`, and every seat is labelled. The client
+records `idle` when the server closes a session for keepalive (close code 1011), and `ws_error` when
+an authenticated websocket fails in any other way. Both are in the `client_exit` vocabulary
+(`BED_AUTH.md`, "Client exit").
 
-**What happens.** A client that sits idle until the server closes its session exits with no reason
-recorded, or with `error`.
+**Still open.** Bots are not a seat type yet, so every row reads `[HUMAN]`. That label becomes real
+with the seat-module work in section 11. Client-side idle detection (the client noticing inactivity
+itself, before the server closes) is a separate feature and is not built.
 
-**Fix.** Add `casino_list_players`, served through a read op with the kind (human or bot) shown on
-every row. For idle, the client records `idle` when the server reports an inactivity close. Client-
-side idle detection is a separate feature.
+**Fix.** Show the seat kind from the seat-module layer once section 11 lands. Build client-side idle
+detection on its own if it is wanted.
 
 ## 13. Casino test failures left open in the scratch database (deferred)
 
