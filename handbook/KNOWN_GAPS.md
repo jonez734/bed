@@ -175,8 +175,9 @@ side idle detection is a separate feature.
 **Missing.** Against `zoid6test`, the casino suite has 16 failing tests, all in the casino test tree.
 They are deferred, not fixed, because none is a casino runtime bug that users can reach.
 
-- `test_player_stats_integration.py` (2 tests): pass alone and on a clean HEAD export, but fail in the
-  full suite run from the working tree. Order-dependent; not isolated.
+- `test_player_stats_integration.py` (2 to 3 tests): pass alone and on a clean HEAD export, but fail in
+  the full suite run from the working tree. The failing member changes from run to run, so the group is
+  order-dependent; not isolated.
 - `test_registered_types_have_handlers.py::test_handler_registrations_are_answered_by_a_branch_or_a_game_handler`:
   passes alone, fails in the full run. Order-dependent; not isolated.
 - Remaining blackjack and new-features integration tests tied to the same database state.
