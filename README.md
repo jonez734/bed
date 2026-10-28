@@ -29,28 +29,23 @@ this precedence (highest wins):
 
 1. `--config <path>` on the command line
 2. `$BED_CONFIG` environment variable
-3. `/etc/bed/bed.json` if present (FHS-installed config)
-4. The packaged default (`bed/data/bed.json` inside the wheel,
+3. The packaged default (`bed/data/bed.json` inside the wheel,
    always present after `pip install bed`)
 
-This means a fresh `pip install -e .` is enough to run `bed` (no
-flags) against the packaged default; the FHS path
-(`/etc/bed/bed.json`) is only consulted when the operator runs
-`make install-etc` to drop the factory config there. The systemd
-unit at `src/bed/daemon/bed.service` still passes
-`--config /etc/bed/bed.json` so FHS hosts use the operator-edit
-surface; the fallback only fires for `bed --foreground`,
-`make deploy-venv`, and other non-prod invocations.
+bed reads nothing from `/etc`. A read-only root filesystem must
+work, so there is no `/etc/bed` config, no `install-etc` target, and
+no factory copy into `/etc`. The systemd unit runs `bed` with no
+`--config`, so it uses the packaged default.
 
-For development with the FHS-installed config explicitly:
+For development with an alternative configuration:
 
 ```bash
-bed --config /etc/bed/bed.json --router zoid6.api.handler.MonikerAuthRouter
+bed --config /path/to/bed.json --router zoid6.api.handler.MonikerAuthRouter
 ```
 
 The `zoid6` console script (from the [`zoid6`](../zoid6/) package)
-applies the same resolver (`$ZOID6_CONFIG` → `/etc/zoid6/zoid6.json`
-→ packaged), so most callers want:
+applies the same rule (`$ZOID6_CONFIG`, then the packaged
+`zoid6.json`), so most callers want:
 
 ```bash
 pip install -e . -e ../bbsengine6/py/src -e ../zoid6/src
@@ -77,8 +72,11 @@ idempotent — re-running after the role already exists is a no-op.
 ### systemd service (per-service venv)
 
 The system Python may be too new for `bed`'s requirement
-(`>=3.9,<3.13`). `bed` owns a per-service venv at
-`/var/lib/bed/venv` (owned by `bed:bed`). Consumers of bed
+(`>=3.9,<3.13`). `bed` owns a per-service venv under its account
+home, `$(BED_HOME)/venv` (owned by `bed:bed`). `BED_HOME` is the one
+variable for the account home; it is a placeholder (`/home/NEEDINFO`)
+until the real path is chosen. Without `--prefix`, `install-venv` uses
+the active venv, and `$(BED_HOME)/venv` only when none is active. Consumers of bed
 (`zoid6`, games) own their own venvs and install the bed wheel
 into theirs via `pip install`. The dep direction is
 `zoid6 → bed`; bed does not depend on zoid6.
@@ -150,7 +148,7 @@ action.
 #### SELinux
 
 On systems with SELinux enforcing (Fedora, RHEL, CentOS), the
-venv binaries under `/var/lib/bed/venv/bin/` get labeled
+venv binaries under `$(BED_HOME)/venv/bin/` get labeled
 `var_lib_t` by default. systemd cannot execute scripts with this
 context — it causes a 203/EXEC error.
 
@@ -158,8 +156,8 @@ context — it causes a 203/EXEC error.
 automatically when available. If you install manually, run:
 
 ```bash
-sudo semanage fcontext -a -t bin_t "/var/lib/bed/venv/bin(/.*)?"
-sudo restorecon -R /var/lib/bed/venv/bin/
+sudo semanage fcontext -a -t bin_t "$BED_HOME/venv/bin(/.*)?"
+sudo restorecon -R $BED_HOME/venv/bin/
 ```
 
 Without `semanage`, `restorecon` will restore the default
@@ -172,12 +170,12 @@ cd /path/to/bed && sudo make install && sudo systemctl enable --now bed
 ```
 
 This chains: `install-sysusers` → `install-tmpfiles` →
-`install-venv` → `install-systemd` → `install-etc`.
+`install-venv` → `install-systemd`. `install-venv` refuses a wheel
+without the packaged `bed.json`.
 
 The unit at `src/bed/daemon/bed.service` runs as `User=bed` and
-uses a templated
-`ExecStart=@VENV_DIR@/bin/bed --config /etc/bed/bed.json`
-(`install-systemd` substitutes `$(VENV_DIR)` → `/var/lib/bed/venv`).
+uses a templated `ExecStart=@VENV_DIR@/bin/bed` with no `--config`.
+`install-systemd` substitutes `$(VENV_DIR)` and `$(BED_HOME)`.
 bed does not share this venv with any other service; any consumer
 that needs `import bed` installs the bed wheel into its own
 per-service venv.
@@ -240,7 +238,7 @@ protocol, TTL knobs, and threat model.
                            A name like 'localhost' fans out to both
                            IPv4 and IPv6 listeners.
 --router DOTTED.NAME       default: bbsengine6.net.defaultrouter.DefaultRouter
---config PATH              default: $BED_CONFIG > /etc/bed/bed.json > packaged
+--config PATH              default: $BED_CONFIG > packaged
                            (bed/data/bed.json in the wheel)
 --bed-secret PATH          default: ~/.config/bed/bed.secret
 --token-ttl SECONDS        default: 900
@@ -321,8 +319,8 @@ port is held by a half-started daemon.
 }
 ```
 
-The shipped default config (`src/bed/data/bed.json`, byte-
-identical to `usr/share/factory/etc/bed/bed.json`) disables
+The shipped default config (`src/bed/data/bed.json`, the packaged
+configuration) disables
 `autorestart` so that systemd owns the restart loop. Set it to
 `true` for foreground-only deployments without systemd.
 
@@ -341,7 +339,7 @@ ones loops the unit.
 | `3`  | transient FS / network error prevented loading the explicit config with `autorestart` off |
 
 A `3` is raised when `open()` on the explicit `--config` path
-(or the resolved `$BED_CONFIG` / `/etc/bed/bed.json`) fails with
+(or the resolved `$BED_CONFIG` / packaged `bed.json`) fails with
 `PermissionError`, `socket.gaierror`, `EIO`, `ESTALE`, `ETXTBSY`,
 `ENETUNREACH`, `EHOSTUNREACH`, `ECONNREFUSED`, or `ETIMEDOUT` —
 AND the resolved `autorestart` is `False`. With `autorestart=
@@ -417,7 +415,7 @@ bed/
 │   ├── daemon/
 │   │   ├── bed.service     systemd unit file
 │   │   ├── bed.sysusers    systemd-sysusers config (creates bed user/group)
-│   │   └── bed.tmpfiles    systemd-tmpfiles config (/var/log/bed, /var/lib/bed)
+│   │   └── bed.tmpfiles    systemd-tmpfiles config (/var/log/bed, $BED_HOME)
 │   ├── tools/              auth, bank, message, ping console-script CLIs
 │   ├── data/
 │   │   ├── bed.json        packaged default config
@@ -446,9 +444,6 @@ bed/
 │   ├── key_f2.md
 │   ├── sink.md
 │   └── postoffice.md
-├── usr/share/factory/etc/bed/
-│   ├── bed.json            FHS factory default config
-│   └── bed.env             FHS factory env file (BED_DATABASE_USER=bed)
 ├── tests/
 │   └── scripts/
 │       └── stop_bed.sh     SIGTERM→SIGKILL pidfile-driven stop helper

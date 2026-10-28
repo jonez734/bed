@@ -44,7 +44,7 @@ library directly without going through a zoid6 daemon — see
 
 ```
 src/bed/
-├── _configpath.py        Config path resolver (CLI > env > FHS > packaged)
+├── _configpath.py        Config path resolver (CLI > env > packaged; never /etc)
 ├── _version.py           Auto-stamped by `make version`
 ├── api/
 │   ├── auth.py           AuthService — bearer-token issue/verify/refresh/revoke
