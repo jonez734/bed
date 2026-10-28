@@ -43,8 +43,10 @@ SyslogIdentifier=bed
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=/var/log/bed /var/lib/bed
+# ProtectHome=read-only, not yes: the venv lives at /home/bed/venv, and
+# "yes" would hide /home from the daemon and fail the ExecStart with 203/EXEC.
+ProtectHome=read-only
+ReadWritePaths=/var/log/bed /var/lib/bed /home/bed
 
 [Install]
 WantedBy=multi-user.target

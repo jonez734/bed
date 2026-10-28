@@ -190,8 +190,11 @@ uninstall-tmpfiles:
 	-sudo rm -f $(TMPFILES_DST)
 	@echo "Removed $(TMPFILES_DST)"
 
-# deploytool's --prefix arrives as DEPLOY_PREFIX; it overrides the default venv path.
-VENV_DIR ?= $(or $(DEPLOY_PREFIX),/home/bed/venv)
+# deploytool's --prefix arrives as DEPLOY_PREFIX and wins. Otherwise the
+# installer's active venv (VIRTUAL_ENV, as deploytool's get_venv_layout uses).
+# The last-resort literal applies only when no venv is active, so make
+# and deploytool agree on the same venv.
+VENV_DIR ?= $(or $(DEPLOY_PREFIX),$(VIRTUAL_ENV),/home/bed/venv)
 VENV_OWNER ?= bed
 
 # Prints the resolved venv path and runs no recipe. Used by the Makefile tests.
