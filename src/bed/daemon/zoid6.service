@@ -45,7 +45,9 @@ SyslogIdentifier=zoid6
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=yes
+# The venv lives under /home/zoid6, so the service must be able to read /home.
+# ReadWritePaths below still lets it write its own home.
+ProtectHome=read-only
 ReadWritePaths=/var/log/zoid6 /home/zoid6
 
 [Install]
