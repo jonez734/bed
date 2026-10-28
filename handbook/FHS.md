@@ -47,9 +47,10 @@ install the bed wheel into theirs via `pip install`.
 
 `ExecStart` uses the `@VENV_DIR@` placeholder; `install-systemd`
 substitutes it with `$(VENV_DIR)` at install time. Each service
-unit points at its own per-service venv (`/home/bed/venv/bin/bed`
-for `bed.service`, `/home/zoid6/venv/bin/zoid6` for `zoid6.service`).
-Service `User=` is per-service (`bed`, `zoid6`).
+unit points at its own per-service venv (`/home/bed/venv/bin/bed` for
+`bed.service`). bed installs only its own unit. zoid6's unit,
+`zoid6/src/zoid6/daemon/zoid6.service`, belongs to zoid6 and is installed by zoid6's
+`install-systemd`. Service `User=` is per-service.
 
 ### SELinux
 
