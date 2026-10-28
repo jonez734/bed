@@ -26,8 +26,8 @@ def resolve_config_path(explicit: Optional[str] = None) -> str:
     """Resolve the ``bed.json`` path using the precedence above.
 
     ``explicit`` is the value argparse produced for ``--config``. When
-    non-empty, it always wins. Otherwise the resolver walks env -> FHS
-    -> packaged default. The returned path is guaranteed to exist (the
+    non-empty, it always wins. Otherwise the resolver walks env ->
+    packaged default. The returned path is guaranteed to exist (the
     packaged default ships inside the wheel and is always present
     after ``pip install bed``).
     """
