@@ -247,6 +247,10 @@ PREPARE_BUILD = \
 	fi; \
 	mkdir -p $(1)/build && chmod g-s,g+w,-t $(1)/build
 
+# Identd mapping for the rollback login on the PostgreSQL server (root). Forwards to src.
+install-pgsql:
+	$(MAKE) -C src install-pgsql
+
 install-venv: clean-egg-info
 	@command -v sudo >/dev/null 2>&1 || { echo "Error: sudo required"; exit 1; }
 	@sudo -u $(VENV_OWNER) test -d "$(VENV_DIR)" || sudo -u $(VENV_OWNER) $(PYTHON) -m venv "$(VENV_DIR)"
