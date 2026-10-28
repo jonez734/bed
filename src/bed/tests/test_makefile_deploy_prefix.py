@@ -1,7 +1,7 @@
 """bed's venv path can be set by deploytool's --prefix (DEPLOY_PREFIX), like letteredolive.
 
-Without it, `deploy --prefix` is silently ignored for bed. The default stays
-/var/lib/bed/venv so an unprefixed deploy is unchanged.
+Without it, `deploy --prefix` is silently ignored for bed. The default is
+/home/bed/venv (the bed account's venv).
 """
 
 import os
@@ -26,12 +26,12 @@ def _venv_dir(env_extra):
 
 
 @pytest.mark.unit
-def test_default_venv_dir_is_unchanged():
+def test_default_venv_dir_is_bed_account_venv():
     if shutil.which("make") is None:
         pytest.skip("make not available")
     r = _venv_dir({})
     assert r.returncode == 0, r.stderr
-    assert r.stdout.strip() == "/var/lib/bed/venv", r.stdout
+    assert r.stdout.strip() == "/home/bed/venv", r.stdout
 
 
 @pytest.mark.unit

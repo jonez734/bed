@@ -20,7 +20,7 @@ configuration under `/usr/share/factory/`.
 ## Per-service venv
 
 `bed` is the foundational WebSocket daemon. It owns a per-service
-venv at `/var/lib/bed/venv` (owned by `bed:bed`). It does **not**
+venv at `/home/bed/venv` (owned by `bed:bed`). It does **not**
 share a venv with any other package. The dependency direction is:
 
 ```
@@ -35,11 +35,11 @@ install the bed wheel into theirs via `pip install`.
 
 ### venv defaults
 
-- `bed/Makefile`: `VENV_DIR ?= /var/lib/bed/venv`,
+- `bed/Makefile`: `VENV_DIR ?= /home/bed/venv` (overridable with `--prefix`),
   `VENV_OWNER ?= bed`, `VENV_GROUP ?= bed`. Each service Makefile
   declares its own venv path and owner; the topology is
   per-service, not shared.
-- `zoid6/src/Makefile`: `VENV_DIR ?= /var/lib/zoid6/venv`,
+- `zoid6/src/Makefile`: `VENV_DIR ?= /home/zoid6/venv`,
   `VENV_OWNER ?= zoid6`, `VENV_GROUP ?= zoid6`.
 - Each consumer Makefile that imports `bed` builds and installs
   the bed wheel as part of `install-venv`.
@@ -48,16 +48,15 @@ install the bed wheel into theirs via `pip install`.
 
 `ExecStart` uses the `@VENV_DIR@` placeholder; `install-systemd`
 substitutes it with `$(VENV_DIR)` at install time. Each service
-unit points at its own per-service venv (`/var/lib/bed/venv/bin/bed`
-for `bed.service`, `/var/lib/zoid6/venv/bin/zoid6` for `zoid6.service`).
+unit points at its own per-service venv (`/home/bed/venv/bin/bed`
+for `bed.service`, `/home/zoid6/venv/bin/zoid6` for `zoid6.service`).
 Service `User=` is per-service (`bed`, `zoid6`).
 
 ### SELinux
 
 `restorecon` / `semanage` rules target `$(VENV_DIR)/bin(/.*)?`.
 Each Makefile labels its own per-service venv
-(`/var/lib/bed/venv/bin` for `bed`, `/var/lib/zoid6/venv/bin` for
-`zoid6`).
+(`/home/bed/venv/bin` for `bed`, `/home/zoid6/venv/bin` for `zoid6`).
 
 ## Decisions
 
