@@ -46,7 +46,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/log/bed /home/zoid6
+ReadWritePaths=/var/log/zoid6 /home/zoid6
 
 [Install]
 WantedBy=multi-user.target
