@@ -534,8 +534,7 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
 
     def test_config_flag_default_is_none(self):
         """Omitting --config leaves args.config_file=None so the
-        resolver can walk $BED_CONFIG > /etc/bed/bed.json > packaged
-        default. (Was required=True; relaxed so the resolver can
+        resolver can walk $BED_CONFIG > packaged default. (Was required=True; relaxed so the resolver can
         short-circuit and 'bed' (no flags) works out of the box.)"""
         import argparse
         from bed.main import buildargs
@@ -628,8 +627,8 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(cm.exception.code, 1)
 
     def test_resolve_config_path_explicit_wins(self):
-        """Explicit --config always wins, even when $BED_CONFIG /
-        /etc/bed/bed.json / packaged default are all available."""
+        """Explicit --config always wins, even when $BED_CONFIG and the
+        packaged default are both available."""
         from bed._configpath import resolve_config_path
 
         with patch.dict(os.environ, {"BED_CONFIG": "/from/env.json"}, clear=False):
@@ -637,7 +636,7 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
                 resolve_config_path("/from/cli.json"), "/from/cli.json"
             )
 
-    def test_resolve_config_path_env_wins_over_fhs_and_default(self):
+    def test_resolve_config_path_env_wins_over_default(self):
         """$BED_CONFIG wins when --config is not provided."""
         from bed._configpath import resolve_config_path
 
@@ -647,9 +646,8 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
     def test_resolve_config_path_falls_back_to_packaged_default(self):
         """With no --config and no $BED_CONFIG,
         the resolver returns the packaged default shipped inside the
-        wheel. The packaged default is byte-identical to the FHS
-        factory, so this is semantically equivalent to "operator has
-        not customised the config"."""
+        wheel. bed reads nothing from /etc, so the packaged default is the
+        whole configuration."""
         from bed._configpath import resolve_config_path
 
         env = {k: v for k, v in os.environ.items() if k != "BED_CONFIG"}

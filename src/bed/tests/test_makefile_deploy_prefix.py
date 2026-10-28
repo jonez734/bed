@@ -26,13 +26,13 @@ def _venv_dir(env_extra):
 
 
 @pytest.mark.unit
-def test_default_venv_dir_falls_back_to_bed_account_venv():
-    """No prefix and no active venv: the last-resort literal is the bed account's venv."""
+def test_default_venv_dir_falls_back_to_bed_home_venv():
+    """No prefix and no active venv: the fallback is $(BED_HOME)/venv."""
     if shutil.which("make") is None:
         pytest.skip("make not available")
     r = _venv_dir({"VIRTUAL_ENV": ""})
     assert r.returncode == 0, r.stderr
-    assert r.stdout.strip() == "/home/bed/venv", r.stdout
+    assert r.stdout.strip() == "/home/NEEDINFO/venv", r.stdout
 
 
 @pytest.mark.unit
