@@ -9,7 +9,7 @@
   "debug": false,
   "database": {
     "user": "bed",
-    "dsn": "host=localhost port=5432 dbname=NEEDINFO user=bed"
+    "dsn": "host=localhost port=5432 dbname=NEEDINFO"
   },
   "session": {
     "idle_minutes": 15,
