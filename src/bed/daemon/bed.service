@@ -1,8 +1,14 @@
 [Unit]
 Description=BED - BBS Engine Daemon
 Documentation=https://bbsengine.org/
-After=network.target postgresql.service
+After=network.target postgresql.service oidentd.service
 Wants=postgresql.service
+Requires=oidentd.service
+# Cap any unclassified crash loop at 10 attempts per 5 minutes so the
+# operator notices the failure (unit enters 'failed' state) instead
+# of the daemon quietly retrying forever.
+StartLimitIntervalSec=300s
+StartLimitBurst=10
 
 [Service]
 Type=simple
@@ -10,9 +16,9 @@ User=bed
 Group=bed
 WorkingDirectory=/var/lib/bed
 
-EnvironmentFile=-/etc/bed/bed.env
-
-ExecStart=@VENV_DIR@/bin/bed --config /etc/bed/bed.json
+# The packaged configuration is used (no --config, no environment file).
+# The database login is decided by the identd map for this OS user.
+ExecStart=@VENV_DIR@/bin/bed
 
 ExecReload=/bin/kill -HUP $MAINPID
 
@@ -26,12 +32,6 @@ RestartSec=5s
 # loop the unit on either case.
 RestartPreventExitStatus=2 3
 
-# Cap any unclassified crash loop at 10 attempts per 5 minutes so the
-# operator notices the failure (unit enters 'failed' state) instead
-# of the daemon quietly retrying forever.
-StartLimitBurst=10
-StartLimitIntervalSec=300s
-
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=30s
@@ -39,6 +39,12 @@ TimeoutStopSec=30s
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=bed
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/log/bed /var/lib/bed
 
 [Install]
 WantedBy=multi-user.target

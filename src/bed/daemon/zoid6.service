@@ -1,26 +1,38 @@
 [Unit]
 Description=zoid6 BBS Engine Daemon (bed with zoid6 config and router)
 Documentation=https://bbsengine.org/
-After=network.target postgresql.service
+After=network.target postgresql.service oidentd.service
 Wants=postgresql.service
+Requires=oidentd.service
+# Cap any unclassified crash loop at 10 attempts per 5 minutes so the
+# operator notices the failure (unit enters 'failed' state) instead
+# of the daemon quietly retrying forever.
+StartLimitIntervalSec=300s
+StartLimitBurst=10
 
 [Service]
 Type=simple
-User=bed
-Group=bed
-WorkingDirectory=/var/lib/bed
+User=zoid6
+Group=zoid6
+WorkingDirectory=/home/zoid6
 
-EnvironmentFile=-/etc/bed/bed.env
-
-ExecStart=/var/lib/bed/venv/bin/bed \
+# The daemon connects to PostgreSQL as bed_zoid6, which identd maps from this OS user.
+# No password and no environment file: the packaged configuration is used.
+ExecStart=@VENV_DIR@/bin/bed \
   --databasename zoid6 \
-  --config /etc/zoid6/zoid6.json \
   --router zoid6.api.handler.MessageRouter
 
 ExecReload=/bin/kill -HUP $MAINPID
 
 Restart=on-failure
 RestartSec=5s
+
+# bed exits 2 on permanent bind failures (EADDRINUSE/EACCES) when
+# restart_on_bind_failure=false, and exits 3 when a transient FS /
+# network error prevents loading the explicit config file with
+# autorestart off (see bed.config.ConfigIORecoverableError). Do not
+# loop the unit on either case.
+RestartPreventExitStatus=2 3
 
 KillMode=mixed
 KillSignal=SIGTERM
@@ -34,7 +46,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/log/bed /var/lib/bed
+ReadWritePaths=/var/log/bed /home/zoid6
 
 [Install]
 WantedBy=multi-user.target
