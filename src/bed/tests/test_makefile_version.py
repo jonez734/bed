@@ -62,7 +62,7 @@ def test_deploy_venv_installs_into_the_service_venv_by_default():
 
 @pytest.mark.unit
 def test_deploy_venv_does_not_use_sudo():
-    # jam is in group bed and /var/lib/bed/venv is group-writable, so deploy needs no sudo.
+    # The venv under $(BED_HOME) is writable by its owner, so deploy needs no sudo.
     assert "sudo" not in _deploy_venv_block()
 
 
