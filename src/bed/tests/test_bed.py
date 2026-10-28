@@ -644,37 +644,16 @@ class TestConfigFlag(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"BED_CONFIG": "/from/env.json"}, clear=False):
             self.assertEqual(resolve_config_path(None), "/from/env.json")
 
-    def test_resolve_config_path_fhs_wins_over_packaged_default(self):
-        """When --config is unset and $BED_CONFIG is unset, an
-        /etc/bed/bed.json file on disk wins over the packaged default."""
-        import tempfile
-
-        from bed._configpath import FHS_CONFIG, resolve_config_path
-
-        tmp = tempfile.mkdtemp()
-        fhs = os.path.join(tmp, "bed.json")
-        with open(fhs, "w") as f:
-            f.write("{}")
-        env = {k: v for k, v in os.environ.items() if k != "BED_CONFIG"}
-        with patch.dict(os.environ, env, clear=True), patch(
-            "bed._configpath.FHS_CONFIG", fhs
-        ):
-            self.assertEqual(resolve_config_path(None), fhs)
-
     def test_resolve_config_path_falls_back_to_packaged_default(self):
-        """With no --config, no $BED_CONFIG, and no /etc/bed/bed.json,
+        """With no --config and no $BED_CONFIG,
         the resolver returns the packaged default shipped inside the
         wheel. The packaged default is byte-identical to the FHS
         factory, so this is semantically equivalent to "operator has
         not customised the config"."""
-        import tempfile
-
         from bed._configpath import resolve_config_path
 
         env = {k: v for k, v in os.environ.items() if k != "BED_CONFIG"}
-        with patch.dict(os.environ, env, clear=True), patch(
-            "bed._configpath.FHS_CONFIG", "/nonexistent/etc/bed/bed.json"
-        ):
+        with patch.dict(os.environ, env, clear=True):
             path = resolve_config_path(None)
         self.assertTrue(os.path.isfile(path))
         self.assertTrue(path.endswith("bed.json"))

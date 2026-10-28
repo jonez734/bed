@@ -255,7 +255,7 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         default=None,
         type=_config_path_type,
         help="Path to a JSON config file. Optional: when omitted, "
-        "$BED_CONFIG > /etc/bed/bed.json > the packaged default "
+        "$BED_CONFIG > the packaged default "
         "(bed/data/bed.json inside the wheel). Supports ~ and $VAR.",
     )
     parentparser.add_argument(

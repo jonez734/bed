@@ -11,7 +11,6 @@ _BED_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
 
 PACKAGED_JSON = [
     os.path.join(_BED_ROOT, "src", "bed", "data", "bed.json"),
-    os.path.join(_BED_ROOT, "usr", "share", "factory", "etc", "bed", "bed.json"),
 ]
 
 
