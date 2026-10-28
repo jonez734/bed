@@ -1,4 +1,4 @@
 # Type Path           Mode Owner  Group Age Argument
-# @BED_HOME@ is rendered by the Makefile (BED_HOME). bed reads nothing from /etc.
+# The account home @BED_HOME@ is created by bed.sysusers (its Home field), not here: tmpfiles
+# refuses to manage a path under a parent owned by another account. Only the log dir is created here.
 d     /var/log/bed    0755 bed    bed   -   -
-d     @BED_HOME@      0755 bed    bed   -   -
