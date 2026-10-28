@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple, Type
 
 from bbsengine6 import io
 from bbsengine6.common import safe_path
+from bbsengine6.util import logentry
 from bbsengine6.database import getpool, parse_dsn, set_current_role
 from bbsengine6.module import load as bbs_module_load
 from bbsengine6.net import ChannelState, WebSocketServer
@@ -80,6 +81,41 @@ def _expand_user(value):
     if isinstance(value, str):
         return os.path.expanduser(value)
     return value
+
+
+def _bind_summary(args) -> str:
+    """The bind addresses the daemon was asked to use, for failure log lines."""
+    binds = getattr(args, "binds", None) or getattr(args, "bind", None) or []
+    if isinstance(binds, dict):
+        binds = [binds]
+    parts = []
+    for b in binds:
+        if isinstance(b, dict):
+            parts.append(f"{b.get('host')}:{b.get('port')}")
+        else:
+            parts.append(str(b))
+    return ",".join(parts) or "default"
+
+
+def _log_startup_failure(reason: str, *, stage: str, **details) -> None:
+    """Write one specific startup-failure line to the bed log.
+
+    ``stage`` names the phase that failed (database_bootstrap, router_load, bind,
+    server_start); ``details`` are the concrete values (host, router, bind, ...).
+    Never raises: logging must not turn a failed startup into a different crash.
+    """
+    try:
+        logentry(
+            reason,
+            level="error",
+            module="bed",
+            action="startup_failed",
+            stage=stage,
+            pid=os.getpid(),
+            **{k: v for k, v in details.items() if v not in (None, "")},
+        )
+    except Exception:
+        pass
 
 
 def _write_pidfile(path: str) -> int:
@@ -1005,7 +1041,15 @@ class BED:
             io.echo(
                 f"BED PingService: name={self.name} version={__version__}"
             )
-        io.echo(f"Registered services: {self.server.list_services()}")
+        registered = self.server.list_services()
+        io.echo(f"Registered services: {registered}")
+        # "*default*" is the fallback handler, not a module, so it is not counted.
+        n_modules = len([k for k in registered if k != "*default*"])
+        logentry(
+            f"startup completed, {n_modules} modules enabled",
+            module="bed",
+            action="startup",
+        )
 
         try:
             while self._running:
@@ -1432,9 +1476,14 @@ async def main_async() -> None:
             f"Loaded router module "
             f"{args.router.rsplit('.', 1)[0]} from {router_class.__module__}",
         )
-    except Exception:
+    except Exception as e:
         # bbsengine6.module.load() already emitted io.echo_traceback(...).
         io.echo("BED exiting: router load failed", level="error")
+        _log_startup_failure(
+            f"router load failed: {type(e).__name__}: {e}",
+            stage="router_load",
+            router=args.router,
+        )
         sys.exit(1)
 
     # Register bed's push subscriber with bbsengine6 before serving, so
@@ -1446,6 +1495,13 @@ async def main_async() -> None:
             "Startup failed: database bootstrap incomplete. "
             "Ensure PostgreSQL is running and credentials are correct.",
             level="error",
+        )
+        _log_startup_failure(
+            "database bootstrap incomplete (ensure_startup returned false)",
+            stage="database_bootstrap",
+            databasehost=getattr(args, "databasehost", None),
+            databasename=getattr(args, "databasename", None),
+            databaseuser=getattr(args, "databaseuser", None),
         )
         sys.exit(1)
     if getattr(args, "install", False):
@@ -1552,12 +1608,23 @@ async def main_async() -> None:
                             f"bed.json and /etc/hosts.",
                             level="error",
                         )
+                        _log_startup_failure(
+                            f"bind host did not resolve: {type(e).__name__}: {e}",
+                            stage="bind",
+                            binds=_bind_summary(args),
+                        )
                     else:
                         io.echo(
                             f"BED refusing to restart on bind failure: {e}. "
                             f"Free the port, run as a user with bind permission, "
                             f"or set restart_on_bind_failure=true to override.",
                             level="error",
+                        )
+                        _log_startup_failure(
+                            f"permanent bind failure: {type(e).__name__} "
+                            f"errno={getattr(e, 'errno', None)}: {e}",
+                            stage="bind",
+                            binds=_bind_summary(args),
                         )
                     sys.exit(2)
 
