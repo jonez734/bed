@@ -203,6 +203,32 @@ their respective specs:
 - `bed bank` → [`specs/bank.md`](specs/bank.md)
 - `bed message` → [`specs/message.md`](specs/message.md)
 
+## Logging
+
+bed writes its engine log through Python's `logging` module, under the
+`bbsengine6` logger. Callers use `bbsengine6.util.logentry()`, which formats
+the structured fields and sends the record to that logger. The default
+handler is a `logging.handlers.SysLogHandler` on `/dev/log`, so the records
+reach the system log (syslog or the journal) through `logging`, not by writing
+to syslog directly.
+
+Two consequences for operators:
+
+- If `/dev/log` does not exist, the handler cannot connect, and log records
+  are dropped silently. Check it on a new host: `ls -l /dev/log`.
+- The handler is created on the first `logentry()` call, so it is absent until
+  bed logs something.
+
+bed logs these lines with `logentry()`:
+
+| Line | When |
+|------|------|
+| `startup completed, <n> modules enabled` | the daemon started and its services are registered |
+| `startup_failed stage=<stage> ...` (error) | a startup failure, with the stage that failed (`database_bootstrap`, `router_load`, `bind`) and the concrete values |
+
+Read them with `journalctl -u bed` when the system log is the journal, or
+through the syslog file your host uses.
+
 ## Routers
 
 | FQCN | Behavior |

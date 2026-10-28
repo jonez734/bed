@@ -189,6 +189,17 @@ Read the journal to see why it failed (operator; the journal may need the `syste
 journalctl -u bed -n 50 --no-pager
 ```
 
+bed's startup lines go through Python's `logging` to `/dev/log`, so they appear in the journal only
+if that socket exists. Check it, then look for the startup line after a start:
+
+```
+ls -l /dev/log
+journalctl -u bed --since "5 minutes ago" | grep -E "startup completed|startup_failed"
+```
+
+`startup completed, <n> modules enabled` means the daemon started. A `startup_failed stage=...` line
+names the stage that failed (`database_bootstrap`, `router_load` or `bind`).
+
 ## 8. Updating
 
 To update bed in place, from the operator's active venv:
