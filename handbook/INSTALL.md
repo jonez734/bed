@@ -108,24 +108,40 @@ systemd-analyze verify /usr/lib/systemd/system/bed.service
 
 ## 5. Configuration
 
-bed reads its configuration from `/etc/bed/`. The `install-etc` target copies the factory
-defaults there, and writes `/etc/bed/bed.env` with the database login settings if it is missing.
+bed reads nothing from `/etc`. Its configuration is the `bed.json` packaged inside the wheel, so
+the install needs no configuration step and writes no file outside the venv. This matters on a
+read-only root filesystem, where an `/etc` write fails.
+
+To run with a different configuration, pass it on the command line or in the environment:
+
+- `--config PATH` on the daemon command line, or
+- `BED_CONFIG=PATH` in the environment.
+
+`install-venv` refuses to install a wheel that does not contain a valid packaged `bed.json`. This
+is the configuration check: a wheel without its configuration is a broken build, and would start a
+daemon with nothing to run.
+
+Check the packaged configuration (operator):
 
 ```
-make -C bed/src install-etc
+python3 -c "import json, bed.config as c; print(json.load(open(c.get_package_data_path('bed.json')))['bed'])"
 ```
 
-Note: the top-level `make -C bed install-etc` reads `usr/share/factory/etc/bed`, which is not in
-the repository. Use the `src` form above until the top-level target is fixed (see Known gaps).
+Set `BED_DATABASEUSER` only through the environment or `--databaseuser`, if the daemon must log in
+as a role other than the default. See section 6.
 
-Check the config (operator):
+## 5a. The account home (`BED_HOME`)
+
+`BED_HOME` is the one variable for the `bed` account's home. It sets the sysusers home, the
+tmpfiles state directory, the unit's `WorkingDirectory` and `ReadWritePaths`, and the default venv
+(`$(BED_HOME)/venv`). Change it in one place, or override it on the command line:
 
 ```
-cat /etc/bed/bed.env
+make -C bed install-sysusers install-tmpfiles BED_HOME=/home/NEEDINFO
 ```
 
-Set `BED_DATABASEUSER` only if the daemon must log in as a role other than the default. See
-section 6.
+Its value is not yet decided: the Makefiles currently default to `/home/NEEDINFO`, a placeholder.
+Set the real path before the first install on a host.
 
 ## 6. The database
 
@@ -196,12 +212,11 @@ For a development checkout, `make -C bed deploy EDITABLE=1` installs bed editabl
 sudo make -C bed uninstall
 ```
 
-This stops and removes the unit, the venv, the tmpfiles and sysusers entries, and `/etc/bed`.
+This stops and removes the unit, the venv, and the tmpfiles and sysusers entries.
 It does not remove the database role or the identd lines; remove those at cutover.
 
 ## Known gaps
 
-- `make -C bed install-etc` (top level) reads `usr/share/factory/etc/bed`, which is not tracked.
-  On a clean checkout it fails. Use `make -C bed/src install-etc` instead.
-- The `bed` account home was moved to `/home/bed` by hand with `usermod`. A fresh host created by
-  `systemd-sysusers` gets `/var/lib/bed` as its home unless the sysusers entry is updated.
+- `BED_HOME` is a placeholder (`/home/NEEDINFO`) until the real path is chosen.
+- The `bed` account home was changed by hand on minotaur. `BED_HOME` renders the sysusers entry, so
+  a fresh host gets the right home as long as `BED_HOME` is set at install time.

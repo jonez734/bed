@@ -11,8 +11,7 @@ configuration under `/usr/share/factory/`.
 
 | Location | Purpose |
 |---|---|
-| `/etc/<package>/` | System-specific configuration (operator-edited) |
-| `/usr/share/factory/etc/<package>/` | Vendor-supplied default configs |
+| `$(BED_HOME)` (`/home/NEEDINFO` until set) | The `bed` account's home and venv parent |
 | `/usr/lib/systemd/system/` | Vendor-shipped systemd units |
 | `/usr/lib/sysusers.d/` | Vendor sysusers configs |
 | `/usr/lib/tmpfiles.d/` | Vendor tmpfiles configs |
@@ -60,19 +59,15 @@ Each Makefile labels its own per-service venv
 
 ## Decisions
 
-- **Directory creation**: Both `tmpfiles.d` and the Makefile create
-  `/etc/<package>/`. The factory default is then copied from
-  `/usr/share/factory/etc/<package>/` into `/etc/<package>/` on
-  install.
-- **Factory defaults**: byte-identical to the wheel-shipped
-  packaged default (`bed/src/bed/data/bed.json`), so resolving
-  to the packaged default is semantically equivalent to
-  "operator has not customised the config". See
-  `bed.specs.auth.md §Configuration` for the precedence chain.
-- **`bed.service`**: ships with
-  `ExecStart=@VENV_DIR@/bin/bed --config /etc/bed/bed.json`.
-  Per-game services (e.g. `zoid6-bed.service`) live in the game
-  repo and pass `--config` + `--router`.
+- **No `/etc`**: bed reads and writes nothing under `/etc`, so it installs on a
+  read-only root filesystem. There is no `/etc/bed` directory and no factory copy into it.
+- **Configuration**: the packaged `bed/src/bed/data/bed.json`, shipped inside the wheel. The
+  resolver order is `--config`, then `$BED_CONFIG`, then the packaged file. `install-venv`
+  refuses a wheel without a valid packaged `bed.json`.
+- **`bed.service`**: `ExecStart=@VENV_DIR@/bin/bed`, with no `--config`. Per-game services
+  (e.g. `zoid6-bed.service`) live in the game repo and pass `--config` + `--router`.
+- **`BED_HOME`**: the one variable for the account home, rendered into the sysusers, tmpfiles
+  and unit templates. It defaults to a placeholder, `/home/NEEDINFO`, until the path is chosen.
 
 ## See also
 
