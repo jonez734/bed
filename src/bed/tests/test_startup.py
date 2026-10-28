@@ -44,6 +44,7 @@ class TestBedStartupRoleCreation(unittest.TestCase):
             conn=mock_conn,
             superuser=False,
             login=True,
+            inherit=False,
             createdb=False,
             createrole=False,
         )

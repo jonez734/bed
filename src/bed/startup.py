@@ -16,7 +16,7 @@ from bbsengine6 import database, io
 from bbsengine6.startup import lib as startuplib
 
 
-BED_ROLE = "bed"
+BED_ROLE = "bed_zoid6"
 
 
 def _is_owner_or_superuser(args, conn) -> bool:
@@ -109,6 +109,7 @@ def _ensure_bed_role(args, conn):
             conn=conn,
             superuser=False,
             login=True,
+            inherit=False,
             createdb=False,
             createrole=False,
         ) is False:
