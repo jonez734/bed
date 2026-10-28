@@ -14,7 +14,8 @@ StartLimitBurst=10
 Type=simple
 User=bed
 Group=bed
-WorkingDirectory=/var/lib/bed
+# @BED_HOME@ and @VENV_DIR@ are rendered by the Makefile at install time (BED_HOME, VENV_DIR).
+WorkingDirectory=@BED_HOME@
 
 # The packaged configuration is used (no --config, no environment file).
 # The database login is decided by the identd map for this OS user.
@@ -46,7 +47,7 @@ ProtectSystem=strict
 # ProtectHome=read-only, not yes: the venv lives at /home/bed/venv, and
 # "yes" would hide /home from the daemon and fail the ExecStart with 203/EXEC.
 ProtectHome=read-only
-ReadWritePaths=/var/log/bed /var/lib/bed /home/bed
+ReadWritePaths=/var/log/bed @BED_HOME@
 
 [Install]
 WantedBy=multi-user.target

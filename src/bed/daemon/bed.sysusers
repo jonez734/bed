@@ -1,3 +1,4 @@
-# Type Name ID GECOS       Home     Shell
-u     bed  -  "BED Daemon" /var/lib/bed -
+# Type Name ID GECOS       Home        Shell
+# @BED_HOME@ is rendered by the Makefile (BED_HOME).
+u     bed  -  "BED Daemon" @BED_HOME@  -
 g     bed  -  -

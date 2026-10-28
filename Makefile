@@ -15,7 +15,7 @@ BUILD_VENV ?= $(WHEEL_DIR)/buildenv
 BUILD_PYTHON ?= $(BUILD_VENV)/bin/python
 RSYNC = rsync --chmod=F0644 --mkpath --archive --verbose
 
-.PHONY: all help clean build build-env ensure-repo ensure-build-dir version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles install-etc uninstall-etc restorecon setup-db deploy deploy-venv deploy-prod commit-version clean-egg-info stale-build
+.PHONY: all help clean build build-env ensure-repo ensure-build-dir version rename-sdist sign release install uninstall install-venv uninstall-venv install-systemd uninstall-systemd install-sysusers uninstall-sysusers install-tmpfiles uninstall-tmpfiles restorecon setup-db deploy deploy-venv deploy-prod commit-version clean-egg-info stale-build
 
 all: help
 
@@ -23,7 +23,7 @@ help:
 	@echo "bed - BBS Engine Daemon"
 	@echo ""
 	@echo "Targets:"
-	@echo "  install            Full install: sysusers + tmpfiles + venv + systemd + etc"
+	@echo "  install            Full install: sysusers + tmpfiles + venv + systemd"
 	@echo "  version            Stamp src/bed/_version.py with date + git hash"
 	@echo "  build              Build sdist+wheel into $(OUTDIR)"
 	@echo "  rename-sdist       Rename built sdist to include -src suffix"
@@ -38,15 +38,13 @@ help:
 	@echo "  restorecon         Relabel venv binaries for SELinux (Fedora/RHEL)"
 	@echo "  install-systemd    Install bed.service (@VENV_DIR@ templated) and daemon-reload"
 	@echo "  uninstall-systemd  Stop, disable, and remove the bed.service unit"
-	@echo "  install-etc        Install /etc/bed/ config from factory defaults"
-	@echo "  uninstall-etc      Remove installed config files"
 	@echo "  setup-db           Bootstrap database: bbsengine6 startup + bed role"
 	@echo "  deploy                          Non-sudo: build wheels + pip install into active venv (alias for deploy-venv)"
 	@echo "  deploy EDITABLE=1               Like deploy, but install bed editable from src/ (live edits)"
 	@echo "  deploy DEPLOY_EDITABLE=1        Same as EDITABLE=1 (deploytool --editable sets this)"
 	@echo "  deploy DEV=1                    Same as EDITABLE=1 (legacy alias; will be removed in a future release)"
 	@echo "  deploy-venv                     Non-sudo: build wheels + pip install into active venv"
-	@echo "  deploy-prod                     Full prod install (sysusers + tmpfiles + venv + systemd + etc)"
+	@echo "  deploy-prod                     Full prod install (sysusers + tmpfiles + venv + systemd)"
 	@echo "  clean                           Remove build artifacts"
 	@echo "  clean-egg-info                  Remove in-tree *.egg-info/ dirs (defensive)"
 
@@ -65,7 +63,7 @@ help:
 #
 # Behavior change vs. the previous DEV=1 form: editable mode installs
 # into the **active** venv (the one that called `make deploy`), not
-# into the per-service `/var/lib/bed/venv`. This matches the spirit of
+# into the per-service venv ($(BED_HOME)/venv). This matches the spirit of
 # the dev/edit loop (test changes against the venv you're already in)
 # and avoids surprising the operator with a separate install location
 # during iteration.
@@ -163,28 +161,36 @@ release: clean version build rename-sdist sign
 UNIT_SRC = src/$(PROJECT)/daemon/$(PROJECT).service
 UNIT_DST = /usr/lib/systemd/system/$(PROJECT).service
 
-FACTORY_DIR = usr/share/factory/etc/$(PROJECT)
-ETC_DIR = /etc/$(PROJECT)
+# BED_HOME is the bed account's home: the sysusers home, the tmpfiles state dir, and the
+# default venv parent. Change it here (or pass BED_HOME=...) and every install follows.
+# bed reads nothing from /etc, so there is no /etc directory to create.
+BED_HOME ?= /home/NEEDINFO
 
 SYSUSERS_SRC = src/$(PROJECT)/daemon/$(PROJECT).sysusers
 SYSUSERS_DST = /usr/lib/sysusers.d/$(PROJECT).conf
+SYSUSERS_RENDERED = $(WHEEL_DIR)/$(PROJECT).sysusers
 
 TMPFILES_SRC = src/$(PROJECT)/daemon/$(PROJECT).tmpfiles
 TMPFILES_DST = /usr/lib/tmpfiles.d/$(PROJECT).conf
+TMPFILES_RENDERED = $(WHEEL_DIR)/$(PROJECT).tmpfiles
 
 install-sysusers:
-	sudo $(RSYNC) $(SYSUSERS_SRC) $(SYSUSERS_DST)
+	@mkdir -p $(WHEEL_DIR)
+	sed 's|@BED_HOME@|$(BED_HOME)|g' $(SYSUSERS_SRC) > $(SYSUSERS_RENDERED)
+	sudo $(RSYNC) $(SYSUSERS_RENDERED) $(SYSUSERS_DST)
 	sudo systemd-sysusers
-	@echo "Created bed user and group via $(SYSUSERS_DST)"
+	@echo "Created bed user (home $(BED_HOME)) via $(SYSUSERS_DST)"
 
 uninstall-sysusers:
 	-sudo rm -f $(SYSUSERS_DST)
 	@echo "Removed $(SYSUSERS_DST)"
 
 install-tmpfiles: install-sysusers
-	sudo $(RSYNC) $(TMPFILES_SRC) $(TMPFILES_DST)
+	@mkdir -p $(WHEEL_DIR)
+	sed 's|@BED_HOME@|$(BED_HOME)|g' $(TMPFILES_SRC) > $(TMPFILES_RENDERED)
+	sudo $(RSYNC) $(TMPFILES_RENDERED) $(TMPFILES_DST)
 	sudo systemd-tmpfiles --create
-	@echo "Created /etc/bed, /var/log/bed, /var/lib/bed via $(TMPFILES_DST)"
+	@echo "Created /var/log/bed and $(BED_HOME) via $(TMPFILES_DST)"
 
 uninstall-tmpfiles:
 	-sudo rm -f $(TMPFILES_DST)
@@ -192,9 +198,9 @@ uninstall-tmpfiles:
 
 # deploytool's --prefix arrives as DEPLOY_PREFIX and wins. Otherwise the
 # installer's active venv (VIRTUAL_ENV, as deploytool's get_venv_layout uses).
-# The last-resort literal applies only when no venv is active, so make
+# The last-resort path applies only when no venv is active, so make
 # and deploytool agree on the same venv.
-VENV_DIR ?= $(or $(DEPLOY_PREFIX),$(VIRTUAL_ENV),/home/bed/venv)
+VENV_DIR ?= $(or $(DEPLOY_PREFIX),$(VIRTUAL_ENV),$(BED_HOME)/venv)
 VENV_OWNER ?= bed
 
 # Prints the resolved venv path and runs no recipe. Used by the Makefile tests.
@@ -244,6 +250,18 @@ BBSENGINE_DIR = $(CURDIR)/../bbsengine6/py
 # build.stale.$ dirs behind. The rename must succeed: a failed mv is a
 # hard error, not something to hide with `|| true`, because the chmod
 # that follows then fails with a less useful EPERM.
+#
+# CHECK_CONFIGURED: bed refuses to install unless its packaged configuration is present
+# in the wheel. bed reads nothing from /etc, so the configuration is the bundled bed.json
+# (bed/data/bed.json). A wheel without a valid bed.json is a broken build, and installing
+# it would start a daemon with no configuration.
+CHECK_CONFIGURED = \
+	whl="$$(ls $(1)/bed-*.whl 2>/dev/null | head -1)"; \
+	test -n "$$whl" || { echo "bed: no bed wheel in $(1)" >&2; exit 1; }; \
+	python3 -c 'import json,sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); n=[x for x in z.namelist() if x.endswith("bed/data/bed.json")]; assert n, "bed.json missing from wheel"; json.loads(z.read(n[0]))' "$$whl" \
+		|| { echo "bed: refusing to install $$whl: the packaged configuration bed/data/bed.json is missing or invalid" >&2; exit 1; }; \
+	echo "bed: configuration present in $$whl"
+
 PREPARE_BUILD = \
 	if [ -d $(1)/build ] && { [ ! -O $(1)/build ] || [ ! -w $(1)/build ]; }; then \
 		mv $(1)/build $(1)/build.stale.$$$$ || exit 1; \
@@ -268,6 +286,7 @@ install-venv: clean-egg-info
 	$(MAKE) version
 	$(call PREPARE_BUILD,$(CURDIR))
 	$(BUILD_PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
+	$(call CHECK_CONFIGURED,$(WHEEL_DIR))
 	sudo -u $(VENV_OWNER) $(VENV_DIR)/bin/pip install $(PIP_UPGRADE_FLAG) $(WHEEL_DIR)/*.whl
 	# TODO(verify-install): this `sudo -u <owner> pip install` runs as
 	# VENV_OWNER, not the active operator, so the verify check has to be
@@ -295,16 +314,7 @@ restorecon:
 	sudo restorecon -R $(VENV_DIR)/bin/
 	@echo "Relabeled $(VENV_DIR)/bin/ for SELinux"
 
-install-etc:
-	sudo rsync --chmod=F0755 --mkpath --archive --verbose $(FACTORY_DIR)/ $(ETC_DIR)/
-	sudo rsync --chmod=F0640 --mkpath --archive --verbose $(FACTORY_DIR)/bed.env $(ETC_DIR)/bed.env
-	@echo "Installed $(ETC_DIR) from factory defaults"
-
-uninstall-etc:
-	-sudo rm -rf $(ETC_DIR)
-	@echo "Removed $(ETC_DIR)"
-
-install: install-sysusers install-tmpfiles install-venv install-systemd install-etc
+install: install-sysusers install-tmpfiles install-venv install-systemd
 	@echo "bed fully installed. Run: systemctl enable --now $(PROJECT)"
 
 setup-db:
@@ -312,7 +322,7 @@ setup-db:
 	@echo "Database bootstrapped. Run: systemctl enable --now $(PROJECT)"
 
 install-systemd:
-	sed 's|@VENV_DIR@|$(VENV_DIR)|g' $(UNIT_SRC) | sudo tee $(UNIT_DST) > /dev/null
+	sed -e 's|@VENV_DIR@|$(VENV_DIR)|g' -e 's|@BED_HOME@|$(BED_HOME)|g' $(UNIT_SRC) | sudo tee $(UNIT_DST) > /dev/null
 	sudo chmod 0644 $(UNIT_DST)
 	sudo chown root:root $(UNIT_DST)
 	sudo systemctl daemon-reload
@@ -325,7 +335,7 @@ uninstall-systemd:
 	-sudo systemctl daemon-reload
 	@echo "Removed $(UNIT_DST)"
 
-uninstall: uninstall-systemd uninstall-venv uninstall-tmpfiles uninstall-sysusers uninstall-etc
+uninstall: uninstall-systemd uninstall-venv uninstall-tmpfiles uninstall-sysusers
 	@echo "bed fully uninstalled"
 
 # Non-sudo: build wheels for bbsengine6 + bed, then pip install into
@@ -372,6 +382,7 @@ else
 	$(MAKE) version
 	$(call PREPARE_BUILD,$(CURDIR))
 	$(BUILD_PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
+	$(call CHECK_CONFIGURED,$(WHEEL_DIR))
 	$(VENV_DIR)/bin/pip install $(PIP_UPGRADE_FLAG) $(WHEEL_DIR)/*.whl 2>/dev/null
 	# TODO(verify-install): after this `pip install` of bed's wheel,
 	# compare the wheel's METADATA Version against `pip show bed`.

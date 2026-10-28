@@ -1,4 +1,4 @@
 # Type Path           Mode Owner  Group Age Argument
-d     /etc/bed        0755 root   root  -   -
+# @BED_HOME@ is rendered by the Makefile (BED_HOME). bed reads nothing from /etc.
 d     /var/log/bed    0755 bed    bed   -   -
-d     /var/lib/bed    0755 bed    bed   -   -
+d     @BED_HOME@      0755 bed    bed   -   -

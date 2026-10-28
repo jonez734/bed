@@ -17,11 +17,12 @@
 set -euo pipefail
 
 WHEELS_DIR="/home/opencode/data/work/dist-wheels"
-SERVICE_PY="/var/lib/bed/venv/bin/python"
+# BED_HOME: the bed account's home. Same variable as the bed Makefile; override with the env.
+BED_HOME="${BED_HOME:-/home/NEEDINFO}"
+SERVICE_PY="$BED_HOME/venv/bin/python"
 SHELL_PY="/home/jam/.venv/bin/python"
-SERVICE_BED="/var/lib/bed/venv/bin/bed"
+SERVICE_BED="$BED_HOME/venv/bin/bed"
 DB="zoid6"
-CONFIG="/etc/zoid6/zoid6.json"
 ROUTER="zoid6.api.handler.MessageRouter"
 
 BED_WHEEL="bed-0.0.2.dev20261023173910-py3-none-any.whl"
@@ -80,7 +81,7 @@ echo "== 2/4 shell/owner venv: bed + bbsengine6 + letteredolive"
 run "$SHELL_PY" -m pip install --force-reinstall --no-deps "$BED_PATH" "$BBS_PATH" "$LO_PATH"
 
 echo "== 3/4 owner install against '$DB' (no database is created by this step)"
-run "$SERVICE_BED" --install --databasename "$DB" --config "$CONFIG" --router "$ROUTER"
+run "$SERVICE_BED" --install --databasename "$DB" --router "$ROUTER"
 
 echo "== 4/4 restart and verify (run these yourself; sudo is not available to this script)"
 cat <<EOF
