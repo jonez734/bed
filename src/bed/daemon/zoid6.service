@@ -17,10 +17,12 @@ Group=zoid6
 WorkingDirectory=/home/zoid6
 
 # The daemon connects to PostgreSQL as bed_zoid6, which identd maps from this OS user.
-# No password and no environment file. --config names the zoid6.json packaged in the venv: the
+# The database login is bed_zoid6 (identd maps the zoid6 OS user to it); zoid6 stays a non-login
+# owner. No password and no environment file. --config names the zoid6.json packaged in the venv: the
 # zoid6 router requires the services block that only that file carries.
 ExecStart=@VENV_DIR@/bin/bed \
   --databasename zoid6 \
+  --databaseuser bed_zoid6 \
   --config @VENV_DIR@/lib64/python3.12/site-packages/zoid6/data/zoid6.json \
   --router zoid6.api.handler.MessageRouter
 
