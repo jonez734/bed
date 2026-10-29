@@ -97,6 +97,67 @@ def _bind_summary(args) -> str:
     return ",".join(parts) or "default"
 
 
+_startup_file_handler = None
+
+
+def _open_startup_log(args) -> None:
+    """Open the startup-log file sink if startup_log.path is set. Idempotent; off when unset."""
+    global _startup_file_handler
+    path = getattr(args, "startup_log_path", "") or ""
+    if not path or _startup_file_handler is not None:
+        return
+    import logging.handlers
+
+    try:
+        handler = logging.handlers.RotatingFileHandler(
+            path,
+            maxBytes=getattr(args, "startup_log_max_bytes", 1048576),
+            backupCount=getattr(args, "startup_log_backups", 5),
+            encoding="utf-8",
+        )
+    except OSError as e:
+        # The startup file is an extra output. An unwritable path must not stop the daemon: report
+        # it once, and run with the journal line only.
+        io.echo(
+            f"startup_log: cannot open {path} ({e.strerror or e}); startup lines go to the journal only",
+            level="warning",
+        )
+        return
+    handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+    _startup_file_handler = handler
+
+
+def _write_startup_line(summary: str, **kwargs) -> None:
+    """Write one startup line through logentry(), and to the startup file when it is configured.
+
+    The file handler is attached to the bbsengine6 logger only for the duration of this one
+    logentry() call, so the file receives exactly the record the journal receives (same text, same
+    level) and no other traffic. With no startup file configured this is a plain logentry() call.
+    """
+    handler = _startup_file_handler
+    if handler is None:
+        logentry(summary, **kwargs)
+        return
+    import logging as _logging
+
+    from bbsengine6.util import LOGGER_NAME
+
+    logger = _logging.getLogger(LOGGER_NAME)
+    logger.addHandler(handler)
+    try:
+        logentry(summary, **kwargs)
+    finally:
+        logger.removeHandler(handler)
+
+
+def _close_startup_log() -> None:
+    """Close the startup-log file sink. Called on shutdown."""
+    global _startup_file_handler
+    if _startup_file_handler is not None:
+        _startup_file_handler.close()
+        _startup_file_handler = None
+
+
 def _log_startup_failure(reason: str, *, stage: str, **details) -> None:
     """Write one specific startup-failure line to the bed log.
 
@@ -105,7 +166,7 @@ def _log_startup_failure(reason: str, *, stage: str, **details) -> None:
     Never raises: logging must not turn a failed startup into a different crash.
     """
     try:
-        logentry(
+        _write_startup_line(
             reason,
             level="error",
             module="bed",
@@ -638,6 +699,31 @@ def _apply_message_config(cfg: dict) -> None:
     _bbs_message.configure(everyone_allowed_roles=roles, pending_max_age_days=days)
 
 
+def _apply_startup_log_config(args: argparse.Namespace, cfg: dict) -> None:
+    """Resolve the startup-log sink from ``startup_log`` in the config and the --startup-log flag.
+
+    The flag, when given, wins over ``startup_log.path``. ``path`` empty or absent turns the sink
+    off. ``max_bytes`` and ``backups`` size the rotation. Bad values raise ``ValueError`` naming the
+    key, so a typo fails at startup instead of silently disabling the sink.
+    """
+    section = cfg.get("startup_log") or {}
+    if not isinstance(section, dict):
+        raise ValueError("startup_log must be an object")
+    path = section.get("path", "")
+    if not isinstance(path, str):
+        raise ValueError("startup_log.path must be a string")
+    max_bytes = section.get("max_bytes", 1048576)
+    if not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes <= 0:
+        raise ValueError("startup_log.max_bytes must be a positive integer")
+    backups = section.get("backups", 5)
+    if not isinstance(backups, int) or isinstance(backups, bool) or backups < 0:
+        raise ValueError("startup_log.backups must be an integer of 0 or more")
+    flag = getattr(args, "startup_log", None)
+    args.startup_log_path = flag if flag else path
+    args.startup_log_max_bytes = max_bytes
+    args.startup_log_backups = backups
+
+
 def _apply_websocket_config(args: argparse.Namespace, cfg: dict) -> None:
     """Apply ``websocket.*`` (WebSocket keepalive) from a loaded config.
 
@@ -1052,7 +1138,7 @@ class BED:
         else:
             n_types = len([k for k in registered if k != "*default*"])
             summary = f"startup completed, {n_types} message types registered"
-        logentry(summary, module="bed", action="startup")
+        _write_startup_line(summary, module="bed", action="startup")
 
         try:
             while self._running:
@@ -1460,6 +1546,10 @@ async def main_async() -> None:
     _apply_database_config(args, loaded_config)
     _apply_auth_config(args, loaded_config)
     _apply_websocket_config(args, loaded_config)
+    _apply_startup_log_config(args, loaded_config)
+    _open_startup_log(args)
+    import atexit
+    atexit.register(_close_startup_log)
     _apply_message_config(loaded_config)
     _apply_session_config(loaded_config)
     _apply_bank_config(loaded_config)

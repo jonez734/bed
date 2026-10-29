@@ -108,5 +108,11 @@
   "bank": {
     "starting_balance": 100,
     "_comment": "Balance a new member's bank account starts with. Applied to bbsengine6.bank.configure() at startup. Default 100."
+  },
+  "startup_log": {
+    "path": "/var/log/zoid6/startup.log",
+    "max_bytes": 1048576,
+    "backups": 5,
+    "_comment": "File for the startup lines (startup completed / startup_failed). Empty path turns it off. Rotated by size; backups kept. zoid6.json carries the same keys."
   }
 }

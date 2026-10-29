@@ -107,6 +107,16 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         ),
     )
     parentparser.add_argument(
+        "--startup-log",
+        dest="startup_log",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Write the startup lines (startup completed / startup_failed) to PATH, rotated by "
+            "size. Overrides startup_log.path in bed.json. Default: the value in bed.json."
+        ),
+    )
+    parentparser.add_argument(
         "--bind",
         action="append",
         type=_bind_spec,
