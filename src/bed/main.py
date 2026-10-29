@@ -1043,13 +1043,16 @@ class BED:
             )
         registered = self.server.list_services()
         io.echo(f"Registered services: {registered}")
-        # "*default*" is the fallback handler, not a module, so it is not counted.
-        n_modules = len([k for k in registered if k != "*default*"])
-        logentry(
-            f"startup completed, {n_modules} modules enabled",
-            module="bed",
-            action="startup",
-        )
+        # A router that records its enabled modules (zoid6's loaded_modules) gives the module count.
+        # Any other router gives only its message types, and the log says so rather than
+        # calling them modules.
+        loaded = getattr(getattr(self, "router", None), "loaded_modules", None)
+        if loaded is not None:
+            summary = f"startup completed, {len(loaded)} modules enabled"
+        else:
+            n_types = len([k for k in registered if k != "*default*"])
+            summary = f"startup completed, {n_types} message types registered"
+        logentry(summary, module="bed", action="startup")
 
         try:
             while self._running:

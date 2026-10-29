@@ -44,8 +44,18 @@ def captured():
 @pytest.mark.unit
 def test_startup_success_line_is_wired_to_logentry():
     assert "from bbsengine6.util import logentry" in MAIN_SRC
-    assert 'f"startup completed, {n_modules} modules enabled"' in MAIN_SRC
-    assert '"*default*"' in MAIN_SRC  # the fallback handler is not counted as a module
+    # The module count comes from the router's loaded_modules; the message-type count is the
+    # fallback and is labelled as such, so it is never reported as modules.
+    assert 'getattr(getattr(self, "router", None), "loaded_modules", None)' in MAIN_SRC
+    assert 'f"startup completed, {len(loaded)} modules enabled"' in MAIN_SRC
+    assert "message types registered" in MAIN_SRC
+
+
+@pytest.mark.unit
+def test_message_type_fallback_is_not_called_modules():
+    # Only the router's loaded_modules may produce the word "modules".
+    fallback = MAIN_SRC[MAIN_SRC.index("message types registered") - 80:MAIN_SRC.index("message types registered")]
+    assert "modules" not in fallback
 
 
 @pytest.mark.unit
