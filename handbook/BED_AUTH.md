@@ -22,8 +22,8 @@ smoke tests and local development. Any other router
 ```json
 C→S {"type":"auth","moniker":"alice","password":"…"}
 S→C {"type":"auth_result","success":true,"moniker":"alice","is_sysop":false,
-     "session_id":"…","token":"…","expires_at":"2026-06-25T11:32:00Z",
-     "balance":42}
+     "owns_tables":false,"session_id":"…","token":"…",
+     "expires_at":"2026-06-25T11:32:00Z","balance":42}
 ```
 
 `balance` is included in the `auth_result` envelope for backward
@@ -34,12 +34,20 @@ connection that keeps bed's login role (`bed/api/login_balance.py`). A read
 failure is logged and the reply carries no balance; it never blocks login.
 Reconnect reads the balance the same way.
 
+`owns_tables` is `true` when the member owns at least one casino table. Bed
+reads it after the token is minted, through `engine.casino_read` with the
+`list_tables` op on the same login-role connection
+(`bed/api/login_owns_tables.py`), and checks the `owner` of each table
+returned. Bed does not read casino tables itself. A read failure is logged
+and reports `false`; it never blocks login. Casino's client uses it to show
+`table update`.
+
 ### Reconnect (no password)
 
 ```json
 C→S {"type":"reconnect","token":"…"}
 S→C {"type":"reconnect_result","success":true,"moniker":"alice",
-     "is_sysop":false,"session_id":"…","token":"…",
+     "is_sysop":false,"owns_tables":false,"session_id":"…","token":"…",
      "expires_at":"…","replayed":null|"…",
      "replayed_request_id":"rN"|null}
 ```

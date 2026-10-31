@@ -42,6 +42,7 @@ class MemberInfo:
     is_sysop: bool = False
     balance: Optional[int] = None
     loginid: Optional[str] = None
+    owns_tables: bool = False
 
 
 class TokenStore(Protocol):

@@ -355,6 +355,25 @@ class AuthService(BaseService):
             io.echo(f"AuthService: login balance read failed for {moniker!r}: {e}", level="error")
             return None
 
+    def _login_owns_tables(self, token: str, moniker: str) -> bool:
+        """Whether the member owns a casino table, read through engine.casino_read.
+
+        Returns False on failure. Like the balance read, this must never block the login.
+        """
+        try:
+            from bed.api.login_owns_tables import read_owns_tables
+            from bed.store.token_store import token_hash
+
+            return read_owns_tables(
+                args=self.args,
+                pool=getattr(self.args, "pool", None),
+                token_hash=token_hash(token),
+                moniker=moniker,
+            )
+        except Exception as e:
+            io.echo(f"AuthService: owns_tables read failed for {moniker!r}: {e}", level="error")
+            return False
+
     def _touch_lastlogin(
         self, token: str, moniker: str, remoteaddr: Optional[str] = None
     ) -> Optional[str]:
@@ -472,6 +491,7 @@ class AuthService(BaseService):
         if balance is not None:
             state.balance = balance
             info.balance = balance
+        info.owns_tables = self._login_owns_tables(record.token, info.moniker)
         _debug_branch(
             self.args,
             op="login",
@@ -605,6 +625,7 @@ class AuthService(BaseService):
             is_sysop=store_record.is_sysop,
             balance=balance,
             loginid=store_record.loginid,
+            owns_tables=self._login_owns_tables(token, store_record.moniker),
         )
         state = self.sessions.bind(
             store_record.session_id,
@@ -830,6 +851,7 @@ class AuthService(BaseService):
             "success": True,
             "moniker": info.moniker,
             "is_sysop": bool(info.is_sysop),
+            "owns_tables": bool(info.owns_tables),
             "session_id": record.session_id,
             "token": record.token,
             "expires_at": _iso_from_ts(record.expires_at),
@@ -853,6 +875,7 @@ class AuthService(BaseService):
             "success": True,
             "moniker": info.moniker,
             "is_sysop": bool(info.is_sysop),
+            "owns_tables": bool(info.owns_tables),
             "session_id": record.session_id,
             "token": record.token,
             "expires_at": _iso_from_ts(record.expires_at),
