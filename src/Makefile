@@ -105,8 +105,10 @@ tag:
 # ---- pgsql: identd mapping for the daemon login (run as root) -------------------------------
 # Adds the managed lines in daemon/pgsql/ to the server's pg_ident.conf and pg_hba.conf.
 #   - pg_ident.conf: appended (map entries have no order).
-#   - pg_hba.conf: inserted above the first existing rule for database zoid6, because the first
+#   - pg_hba.conf: inserted above the first existing rule for BED_DATABASENAME, because the first
 #     matching rule wins. If there is no such rule, appended.
+#   - BED_DATABASENAME is required: it names the database whose rules bed's rule must sit above.
+#     It has no default. The sentinel NEEDINFO, or any value outside [a-z0-9_], is refused.
 # Idempotent: a line already present is skipped. Backs up both files, validates, then reloads.
 # Bed's rollback login. Removed at cutover, with the bed role.
 # Not part of prod: run explicitly.
@@ -114,10 +116,18 @@ PGSQL_DATA ?= /var/lib/pgsql/18/data
 PGSQL_BIN  ?= /usr/pgsql-18/bin
 PGSQL_UNIT ?= postgresql-18.service
 PGSQL_SRC  ?= $(CURDIR)/../daemon/pgsql
+BED_DATABASENAME ?= NEEDINFO
 
-install-pgsql:
-	@test "$$(id -u)" -eq 0 || [ -n "$(PGSQL_ALLOW_NONROOT)" ] || { echo "install-pgsql: run as root (sudo make install-pgsql)"; exit 1; }
-	@test -f $(PGSQL_DATA)/pg_hba.conf || { echo "install-pgsql: $(PGSQL_DATA)/pg_hba.conf not found"; exit 1; }
+# install-identd is the real target. install-pgsql is kept as an alias until deploytool's
+# identd mapping moves to install-identd (handbook/todo: deploytool phase 11).
+.PHONY: install-identd install-pgsql
+install-pgsql: install-identd
+
+install-identd:
+	@case "$(BED_DATABASENAME)" in NEEDINFO|'') echo "install-identd: set BED_DATABASENAME=<db> (the database whose pg_hba rules bed's rule must sit above). NEEDINFO is refused." >&2; exit 1 ;; esac; \
+	  printf '%s' "$(BED_DATABASENAME)" | grep -qxE '[a-z0-9_]+' || { echo "install-identd: BED_DATABASENAME '$(BED_DATABASENAME)' must match [a-z0-9_]+" >&2; exit 1; }
+	@test "$$(id -u)" -eq 0 || [ -n "$(PGSQL_ALLOW_NONROOT)" ] || { echo "install-identd: run as root (sudo make install-identd)"; exit 1; }
+	@test -f $(PGSQL_DATA)/pg_hba.conf || { echo "install-identd: $(PGSQL_DATA)/pg_hba.conf not found"; exit 1; }
 	@ts=$$(date +%Y%m%d%H%M%S); \
 	cp -p $(PGSQL_DATA)/pg_hba.conf $(PGSQL_DATA)/pg_hba.conf.bak-$$ts && \
 	cp -p $(PGSQL_DATA)/pg_ident.conf $(PGSQL_DATA)/pg_ident.conf.bak-$$ts && \
@@ -128,17 +138,17 @@ install-pgsql:
 	  if grep -qxF -- "$$line" $(PGSQL_DATA)/pg_ident.conf; then echo "already in pg_ident.conf: $$line"; \
 	  else printf '%s\n' "$$line" >> $(PGSQL_DATA)/pg_ident.conf; echo "added to pg_ident.conf: $$line"; fi; \
 	done < $(PGSQL_SRC)/pg_ident.bed.conf
-	@# pg_hba.conf: insert each managed rule above the first rule for database zoid6.
+	@# pg_hba.conf: insert each managed rule above the first rule for BED_DATABASENAME.
 	@while IFS= read -r line; do \
 	  case "$$line" in ''|\#*) continue ;; esac; \
 	  if grep -qxF -- "$$line" $(PGSQL_DATA)/pg_hba.conf; then echo "already in pg_hba.conf: $$line"; continue; fi; \
-	  first=$$(grep -nE '^[[:space:]]*(host|hostssl|hostnossl|local)[[:space:]]+(zoid6)[[:space:]]' $(PGSQL_DATA)/pg_hba.conf | head -1 | cut -d: -f1); \
+	  first=$$(grep -nE '^[[:space:]]*(host|hostssl|hostnossl|local)[[:space:]]+($(BED_DATABASENAME))[[:space:]]' $(PGSQL_DATA)/pg_hba.conf | head -1 | cut -d: -f1); \
 	  if [ -n "$$first" ]; then \
 	    sed -i "$${first}i $$line" $(PGSQL_DATA)/pg_hba.conf; echo "inserted above line $$first of pg_hba.conf: $$line"; \
 	  else printf '%s\n' "$$line" >> $(PGSQL_DATA)/pg_hba.conf; echo "appended to pg_hba.conf: $$line"; fi; \
 	done < $(PGSQL_SRC)/pg_hba.bed.conf
 	@# Validate the files with the server's own parser; a bad line stops the install before reload.
 	@$(if $(PGSQL_ALLOW_NONROOT),true,sudo -u postgres) $(PGSQL_BIN)/postgres -D $(PGSQL_DATA) -C server_version >/dev/null 2>&1 || \
-	  { echo "install-pgsql: server config check failed; restore from the .bak-* files"; exit 1; }
+	  { echo "install-identd: server config check failed; restore from the .bak-* files"; exit 1; }
 	$(if $(PGSQL_ALLOW_NONROOT),@echo "sandbox: reload skipped",systemctl reload $(PGSQL_UNIT))
-	@echo "install-pgsql: managed lines in place and $(PGSQL_UNIT) reloaded"
+	@echo "install-identd: managed lines in place and $(PGSQL_UNIT) reloaded"
