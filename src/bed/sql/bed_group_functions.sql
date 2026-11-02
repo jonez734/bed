@@ -1,7 +1,7 @@
 -- bed/sql/bed_group_functions.sql
 -- Message group management for bed. Each function takes the SHA-256 digest of
 -- the bearer token and reads the acting moniker from engine.__bed_token, so
--- bed cannot act as another member. Zoid6-owned, SECURITY DEFINER, fixed
+-- bed cannot act as another member. SECURITY DEFINER, owned by the install owner step, fixed
 -- search_path. bed holds EXECUTE only.
 --
 -- Rules:
@@ -156,10 +156,6 @@ BEGIN
 END
 $$;
 
-ALTER FUNCTION engine.bed_group_create(bytea, text, text) OWNER TO zoid6;
-ALTER FUNCTION engine.bed_group_add_member(bytea, text, citext) OWNER TO zoid6;
-ALTER FUNCTION engine.bed_group_remove_member(bytea, text, citext) OWNER TO zoid6;
-ALTER FUNCTION engine.bed_group_delete(bytea, text) OWNER TO zoid6;
 
 REVOKE ALL ON FUNCTION engine.bed_group_create(bytea, text, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION engine.bed_group_add_member(bytea, text, citext) FROM PUBLIC;

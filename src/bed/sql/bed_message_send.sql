@@ -3,7 +3,7 @@
 --
 -- bed calls engine.bed_message_send with the SHA-256 digest of the bearer
 -- token. The sender is read from engine.__bed_token for that hash, so bed
--- cannot name a different sender. The function runs as zoid6 (SECURITY
+-- cannot name a different sender. The function runs with its owner's rights (SECURITY
 -- DEFINER) with a fixed search_path, and bed holds EXECUTE only.
 --
 -- Recipients: direct monikers pass through. @everyone (sysop only) expands to
@@ -164,7 +164,6 @@ BEGIN
 END
 $$;
 
-ALTER FUNCTION engine.bed_message_send(bytea, text, text, text, citext[], citext) OWNER TO zoid6;
 
 REVOKE ALL ON FUNCTION engine.bed_message_send(bytea, text, text, text, citext[], citext) FROM PUBLIC;
 

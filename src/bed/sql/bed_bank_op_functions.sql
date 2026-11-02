@@ -157,6 +157,5 @@ BEGIN
 END
 $$;
 
-ALTER FUNCTION engine.bed_bank_op(bytea, text, jsonb) OWNER TO zoid6;
 REVOKE ALL ON FUNCTION engine.bed_bank_op(bytea, text, jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION engine.bed_bank_op(bytea, text, jsonb) TO bed;

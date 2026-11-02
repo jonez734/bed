@@ -1,7 +1,7 @@
 -- Read functions that the bed service role calls for message reads.
 --
 -- bed holds no table privileges on the message tables. These functions are
--- owned by zoid6 and run with zoid6's rights (SECURITY DEFINER). search_path
+-- owned by the install owner step and run with that owner's rights (SECURITY DEFINER). search_path
 -- is fixed so the caller cannot redirect the lookup. They are read-only.
 --
 -- Run by the owner during install (after checkmessage and the message
@@ -64,8 +64,6 @@ AS $$
       AND r.status IN ('pending', 'delivered')
 $$;
 
-ALTER FUNCTION engine.bed_list_pending_page(citext, int, timestamptz, bigint, int) OWNER TO zoid6;
-ALTER FUNCTION engine.bed_count_unread(citext) OWNER TO zoid6;
 
 REVOKE ALL ON FUNCTION engine.bed_list_pending_page(citext, int, timestamptz, bigint, int) FROM PUBLIC;
 REVOKE ALL ON FUNCTION engine.bed_count_unread(citext) FROM PUBLIC;

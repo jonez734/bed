@@ -40,6 +40,5 @@ BEGIN
 END
 $$;
 
-ALTER FUNCTION engine.bed_touch_lastlogin(bytea, citext, inet) OWNER TO zoid6;
 REVOKE ALL ON FUNCTION engine.bed_touch_lastlogin(bytea, citext, inet) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION engine.bed_touch_lastlogin(bytea, citext, inet) TO bed;

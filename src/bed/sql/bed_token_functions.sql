@@ -1,6 +1,6 @@
 -- bed/sql/bed_token_functions.sql
 -- Access functions for engine.__bed_token. bed calls these; it holds no table
--- privileges. Each function is owned by zoid6 and runs with zoid6's rights
+-- privileges. Each function is owned by the install owner step and runs with that owner's rights
 -- (SECURITY DEFINER) under a fixed search_path. Each takes the SHA-256 digest
 -- of the bearer token (token_hash), never the token itself.
 --
@@ -92,9 +92,6 @@ AS $$
     SELECT COUNT(*) FROM d
 $$;
 
-ALTER FUNCTION engine.bed_token_put(bytea, citext, text, double precision, double precision, boolean, text, text, jsonb, text) OWNER TO zoid6;
-ALTER FUNCTION engine.bed_token_get(bytea) OWNER TO zoid6;
-ALTER FUNCTION engine.bed_token_delete(bytea) OWNER TO zoid6;
 
 REVOKE ALL ON FUNCTION engine.bed_token_put(bytea, citext, text, double precision, double precision, boolean, text, text, jsonb, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION engine.bed_token_get(bytea) FROM PUBLIC;
@@ -104,6 +101,5 @@ GRANT EXECUTE ON FUNCTION engine.bed_token_put(bytea, citext, text, double preci
 GRANT EXECUTE ON FUNCTION engine.bed_token_get(bytea) TO bed;
 GRANT EXECUTE ON FUNCTION engine.bed_token_delete(bytea) TO bed;
 
-ALTER FUNCTION engine.bed_token_gc(double precision) OWNER TO zoid6;
 REVOKE ALL ON FUNCTION engine.bed_token_gc(double precision) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION engine.bed_token_gc(double precision) TO bed;

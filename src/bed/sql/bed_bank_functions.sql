@@ -1,6 +1,6 @@
 -- bed/sql/bed_bank_functions.sql
 -- Bank functions for bed. bed holds no table privileges on the bank tables;
--- it calls these zoid6-owned SECURITY DEFINER functions with the SHA-256 digest of
+-- it calls these SECURITY DEFINER functions, owned by the install owner step, with the SHA-256 digest of
 -- the bearer token. The acting moniker and sysop status come from the verified
 -- token row (engine.__bed_token), never from the wire message.
 --
@@ -40,6 +40,5 @@ BEGIN
 END
 $$;
 
-ALTER FUNCTION engine.bed_bank_balance(bytea, citext) OWNER TO zoid6;
 REVOKE ALL ON FUNCTION engine.bed_bank_balance(bytea, citext) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION engine.bed_bank_balance(bytea, citext) TO bed;

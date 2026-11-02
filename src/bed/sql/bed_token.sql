@@ -1,11 +1,11 @@
 -- bed/sql/bed_token.sql
 -- Bearer-token store for bed (token_persistence = 'db').
 --
--- Installed by ``bed --install`` as the owner (zoid6). Not created at runtime.
+-- Created by ``bed --install``; its owner is set by the install owner step. Not created at runtime.
 -- The raw bearer token is never stored: only its SHA-256 digest (token_hash).
 -- Expired rows are removed by bed's periodic cleanup (gc_expired).
--- bed holds no table privileges here; access goes through the zoid6-owned
--- functions in bed_token_functions.sql.
+-- bed holds no table privileges here; access goes through the functions
+-- in bed_token_functions.sql.
 
 CREATE TABLE IF NOT EXISTS engine.__bed_token (
     token_hash        bytea       PRIMARY KEY,
@@ -27,6 +27,5 @@ CREATE INDEX IF NOT EXISTS __bed_token_expires_at_idx
 CREATE INDEX IF NOT EXISTS __bed_token_session_id_idx
     ON engine.__bed_token (session_id);
 
-ALTER TABLE engine.__bed_token OWNER TO zoid6;
 
 REVOKE ALL ON engine.__bed_token FROM PUBLIC;

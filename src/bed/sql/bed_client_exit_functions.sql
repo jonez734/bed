@@ -31,6 +31,5 @@ BEGIN
 END
 $$;
 
-ALTER FUNCTION engine.bed_client_exit(bytea, citext, text, inet) OWNER TO zoid6;
 REVOKE ALL ON FUNCTION engine.bed_client_exit(bytea, citext, text, inet) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION engine.bed_client_exit(bytea, citext, text, inet) TO bed;
