@@ -13,6 +13,7 @@ import sys
 import psycopg
 
 from bbsengine6 import database, io
+from bbsengine6.database import BBSENGINE6_DBNAME_DEFAULT as BED_DATABASENAME_UNSET
 from bbsengine6.startup import lib as startuplib
 
 
@@ -186,6 +187,15 @@ def ensure_startup(args):
     if not getattr(args, "install", False):
         return verify_install(args)
 
+    # 5.3: refuse before any SQL runs when the database name was never configured.
+    if getattr(args, "databasename", None) in (None, "", BED_DATABASENAME_UNSET):
+        io.echo(
+            "bed --install: no database configured. Pass --databasename <db> "
+            "(the database bed's objects are created in). Refusing to run.",
+            level="error",
+        )
+        return False
+
     try:
         result = startuplib.runmodule(args, "main")
     except (
@@ -247,8 +257,40 @@ def ensure_startup(args):
         return False
     # Casino setup is not bed's job; it is run by the zoid6 install owner.
 
+    # 5.2: report bed's own install status from its manifest. Read-only.
+    status_ok = _report_bed_status(args)
+
     io.echo("bed startup complete", level="ok")
-    return True
+    return status_ok
+
+
+def _report_bed_status(args) -> bool:
+    """Print installed / partial / not installed for bed's objects. True only when installed."""
+    import json
+    from importlib import resources
+
+    from bbsengine6.backend import objects
+
+    try:
+        text = resources.files("bed").joinpath("sql/objects.json").read_text(encoding="utf-8")
+        manifest = objects.load_manifest(json.loads(text))
+        pool = database.getpool(args, dbname=args.databasename)
+        with database.connect(args, pool=pool) as conn:
+            report = objects.check_objects(args, manifest, conn=conn)
+    except Exception as exc:  # noqa: BLE001 - a status failure must be reported, not raised
+        io.echo(f"bed: cannot read install status: {exc}", level="error")
+        return False
+    total = len(manifest.objects)
+    if report.status == objects.STATUS_INSTALLED:
+        io.echo(f"bed: installed ({len(report.present)}/{total})", level="ok")
+        return True
+    io.echo(
+        f"bed: {report.status} ({len(report.present)}/{total})",
+        level="error",
+    )
+    for obj in report.missing:
+        io.echo(f"  missing: {obj.label()}", level="error")
+    return False
 
 
 def main(args=None):

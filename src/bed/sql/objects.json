@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "project": "bed",
+  "objects": [
+    {"kind": "table", "name": "engine.__bed_token"},
+    {"kind": "function", "name": "engine.bed_bank_balance", "args": "bytea, citext"},
+    {"kind": "function", "name": "engine.bed_bank_op", "args": "bytea, text, jsonb"},
+    {"kind": "function", "name": "engine.bed_client_exit", "args": "bytea, citext, text, inet"},
+    {"kind": "function", "name": "engine.bed_count_unread", "args": "citext"},
+    {"kind": "function", "name": "engine.bed_group_add_member", "args": "bytea, text, citext"},
+    {"kind": "function", "name": "engine.bed_group_create", "args": "bytea, text, text"},
+    {"kind": "function", "name": "engine.bed_group_delete", "args": "bytea, text"},
+    {"kind": "function", "name": "engine.bed_group_remove_member", "args": "bytea, text, citext"},
+    {"kind": "function", "name": "engine.bed_is_sysop", "args": "citext"},
+    {"kind": "function", "name": "engine.bed_list_pending_page", "args": "citext, integer, timestamp with time zone, bigint, integer"},
+    {"kind": "function", "name": "engine.bed_login_failed", "args": "citext, inet"},
+    {"kind": "function", "name": "engine.bed_message_send", "args": "bytea, text, text, text, citext[], citext"},
+    {"kind": "function", "name": "engine.bed_token_delete", "args": "bytea"},
+    {"kind": "function", "name": "engine.bed_token_gc", "args": "double precision"},
+    {"kind": "function", "name": "engine.bed_token_get", "args": "bytea"},
+    {"kind": "function", "name": "engine.bed_token_put", "args": "bytea, citext, text, double precision, double precision, boolean, text, text, jsonb, text"},
+    {"kind": "function", "name": "engine.bed_touch_lastlogin", "args": "bytea, citext, inet"}
+  ]
+}
