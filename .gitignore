@@ -11,3 +11,6 @@ dist/
 .ruff_cache/
 .mypy_cache/
 *.egg-info.stale.*/
+
+# build version stamp (rewritten by every build; not tracked)
+_version.py
