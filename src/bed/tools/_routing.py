@@ -71,6 +71,13 @@ def build_client_args(parentparser: argparse.ArgumentParser) -> None:
         help="bed URL path (default: /)",
     )
     group.add_argument(
+        "--instance",
+        dest="instance",
+        default=None,
+        metavar="NAME",
+        help="refuse unless the bed that answers reports this name (for example zoid6)",
+    )
+    group.add_argument(
         "--bed-call-timeout",
         dest="bed_call_timeout",
         type=float,

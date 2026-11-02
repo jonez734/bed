@@ -60,12 +60,6 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         default=None,
         help="Existing bearer token (overrides --token-file)",
     )
-    common.add_argument(
-        "--instance",
-        default=None,
-        metavar="NAME",
-        help="Refuse unless the bed that answers reports this bed_name (for example zoid6)",
-    )
     _token.build_token_file_arg(common)
     sub.add_parser("login", parents=[common], help="Issue a fresh bearer token")
     sub.add_parser(
@@ -306,37 +300,7 @@ def auth_login(args) -> bool:
         return False
     if _reject_malformed_token_response(reply):
         return False
-    if not _check_instance(args, reply):
-        return False
     return _persist_token(reply, args)
-
-
-def _check_instance(args, reply: dict) -> bool:
-    """Verify the answering bed is the instance the operator asked for, before any token is written.
-
-    With ``--instance NAME`` the reply's ``bed_name`` must equal NAME. A mismatch, or a reply with no
-    ``bed_name``, is refused and no token is written. Without ``--instance`` the login proceeds, and the
-    bed that answered is printed so the operator can see which instance it reached.
-    """
-    reached = reply.get("bed_name")
-    wanted = (getattr(args, "instance", None) or "").strip()
-    if not wanted:
-        io.echo(f"auth: reached bed_name={reached or '<none>'}")
-        return True
-    if not reached:
-        io.echo(
-            f"auth: --instance {wanted} requested, but the bed reported no bed_name; refusing",
-            level="error",
-        )
-        return False
-    if reached != wanted:
-        io.echo(
-            f"auth: --instance {wanted} requested, but the bed that answered is {reached!r}; "
-            "refusing and writing no token",
-            level="error",
-        )
-        return False
-    return True
 
 
 def auth_reconnect(args) -> bool:
@@ -433,6 +397,42 @@ def _ensure_bottombar_initialized() -> None:
         _bottombar_initialized = True
 
 
+def _check_instance_name(args) -> bool:
+    """Refuse before any subcommand runs unless the answering bed reports the name given by --instance.
+
+    Sends ``ping`` (the bed replies with its configured name). With no ``--instance``, nothing is checked and
+    the bed that answered is printed. A mismatch, or a bed that sends no name, is refused.
+    """
+    from bed.client.connection import run_with_connection as _run
+    from bed.client import get_bed_connection
+
+    wanted = (getattr(args, "instance", None) or "").strip()
+    conn = get_bed_connection(args)
+    async def _ping():
+        return await conn.send({"type": "ping"})
+
+    try:
+        reply = _run(conn, _ping)
+    except BedUnavailable as e:
+        io.echo(str(e), level="error")
+        return False
+    reached = (reply or {}).get("name")
+    if not wanted:
+        io.echo(f"auth: reached bed {reached or '<unnamed>'}")
+        return True
+    if not reached:
+        io.echo(f"auth: --instance {wanted} requested, but the bed sent no name; refusing", level="error")
+        return False
+    if reached != wanted:
+        io.echo(
+            f"auth: --instance {wanted} requested, but the bed that answered is {reached!r}; "
+            "refusing (no token written)",
+            level="error",
+        )
+        return False
+    return True
+
+
 def main_with_args(args) -> Optional[bool]:
     """Run the auth subcommand against a pre-parsed args object.
 
@@ -460,6 +460,9 @@ def main_with_args(args) -> Optional[bool]:
         _routing.select_backend(args)
     except _routing.BedNotReachable as e:
         io.echo(str(e), level="error")
+        return False
+
+    if not _check_instance_name(args):
         return False
 
     sub = getattr(args, "subcommand", None)

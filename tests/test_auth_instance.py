@@ -1,58 +1,72 @@
-"""auth --instance: refuse unless the answering bed reports the named bed_name; the bottombar init runs once."""
+"""auth --instance is a global option: the bed's ping name is checked before any subcommand runs."""
 
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from bed.tools import auth
 
 
-def _args(instance=None):
-    return SimpleNamespace(instance=instance)
+class _FakeConn:
+    """Mirrors BedConnection: async context manager, and an awaitable send()."""
+
+    def __init__(self, name):
+        self._reply = {"type": "pong", "name": name} if name is not None else {"type": "pong"}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def send(self, message):
+        return self._reply
+
+
+def _run_check(instance, name):
+    args = SimpleNamespace(instance=instance)
+    with patch("bed.client.get_bed_connection", return_value=_FakeConn(name)), \
+         patch.object(auth, "io") as io_mock:
+        ok = auth._check_instance_name(args)
+    return ok, io_mock
 
 
 @pytest.mark.unit
-def test_matching_bed_name_passes():
-    with patch.object(auth.io, "echo"):
-        assert auth._check_instance(_args("zoid6"), {"ok": True, "bed_name": "zoid6"}) is True
+def test_matching_name_passes():
+    ok, _ = _run_check("zoid6", "zoid6")
+    assert ok is True
 
 
 @pytest.mark.unit
-def test_mismatched_bed_name_refuses_and_shows_both_values():
-    with patch.object(auth.io, "echo") as echo:
-        assert auth._check_instance(_args("zoid6"), {"ok": True, "bed_name": "bed"}) is False
-    text = " ".join(str(c.args[0]) for c in echo.call_args_list)
-    assert "zoid6" in text and "bed" in text
+def test_mismatched_name_refuses_and_shows_both():
+    ok, io_mock = _run_check("wrong", "zoid6")
+    assert ok is False
+    text = " ".join(str(c.args[0]) for c in io_mock.echo.call_args_list)
+    assert "wrong" in text and "zoid6" in text and "no token written" in text
 
 
 @pytest.mark.unit
-def test_instance_requested_but_no_bed_name_is_an_error():
-    with patch.object(auth.io, "echo") as echo:
-        assert auth._check_instance(_args("zoid6"), {"ok": True}) is False
-    assert any("no bed_name" in str(c.args[0]) for c in echo.call_args_list)
+def test_bed_without_a_name_is_refused_when_instance_is_given():
+    ok, io_mock = _run_check("zoid6", None)
+    assert ok is False
+    assert any("sent no name" in str(c.args[0]) for c in io_mock.echo.call_args_list)
 
 
 @pytest.mark.unit
-def test_without_instance_login_proceeds_and_reports_the_bed():
-    with patch.object(auth.io, "echo") as echo:
-        assert auth._check_instance(_args(None), {"ok": True, "bed_name": "zoid6"}) is True
-    assert any("reached bed_name=zoid6" in str(c.args[0]) for c in echo.call_args_list)
+def test_no_instance_reports_the_bed_and_proceeds():
+    ok, io_mock = _run_check(None, "zoid6")
+    assert ok is True
+    assert any("reached bed zoid6" in str(c.args[0]) for c in io_mock.echo.call_args_list)
 
 
 @pytest.mark.unit
-def test_refusal_stops_before_any_token_is_persisted():
-    reply = {"ok": True, "bed_name": "bed", "token": "t"}
-    with patch.object(auth, "_persist_token") as persist, \
-         patch.object(auth, "_collect_credentials", return_value=("jam", "pw")), \
-         patch.object(auth, "_auth_service") as svc, \
-         patch.object(auth, "run_with_connection", return_value=reply), \
-         patch.object(auth, "_ensure_token_file_arg"), \
-         patch.object(auth, "_reject_malformed_token_response", return_value=False), \
-         patch.object(auth.io, "echo"):
-        svc.return_value = SimpleNamespace(_conn=None, login=lambda m, p: reply)
-        assert auth.auth_login(SimpleNamespace(instance="zoid6", subcommand="login")) is False
-    persist.assert_not_called()
+def test_instance_is_a_shared_client_option():
+    import argparse
+    from bed.tools import _routing
+    p = argparse.ArgumentParser()
+    _routing.build_client_args(p)
+    assert p.parse_args(["--instance", "zoid6"]).instance == "zoid6"
 
 
 @pytest.mark.unit
