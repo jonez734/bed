@@ -69,3 +69,31 @@ def test_require_registration_defaults_to_true_and_is_refused_when_not_bool(monk
     assert seen == [True, False]
     with pytest.raises(ValueError):
         bm._apply_registration_config({"require_registration": "yes"})
+
+
+@pytest.mark.unit
+def test_valid_token_sets_caller_from_its_claims():
+    msg = {"type": "jargon_create", "token": "good"}
+    set_caller(msg, None, verify_token=lambda t: ({"moniker": "jam", "is_sysop": True}, None))
+    assert msg["_caller"] == {"moniker": "jam", "is_sysop": True}
+
+
+@pytest.mark.unit
+def test_invalid_token_leaves_caller_empty_even_with_a_bound_session():
+    msg = {"type": "jargon_create", "token": "bad"}
+    set_caller(msg, _state("alice"), verify_token=lambda t: (None, {"code": "token_invalid"}))
+    assert msg["_caller"] == {}
+
+
+@pytest.mark.unit
+def test_no_token_falls_back_to_the_bound_session():
+    msg = {"type": "jargon_create"}
+    set_caller(msg, _state("alice"), verify_token=lambda t: ({"moniker": "x"}, None))
+    assert msg["_caller"] == {"moniker": "alice", "is_sysop": False}
+
+
+@pytest.mark.unit
+def test_forged_caller_is_stripped_when_token_is_invalid():
+    msg = {"type": "jargon_create", "token": "bad", "_caller": {"moniker": "root", "is_sysop": True}}
+    set_caller(msg, None, verify_token=lambda t: (None, {"code": "token_invalid"}))
+    assert msg["_caller"] == {}

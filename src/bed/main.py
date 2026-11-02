@@ -1021,6 +1021,22 @@ class BED:
 
             session_registry = self._session_registry
 
+            def _verify_wire_token(token: str):
+                """Verify a per-message token the same way bank does: signature, store, instance, expiry.
+
+                Returns (claims, None) for a valid token, (None, error_envelope) for an invalid one. A server
+                without token wiring returns (None, None), so the caller falls back to the bound session.
+                """
+                from bed.api.bank import _validate_token_against_store
+
+                class _Ref:
+                    secret = getattr(self.auth_service, "secret", None)
+                    token_store = self.token_store
+                    instance_id = getattr(self.auth_service, "instance_id", None)
+                    _now = None
+
+                return _validate_token_against_store(_Ref(), token)
+
             async def _pre_dispatch(websocket: Any, message: Dict[str, Any]) -> None:
                 # Pre-dispatch runs BEFORE the service handler. Its only
                 # job is to install the right PostgreSQL role for the
@@ -1038,7 +1054,8 @@ class BED:
                 # Identity for every service. The client cannot set _caller: whatever it sent is
                 # removed, and _caller is filled only from the session bed bound to this socket.
                 # A socket with no bound session gets an empty _caller, so services refuse writes.
-                set_caller(message, state)
+                # An invalid token leaves _caller empty, so the service refuses the write as unauthenticated.
+                set_caller(message, state, verify_token=_verify_wire_token)
 
             async def _post_dispatch(
                 websocket: Any,
@@ -1350,14 +1367,27 @@ def get_restart_config(
     return autorestart, restart_delay, max_restarts, restart_on_bind_failure
 
 
-def set_caller(message: Dict[str, Any], state: Any) -> None:
-    """Set ``message["_caller"]`` for a service from the session bed bound to the socket.
+def set_caller(message: Dict[str, Any], state: Any, verify_token: Any = None) -> None:
+    """Set ``message["_caller"]`` for a service. Generic: applies to every message type.
 
-    Generic: applies to every message type, so no service or module is named here. Any ``_caller`` the
-    client sent is removed first. An unbound socket (no session) gets an empty dict, which services must
+    Any ``_caller`` the client sent is removed first. If the message carries a ``token``, it is verified with
+    ``verify_token(token)`` (bed's token store, the same check bank uses): a valid token sets ``_caller`` from
+    its claims, and an invalid one is refused with the error envelope returned. With no token, ``_caller``
+    comes from the session bound to the socket. An unbound socket gets an empty dict, which services must
     treat as unauthenticated.
+
+    A token that fails verification leaves ``_caller`` empty; the service then refuses the write.
     """
     message.pop("_caller", None)
+    token = (message.get("token") or "").strip()
+    if token and verify_token is not None:
+        claims, err = verify_token(token)
+        if err is not None:
+            message["_caller"] = {}
+            return
+        if claims is not None:
+            message["_caller"] = {"moniker": claims.get("moniker"), "is_sysop": bool(claims.get("is_sysop"))}
+            return
     if state is None:
         message["_caller"] = {}
         return
