@@ -112,6 +112,13 @@ class TestBedStartupMain(unittest.IsolatedAsyncioTestCase):
         from bed.startup import main, BED_ROLE
 
         mock_startuplib.runmodule.return_value = True
+        # bed_obj is tested on its own (test_bed_obj_role.py); stub it here.
+        obj_patch = patch("bed.startup._ensure_owner_obj_role", return_value=True)
+        obj_patch.start()
+        self.addCleanup(obj_patch.stop)
+        status_patch = patch("bed.startup._report_bed_status", return_value=True)
+        status_patch.start()
+        self.addCleanup(status_patch.stop)
         mock_startuplib.buildargs.return_value = MagicMock()
 
         mock_pool = MagicMock()

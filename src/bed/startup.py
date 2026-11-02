@@ -54,6 +54,39 @@ def _ensure_bed_token_table(args, conn):
     return True
 
 
+OWNER_OBJ_ROLE = "bed_obj"
+
+
+def _ensure_owner_obj_role(args, conn):
+    """Create the NOLOGIN ``bed_obj`` owner role if it does not exist. Idempotent.
+
+    Owns bed's objects once zoid6's owner step has transferred them. NOSUPERUSER,
+    NOCREATEDB, NOCREATEROLE, NOLOGIN, INHERIT, matching casino_obj.
+    """
+    io.echo(
+        f"{{var:labelcolor}}role {{var:valuecolor}}{OWNER_OBJ_ROLE}{{var:labelcolor}}: ",
+        end="",
+    )
+    if database.rolexists(args, OWNER_OBJ_ROLE, conn=conn) is False:
+        io.echo("create ", end="")
+        if database.createrol(
+            args,
+            OWNER_OBJ_ROLE,
+            conn=conn,
+            superuser=False,
+            login=False,
+            inherit=True,
+            createdb=False,
+            createrole=False,
+        ) is False:
+            io.echo(f"{{level.error}} fail ", level="error")
+            return False
+        io.echo(f"{{level.ok}} ok  ")
+    else:
+        io.echo(f"{{level.ok}} ok  ", level="ok")
+    return True
+
+
 def _ensure_bed_role(args, conn):
     """Create the ``bed`` role with LOGIN if it does not exist, and grant
     it USAGE on the ``engine`` schema."""
@@ -188,6 +221,10 @@ def ensure_startup(args):
     try:
         with database.connect(args, pool=pool) as conn:
             ok = _ensure_bed_role(args, conn)
+            if not _ensure_owner_obj_role(args, conn):
+                conn.rollback()
+                io.echo("bed_obj owner role setup failed", level="error")
+                return False
             if not ok:
                 conn.rollback()
                 io.echo("bed role setup failed", level="error")

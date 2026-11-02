@@ -43,6 +43,8 @@ def test_install_runs_full_bootstrap():
          patch.object(bedstartup.database, "getpool") as getpool, \
          patch.object(bedstartup.database, "connect") as connect, \
          patch.object(bedstartup, "_ensure_bed_role", return_value=True), \
+         patch.object(bedstartup, "_ensure_owner_obj_role", return_value=True), \
+         patch.object(bedstartup, "_report_bed_status", return_value=True), \
          patch.object(bedstartup, "verify_install") as verify:
         connect.return_value.__enter__.return_value = MagicMock()
         assert bedstartup.ensure_startup(args) is True
