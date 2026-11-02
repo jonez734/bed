@@ -1021,6 +1021,10 @@ class BED:
                 # session (auth, reconnect) must not run under the role a previous
                 # request left behind.
                 set_current_role(role_for_session(state))
+                # Identity for every service. The client cannot set _caller: whatever it sent is
+                # removed, and _caller is filled only from the session bed bound to this socket.
+                # A socket with no bound session gets an empty _caller, so services refuse writes.
+                set_caller(message, state)
 
             async def _post_dispatch(
                 websocket: Any,
@@ -1330,6 +1334,20 @@ def get_restart_config(
         )
 
     return autorestart, restart_delay, max_restarts, restart_on_bind_failure
+
+
+def set_caller(message: Dict[str, Any], state: Any) -> None:
+    """Set ``message["_caller"]`` for a service from the session bed bound to the socket.
+
+    Generic: applies to every message type, so no service or module is named here. Any ``_caller`` the
+    client sent is removed first. An unbound socket (no session) gets an empty dict, which services must
+    treat as unauthenticated.
+    """
+    message.pop("_caller", None)
+    if state is None:
+        message["_caller"] = {}
+        return
+    message["_caller"] = {"moniker": state.moniker, "is_sysop": bool(state.is_sysop)}
 
 
 def role_for_session(state: Any) -> Optional[str]:
