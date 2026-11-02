@@ -22,7 +22,7 @@ import os
 import sys
 from typing import Any, Optional
 
-from bbsengine6 import io
+from bbsengine6 import io, bottombar
 from bbsengine6.util import inputpassword
 
 from bed.client.authservice import BedAuthServiceClient
@@ -59,6 +59,12 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         "--token",
         default=None,
         help="Existing bearer token (overrides --token-file)",
+    )
+    common.add_argument(
+        "--instance",
+        default=None,
+        metavar="NAME",
+        help="Refuse unless the bed that answers reports this bed_name (for example zoid6)",
     )
     _token.build_token_file_arg(common)
     sub.add_parser("login", parents=[common], help="Issue a fresh bearer token")
@@ -300,7 +306,37 @@ def auth_login(args) -> bool:
         return False
     if _reject_malformed_token_response(reply):
         return False
+    if not _check_instance(args, reply):
+        return False
     return _persist_token(reply, args)
+
+
+def _check_instance(args, reply: dict) -> bool:
+    """Verify the answering bed is the instance the operator asked for, before any token is written.
+
+    With ``--instance NAME`` the reply's ``bed_name`` must equal NAME. A mismatch, or a reply with no
+    ``bed_name``, is refused and no token is written. Without ``--instance`` the login proceeds, and the
+    bed that answered is printed so the operator can see which instance it reached.
+    """
+    reached = reply.get("bed_name")
+    wanted = (getattr(args, "instance", None) or "").strip()
+    if not wanted:
+        io.echo(f"auth: reached bed_name={reached or '<none>'}")
+        return True
+    if not reached:
+        io.echo(
+            f"auth: --instance {wanted} requested, but the bed reported no bed_name; refusing",
+            level="error",
+        )
+        return False
+    if reached != wanted:
+        io.echo(
+            f"auth: --instance {wanted} requested, but the bed that answered is {reached!r}; "
+            "refusing and writing no token",
+            level="error",
+        )
+        return False
+    return True
 
 
 def auth_reconnect(args) -> bool:
@@ -384,6 +420,19 @@ def auth_revoke(args) -> bool:
     return True
 
 
+# Set the terminal scroll region once per process, before the first bottombar paint. Same guard
+# pattern as bank.py's _ensure_screen_initialized, using the non-deprecated bottombar.init().
+_bottombar_initialized: bool = False
+
+
+def _ensure_bottombar_initialized() -> None:
+    """Call ``bottombar.init()`` exactly once per process."""
+    global _bottombar_initialized
+    if not _bottombar_initialized:
+        bottombar.init()
+        _bottombar_initialized = True
+
+
 def main_with_args(args) -> Optional[bool]:
     """Run the auth subcommand against a pre-parsed args object.
 
@@ -404,6 +453,8 @@ def main_with_args(args) -> Optional[bool]:
     if getattr(args, "direct", False):
         io.echo(_DIRECT_UNSUPPORTED_MSG, level="error")
         return False
+
+    _ensure_bottombar_initialized()
 
     try:
         _routing.select_backend(args)
