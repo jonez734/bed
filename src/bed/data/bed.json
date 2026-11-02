@@ -1,5 +1,6 @@
 {
   "tz": "America/New_York",
+  "require_registration": true,
   "bed": {
     "name": "bed",
     "autorestart": false,

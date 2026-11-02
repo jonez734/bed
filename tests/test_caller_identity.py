@@ -54,3 +54,18 @@ def test_no_module_names_in_the_generic_hook():
     body = text[start:text.index("def role_for_session(")]
     for name in ("jargon", "casino", "empyre", "zoid6"):
         assert name not in body.lower()
+
+
+@pytest.mark.unit
+def test_require_registration_defaults_to_true_and_is_refused_when_not_bool(monkeypatch):
+    """bed requires registration by default; a non-boolean value is refused, not coerced."""
+    import importlib
+    from bbsengine6 import module
+    bm = importlib.import_module("bed.main")
+    seen = []
+    monkeypatch.setattr(module, "set_require_registration", lambda v: seen.append(v))
+    bm._apply_registration_config({})
+    bm._apply_registration_config({"require_registration": False})
+    assert seen == [True, False]
+    with pytest.raises(ValueError):
+        bm._apply_registration_config({"require_registration": "yes"})

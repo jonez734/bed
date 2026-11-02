@@ -679,6 +679,20 @@ def _apply_session_config(cfg: dict) -> None:
 DEFAULT_LOCAL_TZ = "America/New_York"
 
 
+def _apply_registration_config(cfg: dict) -> None:
+    """Apply the top-level ``require_registration`` key: when true, module.check refuses any module that has
+    not called register().
+
+    Absent key: True. Registration is required by default, so a program that is not registered is not loaded.
+    """
+    required = cfg.get("require_registration", True)
+    if not isinstance(required, bool):
+        raise ValueError("require_registration must be true or false")
+    from bbsengine6 import module as _bbs_module
+
+    _bbs_module.set_require_registration(required)
+
+
 def _apply_tz_config(cfg: dict) -> None:
     """Apply the top-level ``tz`` key as the default member time zone.
 
@@ -1586,6 +1600,7 @@ async def main_async() -> None:
     import atexit
     atexit.register(_close_startup_log)
     _apply_tz_config(loaded_config)
+    _apply_registration_config(loaded_config)
     _apply_message_config(loaded_config)
     _apply_session_config(loaded_config)
     _apply_bank_config(loaded_config)
