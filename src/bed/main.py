@@ -676,6 +676,23 @@ def _apply_session_config(cfg: dict) -> None:
     _bbs_session.configure(idle_minutes=minutes)
 
 
+DEFAULT_LOCAL_TZ = "America/New_York"
+
+
+def _apply_tz_config(cfg: dict) -> None:
+    """Apply the top-level ``tz`` key as the default member time zone.
+
+    Absent key: America/New_York. The value is checked against Postgres's zone list when the database is
+    reachable; here it is only required to be a non-empty string.
+    """
+    tz = cfg.get("tz", DEFAULT_LOCAL_TZ)
+    if not isinstance(tz, str) or not tz.strip():
+        raise ValueError("tz must be a non-empty string (for example America/New_York)")
+    from bbsengine6 import member as _bbs_member
+
+    _bbs_member.configure_default_tz(tz)
+
+
 def _apply_message_config(cfg: dict) -> None:
     """Apply ``message.*`` policy from a loaded config to bbsengine6.message.
 
@@ -1550,6 +1567,7 @@ async def main_async() -> None:
     _open_startup_log(args)
     import atexit
     atexit.register(_close_startup_log)
+    _apply_tz_config(loaded_config)
     _apply_message_config(loaded_config)
     _apply_session_config(loaded_config)
     _apply_bank_config(loaded_config)
