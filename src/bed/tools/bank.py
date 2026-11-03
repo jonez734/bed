@@ -968,9 +968,9 @@ def _main_with_args_run(args) -> None:
     try:
         menu(args, moniker)
     except KeyboardInterrupt:
-        io.echo("{/all}{restorecursor}*INTR*")
+        io.echo("{/all}*INTR*{restorecursor}")
     except EOFError:
-        io.echo("{/all}{restorecursor}*EOF*")
+        io.echo("{/all}*EOF*{restorecursor}")
     except BedUnavailable as e:
         io.echo(str(e), level="error")
 

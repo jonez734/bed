@@ -476,10 +476,10 @@ def _main_with_args_run(args) -> Optional[bool]:
         if sub == "revoke":
             return auth_revoke(args)
     except KeyboardInterrupt:
-        io.echo("{/all}{restorecursor}*INTR*")
+        io.echo("{/all}*INTR*{restorecursor}")
         return False
     except EOFError:
-        io.echo("{/all}{restorecursor}*EOF*")
+        io.echo("{/all}*EOF*{restorecursor}")
         return False
     except BedUnavailable as e:
         io.echo(str(e), level="error")
