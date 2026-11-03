@@ -220,7 +220,7 @@ def _collect_credentials(args) -> tuple[str, str]:
     moniker = (getattr(args, "moniker", None) or "").strip()
     if not moniker:
         moniker = io.inputstring(
-            "{var:promptcolor}moniker: {var:inputcolor}", "", args=args
+            "{var:promptcolor}moniker: {var:inputcolor}", "", args=args, bottombar=False
         ).strip()
     if not moniker:
         io.echo("moniker is required", level="error")
@@ -228,7 +228,7 @@ def _collect_credentials(args) -> tuple[str, str]:
     password = (getattr(args, "password", None) or "").strip()
     if not password:
         password = inputpassword(
-            "{var:promptcolor}password: {var:inputcolor}", args=args
+            "{var:promptcolor}password: {var:inputcolor}", args=args, bottombar=False
         ).strip()
     if not password:
         io.echo("password is required", level="error")
@@ -454,7 +454,7 @@ def _main_with_args_run(args) -> Optional[bool]:
         io.echo(_DIRECT_UNSUPPORTED_MSG, level="error")
         return False
 
-    _ensure_bottombar_initialized()
+##    _ensure_bottombar_initialized()
 
     try:
         _routing.select_backend(args)
