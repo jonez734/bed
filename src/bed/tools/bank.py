@@ -983,7 +983,7 @@ def main_with_args(args):
     try:
         return _main_with_args_run(args)
     finally:
-        getattr(_bottombar, "_clear_margins", lambda m: getattr(m, "clear", lambda: None)())(_bottombar)
+        _bottombar.shutdown()
 
 
 def main() -> None:
