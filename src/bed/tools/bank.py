@@ -932,7 +932,7 @@ def menu(args, moniker: str) -> bool:
     return True
 
 
-def main_with_args(args) -> None:
+def _main_with_args_run(args) -> None:
     """Run the bank menu loop against a pre-parsed args object.
 
     Split out from ``main()`` so tests can drive the menu without
@@ -952,6 +952,11 @@ def main_with_args(args) -> None:
         io.echo(str(e), level="error")
         return
 
+    from bed.tools.auth import _check_instance_name
+
+    if not _check_instance_name(args):
+        return
+
     if getattr(args, "_backend", "") == "bed":
         if not _authenticate_ws(args):
             return
@@ -968,6 +973,17 @@ def main_with_args(args) -> None:
         io.echo("{/all}{restorecursor}*EOF*")
     except BedUnavailable as e:
         io.echo(str(e), level="error")
+
+
+
+
+def main_with_args(args):
+    """Run the tool, then restore the full screen (clears the bottombar scroll margins) on any exit."""
+    from bbsengine6 import bottombar as _bottombar
+    try:
+        return _main_with_args_run(args)
+    finally:
+        getattr(_bottombar, "_clear_margins", lambda m: getattr(m, "clear", lambda: None)())(_bottombar)
 
 
 def main() -> None:

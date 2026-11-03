@@ -433,7 +433,7 @@ def _check_instance_name(args) -> bool:
     return True
 
 
-def main_with_args(args) -> Optional[bool]:
+def _main_with_args_run(args) -> Optional[bool]:
     """Run the auth subcommand against a pre-parsed args object.
 
     Split out from ``main()`` so tests can drive the CLI without going
@@ -486,6 +486,17 @@ def main_with_args(args) -> Optional[bool]:
         return False
     io.echo(f"unknown subcommand {sub!r}", level="error")
     return False
+
+
+
+
+def main_with_args(args):
+    """Run the tool, then restore the full screen (clears the bottombar scroll margins) on any exit."""
+    from bbsengine6 import bottombar as _bottombar
+    try:
+        return _main_with_args_run(args)
+    finally:
+        getattr(_bottombar, "_clear_margins", lambda m: getattr(m, "clear", lambda: None)())(_bottombar)
 
 
 def main() -> None:
