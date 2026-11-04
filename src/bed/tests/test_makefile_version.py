@@ -1,6 +1,6 @@
 """bed's Makefile version targets use the shared unique build version.
 
-Every project uses <prefix>YYYYMMDDHHMMSS, with the prefix 0.0.3.dev and the shared
+Every project uses <prefix>YYYYMMDDHHMMSS, with the prefix 0.5.0.dev and the shared
 scripts/next_version.sh in the meta-repo. A minute-resolution date stamp lets two builds
 share a name, which is what these tests guard against. The deploy alias and the bbsengine6
 build that deploy-venv runs first are also checked.
@@ -29,11 +29,11 @@ def test_version_is_not_minute_resolution():
 
 
 @pytest.mark.unit
-def test_version_prefix_is_0_0_2_dev():
+def test_version_prefix_is_0_5_0_dev():
     text = _text()
-    assert "0.0.3.dev" in text
-    assert "0.0.1.dev" not in text
-    assert "0.0.2.dev" not in text
+    assert "0.5.0.dev" in text
+    assert "0.4.0.dev" not in text
+    assert "0.0.3.dev" not in text
 
 
 @pytest.mark.unit
