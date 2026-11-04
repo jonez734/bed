@@ -7,6 +7,7 @@
 #   whiteboard_edit     {"id", "entry", "status"}     -> whiteboard_edit   {"id"}
 #   whiteboard_claim    {"id"}                        -> whiteboard_claim  {"id"}
 #   whiteboard_unclaim  {"id"}                        -> whiteboard_unclaim {"id"}
+#   whiteboard_rm       {"id"}                        -> whiteboard_rm     {"id"}
 #
 # bed holds no table privileges on the whiteboard tables. Each op calls engine.whiteboard_op with the
 # SHA-256 digest of the bearer token; the acting moniker comes from the verified token row, never from
@@ -34,6 +35,7 @@ _TYPE_TO_OP: Dict[str, Tuple[str, str]] = {
     "whiteboard_edit": ("edit", "whiteboard_edit"),
     "whiteboard_claim": ("claim", "whiteboard_claim"),
     "whiteboard_unclaim": ("unclaim", "whiteboard_unclaim"),
+    "whiteboard_rm": ("rm", "whiteboard_rm"),
 }
 
 
