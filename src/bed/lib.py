@@ -285,6 +285,14 @@ def buildargs(parentparser: argparse.ArgumentParser) -> None:
         "casino_create_table / casino_update_table / casino_join_table / casino_leave_table).",
     )
     parentparser.add_argument(
+        "--no-whiteboard-service",
+        dest="no_whiteboard_service",
+        action="store_true",
+        default=False,
+        help="Disable the in-process WhiteboardService (bed-native handler for "
+        "whiteboard_list / whiteboard_add / whiteboard_edit / whiteboard_claim / whiteboard_unclaim).",
+    )
+    parentparser.add_argument(
         "--no-bank-service",
         dest="no_bank_service",
         action="store_true",

@@ -27,6 +27,7 @@ from .api import (
     AuthService,
     BankService,
     CasinoService,
+    WhiteboardService,
     InMemoryTokenStore,
     DBTokenStore,
     MessageService,
@@ -70,6 +71,7 @@ def _get_bed_defaults() -> dict:
         "credential_provider": parser.get_default("credential_provider"),
         "no_message_service": parser.get_default("no_message_service"),
         "no_bank_service": parser.get_default("no_bank_service"),
+        "no_whiteboard_service": parser.get_default("no_whiteboard_service"),
     }
     return _BED_DEFAULTS
 
@@ -802,6 +804,7 @@ class BED:
         self.message_service: Optional[MessageService] = None
         self._message_listener_task: Optional[asyncio.Task] = None
         self.bank_service: Optional[BankService] = None
+        self.whiteboard_service: Optional[WhiteboardService] = None
         self.casino_service: Optional[Any] = None
         self._ping_service: Optional[PingService] = None
         self._session_registry: Optional[SessionRegistry] = None
@@ -1006,6 +1009,21 @@ class BED:
                     db_args, self._session_registry, **casino_kwargs
                 )
                 self.casino_service.register_all(self.server)
+
+            # Whiteboard ops (whiteboard_list, whiteboard_add, ...). Same token wiring as casino; the
+            # authorisation lives in engine.whiteboard_op.
+            if not getattr(self.args, "no_whiteboard_service", False):
+                wb_kwargs: Dict[str, Any] = {}
+                if self.auth_service is not None and self.token_store is not None:
+                    wb_kwargs = {
+                        "secret": getattr(self.auth_service, "secret", None),
+                        "token_store": self.token_store,
+                        "instance_id": getattr(self.auth_service, "instance_id", None),
+                    }
+                self.whiteboard_service = WhiteboardService(
+                    db_args, self._session_registry, **wb_kwargs
+                )
+                self.whiteboard_service.register_all(self.server)
 
             # PingService is registered LAST so its ``["ping"]`` entry
             # overwrites whatever the router (or bbsengine6's built-in
