@@ -33,6 +33,25 @@ The `bed` account is created by `systemd-sysusers` from `src/bed/daemon/bed.sysu
 getent passwd bed
 ```
 
+**Read utmp** (operator, with sudo; needed for the remote-address lookup): bed reads the login
+accounting file `/run/utmp` to find the address a member connected from. That file is group
+`utmp`, so the service account must be in that group. Run this as **root or with sudo** after the
+account exists:
+
+```
+sudo usermod -aG utmp bed
+```
+
+The change applies to new sessions only, so restart the service afterwards (section 7). Verify:
+
+```
+id bed
+sudo -u bed test -r /run/utmp && echo "utmp readable"
+```
+
+If `usermod` fails (no root, or no `utmp` group on this host), bed still runs. Remote addresses
+then come from the `SSH_CONNECTION` environment variable instead of utmp.
+
 Expected: home `/home/bed`, shell `/usr/sbin/nologin`. If the home is `/var/lib/bed`, the account
 predates the move; change it with **root**:
 
