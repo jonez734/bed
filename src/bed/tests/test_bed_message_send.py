@@ -63,9 +63,9 @@ def test_security_definer_with_pinned_search_path():
     assert re.search(r"SET\s+search_path\s*=\s*engine\s*,\s*public\s*,\s*pg_temp", text, re.IGNORECASE)
 
 
-def test_owned_by_zoid6_and_execute_only_to_bed():
+def test_sets_no_owner_and_execute_only_to_bed():
     text = _text()
-    assert re.search(r"OWNER\s+TO\s+zoid6", text, re.IGNORECASE)
+    assert not re.search(r"OWNER\s+TO\s", text, re.IGNORECASE)
     assert re.search(r"REVOKE\s+ALL\s+ON\s+FUNCTION\s+engine\.bed_message_send\(.*?\)\s+FROM\s+PUBLIC", text, re.IGNORECASE | re.DOTALL)
     assert re.search(r"GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+engine\.bed_message_send\(.*?\)\s+TO\s+bed", text, re.IGNORECASE | re.DOTALL)
 

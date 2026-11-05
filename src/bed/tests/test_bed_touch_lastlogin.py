@@ -37,11 +37,11 @@ def test_touch_function_returns_previous_value_and_sets_now():
 
 
 @pytest.mark.unit
-def test_touch_function_is_definer_owned_by_zoid6_and_execute_only_to_bed():
+def test_touch_function_is_definer_sets_no_owner_and_execute_only_to_bed():
     t = _code(SQL.read_text())
     assert re.search(r"REVOKE\s+ALL\s+ON\s+FUNCTION\s+engine\.bed_touch_lastlogin\(.*?\)\s+FROM\s+PUBLIC", t, re.IGNORECASE | re.DOTALL)
     assert re.search(r"GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+engine\.bed_touch_lastlogin\(.*?\)\s+TO\s+bed", t, re.IGNORECASE | re.DOTALL)
-    assert re.search(r"OWNER\s+TO\s+zoid6", t, re.IGNORECASE)
+    assert not re.search(r"OWNER\s+TO\s", t, re.IGNORECASE)
 
 
 @pytest.mark.unit

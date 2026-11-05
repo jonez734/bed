@@ -35,9 +35,9 @@ def test_wrapper_defined_as_definer_with_fixed_path_and_correct_argument_order()
     assert re.search(r"engine\.checkmemberflag\(\s*'sysop'\s*,\s*p_moniker::text\s*\)", text, re.IGNORECASE)
 
 
-def test_wrapper_owned_by_zoid6_and_execute_only_to_bed():
+def test_wrapper_sets_no_owner_and_execute_only_to_bed():
     text = _code((SQL_DIR / "bed_sysop_check.sql").read_text())
-    assert re.search(r"OWNER\s+TO\s+zoid6", text, re.IGNORECASE)
+    assert not re.search(r"OWNER\s+TO\s", text, re.IGNORECASE)
     assert re.search(r"REVOKE\s+ALL\s+ON\s+FUNCTION\s+engine\.bed_is_sysop\(citext\)\s+FROM\s+PUBLIC", text, re.IGNORECASE)
     assert re.search(r"GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+engine\.bed_is_sysop\(citext\)\s+TO\s+bed", text, re.IGNORECASE)
 
@@ -56,14 +56,13 @@ def test_install_runs_wrapper_before_send():
     assert src.index('"bed_sysop_check.sql"') < src.index('"bed_message_send.sql"')
 
 
-def test_wrapper_runs_checkmemberflag_as_zoid6_owner():
+def test_wrapper_is_definer_for_checkmemberflag_reads():
     # checkmemberflag is not SECURITY DEFINER. Its reads of member_flag, member
     # and map_member_flag run with the rights of whoever calls it. The wrapper
     # is definer, so those reads run as its owner, zoid6. That only works if
     # zoid6 owns every relation checkmemberflag reads.
     text = _code((SQL_DIR / "bed_sysop_check.sql").read_text())
     assert "SECURITY DEFINER" in text
-    assert re.search(r"OWNER\s+TO\s+zoid6", text, re.IGNORECASE)
 
 
 def test_owner_migration_covers_every_relation_checkmemberflag_reads():

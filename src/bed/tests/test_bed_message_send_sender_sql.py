@@ -126,12 +126,10 @@ def test_owner_revoke_and_grant_all_name_the_six_argument_signature():
         assert six.search(stmt), f"{head} statement does not name the 6-argument signature: {stmt[:90]}"
 
 
-def test_alter_owner_is_the_six_argument_function():
-    assert re.search(
-        r"ALTER\s+FUNCTION\s+engine\.bed_message_send\(bytea,\s*text,\s*text,\s*text,\s*citext\[\],\s*citext\)\s+OWNER\s+TO\s+zoid6",
-        _text(),
-        re.IGNORECASE,
-    )
+def test_six_argument_function_sets_no_owner():
+    # Ownership moved to the install owner step (commit 925a972); bed's SQL sets no owner
+    # for any signature, including the six-argument bed_message_send.
+    assert not re.search(r"OWNER\s+TO\s", _text(), re.IGNORECASE)
 
 
 def test_revoke_from_public_is_the_six_argument_function():

@@ -36,9 +36,9 @@ def test_table_is_created_by_install_not_lazily():
     assert not (Path(bed.__file__).parent / "data" / "sql" / "bed_token.sql").exists()
 
 
-def test_table_owned_by_zoid6():
+def test_table_sets_no_owner():
     text = _code_lines(SQL.read_text())
-    assert re.search(r"ALTER\s+TABLE\s+engine\.__bed_token\s+OWNER\s+TO\s+zoid6", text, re.IGNORECASE)
+    assert not re.search(r"OWNER\s+TO\s", text, re.IGNORECASE)
 
 
 def test_bed_gets_no_table_privileges():

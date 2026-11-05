@@ -44,10 +44,9 @@ def test_security_definer_with_pinned_search_path():
     assert len(re.findall(r"SET\s+search_path\s*=\s*engine\s*,\s*public\s*,\s*pg_temp", text, re.IGNORECASE)) == 4
 
 
-def test_functions_owned_by_zoid6():
+def test_functions_set_no_owner():
     text = _text()
-    for name in ("bed_token_put", "bed_token_get", "bed_token_delete"):
-        assert re.search(rf"ALTER\s+FUNCTION\s+engine\.{name}\(.*?\)\s+OWNER\s+TO\s+zoid6", text, re.IGNORECASE | re.DOTALL), name
+    assert not re.search(r"OWNER\s+TO\s", text, re.IGNORECASE)
 
 
 def test_execute_granted_to_bed_only_and_public_revoked():
@@ -70,7 +69,7 @@ def test_gc_function_defined_and_granted():
     text = _text()
     assert re.search(r"CREATE\s+OR\s+REPLACE\s+FUNCTION\s+engine\.bed_token_gc\(", text, re.IGNORECASE)
     assert re.search(r"GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+engine\.bed_token_gc\(.*?\)\s+TO\s+bed", text, re.IGNORECASE | re.DOTALL)
-    assert re.search(r"OWNER\s+TO\s+zoid6", text, re.IGNORECASE)
+    assert not re.search(r"OWNER\s+TO\s", text, re.IGNORECASE)
 
 
 def test_store_gc_calls_function_not_table():

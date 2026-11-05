@@ -117,11 +117,11 @@ def test_failed_login_records_login_failed_through_its_own_function():
     assert "_record_login_failed(" in src
 
 
-def test_definer_functions_are_zoid6_owned_and_bed_executable_only():
+def test_definer_functions_set_no_owner_and_bed_executable_only():
     for name in ("bed_client_exit_functions.sql", "bed_login_failed_functions.sql"):
         t = (SQL_DIR / name).read_text()
         assert "SECURITY DEFINER" in t
-        assert "OWNER TO zoid6" in t
+        assert "OWNER TO" not in t.upper()
         assert "TO bed;" in t
         assert "FROM PUBLIC" in t
 

@@ -59,9 +59,10 @@ def test_security_definer_with_fixed_search_path():
     assert re.search(r"SET\s+search_path\s*=\s*engine\s*,\s*public\s*,\s*pg_temp", t, re.IGNORECASE)
 
 
-def test_owned_by_zoid6_and_execute_only_to_bed():
+def test_sets_no_owner_and_execute_only_to_bed():
+    # Ownership moved to the install owner step (commit 925a972); bed's SQL sets no owner.
     t = _text()
-    assert re.search(r"OWNER\s+TO\s+zoid6", t, re.IGNORECASE)
+    assert not re.search(r"OWNER\s+TO\s", t, re.IGNORECASE)
     assert re.search(r"REVOKE\s+ALL\s+ON\s+FUNCTION\s+engine\.bed_bank_balance\(.*?\)\s+FROM\s+PUBLIC", t, re.IGNORECASE | re.DOTALL)
     assert re.search(r"GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+engine\.bed_bank_balance\(.*?\)\s+TO\s+bed", t, re.IGNORECASE | re.DOTALL)
 

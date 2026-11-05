@@ -56,11 +56,11 @@ def test_unknown_op_is_refused():
 
 
 @pytest.mark.unit
-def test_security_definer_owned_by_zoid6_and_search_path_pinned():
+def test_security_definer_sets_no_owner_and_search_path_pinned():
     t = _code(SQL.read_text()).lower()
     assert "security definer" in t
     assert "set search_path" in t
-    assert "owner to zoid6" in t
+    assert "owner to" not in t.lower()
 
 
 @pytest.mark.unit
