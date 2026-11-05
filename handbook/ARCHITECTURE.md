@@ -192,6 +192,23 @@ opened.
 A receive task stops when `aclose()` runs. A redial that is in flight when a
 stop is requested closes the socket it dials, rather than keeping it.
 
+### Terminal report
+
+`BedConnection(args, probe_terminal=None)` can report this process's terminal to bed.
+`probe_terminal` defaults to off. `None` reads `args.probe_terminal`, and only a real `True`
+enables it, so a mock or a namespace without the attribute never runs a terminal query.
+
+When on, the connection sends one `terminal_caps` message (see
+`bbsengine6/specs/net-layer.md`) with the result of `bbsengine6.io.terminal.terminal_report()`:
+
+- The first connection reports before the receive loop starts, so `send()` can read the reply.
+- A reconnect reports from a separate task, never from inside the receive loop. The server
+  drops the old report when its socket closed.
+- The report runs in a worker thread, so the event loop keeps running. A failure is logged and
+  never raised: the report is advisory and must not break the connection.
+
+One-shot credential checks (`casino/auth.py`) pass `probe_terminal=False`.
+
 ## 6. See also
 
 - `handbook/BED_AUTH.md` — bearer-token wire protocol.
