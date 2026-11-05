@@ -58,8 +58,14 @@ class _RequestId:
 class BedConnection:
     """Single shared WebSocket connection to a bed daemon."""
 
-    def __init__(self, args: Any) -> None:
+    def __init__(self, args: Any, probe_terminal: Optional[bool] = None) -> None:
         self._args = args
+        # Report this process's terminal to bed on connect. ``None`` reads
+        # ``args.probe_terminal``; only a real bool enables it, so a mock or a
+        # namespace without the attribute never triggers a terminal query.
+        if probe_terminal is None:
+            probe_terminal = getattr(args, "probe_terminal", False)
+        self._probe_terminal = probe_terminal is True
         self._ws: Optional[Any] = None
         self._lock: Optional[asyncio.Lock] = None
         self._request_ids = _RequestId()
@@ -102,6 +108,31 @@ class BedConnection:
             raise BedUnavailable(
                 f"cannot connect to {self._ws_url()}: {exc}"
             ) from exc
+
+    async def _report_terminal(self) -> None:
+        """Send this process's terminal capabilities to bed, once per connection.
+
+        Runs the blocking probe in a worker thread so the event loop keeps running. A
+        failure is logged and dropped: the terminal report is advisory and must never break
+        the connection.
+        """
+        if not self._probe_terminal or self._ws is None:
+            return
+        try:
+            from bbsengine6.io.terminal import terminal_report
+
+            report = await asyncio.to_thread(terminal_report)
+            caps = {k: report[k] for k in (
+                "term", "colors", "true_color", "color_256", "source", "ansi",
+            ) if k in report}
+            reply = await self.send({"type": "terminal_caps", "caps": caps})
+            if reply.get("stored") is not True:
+                io.echo(
+                    f"bed.client: terminal_caps not stored: {reply.get('error')}",
+                    level="warning",
+                )
+        except Exception as exc:  # advisory: never break the connection
+            io.echo(f"bed.client: terminal report skipped ({exc})", level="debug")
 
     def _get_lock(self) -> asyncio.Lock:
         if self._lock is None:
@@ -242,6 +273,8 @@ class BedConnection:
             return
         if self._ws is None or self._is_closed():
             self._ws = await self._connect()
+            # The recv loop is not running yet, so send() can read the reply itself.
+            await self._report_terminal()
         self._recv_stop = asyncio.Event()
         self._recv_task = asyncio.create_task(
             self._recv_loop(), name="bed-client-recv"
@@ -279,6 +312,9 @@ class BedConnection:
                         return
                     self._ws = dialed
                     backoff = 0.5
+                    # Reporting uses send(), which needs the recv loop to stay free: run it as a
+                    # separate task. The server cleared the old caps when the socket closed.
+                    asyncio.create_task(self._report_terminal(), name="bed-client-terminal")
                     for hook in list(self._reconnect_hooks):
                         try:
                             await hook()
