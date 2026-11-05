@@ -35,18 +35,24 @@ getent passwd bed
 
 **Read utmp** (operator, with sudo; needed for the remote-address lookup): bed reads the login
 accounting file `/run/utmp` to find the address a member connected from. That file is group
-`utmp`, so the service account must be in that group. Run this as **root or with sudo** after the
-account exists:
+`utmp`, so the account the service runs as must be in that group. That account is not always
+`bed`: it is the `User=` of the installed unit (it varies per install). Find it first:
 
 ```
-sudo usermod -aG utmp bed
+systemctl show <unit> -p User
+```
+
+Then run this as **root or with sudo**, with that account in place of `<account>`:
+
+```
+sudo usermod -aG utmp <account>
 ```
 
 The change applies to new sessions only, so restart the service afterwards (section 7). Verify:
 
 ```
-id bed
-sudo -u bed test -r /run/utmp && echo "utmp readable"
+id <account>
+sudo -u <account> test -r /run/utmp && echo "utmp readable"
 ```
 
 If `usermod` fails (no root, or no `utmp` group on this host), bed still runs. Remote addresses
