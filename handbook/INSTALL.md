@@ -33,30 +33,40 @@ The `bed` account is created by `systemd-sysusers` from `src/bed/daemon/bed.sysu
 getent passwd bed
 ```
 
-**Read utmp** (operator, with sudo; needed for the remote-address lookup): bed reads the login
-accounting file `/run/utmp` to find the address a member connected from. That file is group
-`utmp`, so the account the service runs as must be in that group. That account is not always
-`bed`: it is the `User=` of the installed unit (it varies per install). Find it first:
+**Read utmp** (operator, as root; needed for the remote-address lookup). bed reads the login
+accounting file `/run/utmp` to find the address a member connected from. That file is group `utmp`,
+so the instance's unit must add that group. The unit name varies per install. Find it and the
+account the service runs as:
 
 ```
 systemctl show <unit> -p User
 ```
 
-Then run this as **root or with sudo**, with that account in place of `<account>`:
+Then grant the group with a drop-in named after the unit. This leaves the installed unit and its
+`ExecStart` untouched. Replace `<unit>` with the unit name (for example `zoid6`):
 
 ```
-sudo usermod -aG utmp <account>
+sudo mkdir -p /etc/systemd/system/<unit>.service.d
+sudo tee /etc/systemd/system/<unit>.service.d/utmp.conf >/dev/null <<'EOF2'
+[Service]
+SupplementaryGroups=utmp
+EOF2
+sudo systemctl daemon-reload
 ```
 
-The change applies to new sessions only, so restart the service afterwards (section 7). Verify:
+Restart the service when it is safe to interrupt live sessions (section 7). Then verify that the
+running process has group 22 (`utmp`):
 
 ```
-id <account>
-sudo -u <account> test -r /run/utmp && echo "utmp readable"
+systemctl show <unit> -p SupplementaryGroups
+grep ^Groups /proc/$(systemctl show -p MainPID --value <unit>)/status
 ```
 
-If `usermod` fails (no root, or no `utmp` group on this host), bed still runs. Remote addresses
-then come from the `SSH_CONNECTION` environment variable instead of utmp.
+The `Groups:` line should include `22`. The account itself does not need `utmp` membership, so
+`usermod -aG utmp <account>` is not required.
+
+If the drop-in is absent, bed still runs. Remote addresses then come from the `SSH_CONNECTION`
+environment variable instead of utmp.
 
 Expected: home `/home/bed`, shell `/usr/sbin/nologin`. If the home is `/var/lib/bed`, the account
 predates the move; change it with **root**:
