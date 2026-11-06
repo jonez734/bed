@@ -68,6 +68,17 @@ The `Groups:` line should include `22`. The account itself does not need `utmp` 
 If the drop-in is absent, bed still runs. Remote addresses then come from the `SSH_CONNECTION`
 environment variable instead of utmp.
 
+**Session address and terminal** *(run by the database owner)*: each session records the member's
+address (`remoteaddr`), where it came from (`remoteaddr_source`: `utmp` or `ssh_env`), and the login's
+terminal as utmp names it (`tty`). These columns come from the bbsengine6 migration
+`migrate_session_remoteaddr.sql`. Run it on each database bed uses:
+
+```
+psql -X -d <database> -f /home/opencode/data/work/bbsengine6/py/src/bbsengine6/sql/migrate_session_remoteaddr.sql
+```
+
+It is idempotent. It refuses to run while a session still holds an old `ipaddress` value.
+
 Expected: home `/home/bed`, shell `/usr/sbin/nologin`. If the home is `/var/lib/bed`, the account
 predates the move; change it with **root**:
 
@@ -234,6 +245,16 @@ journalctl -u bed --since "5 minutes ago" | grep -E "startup completed|startup_f
 
 `startup completed, <n> modules enabled` means the daemon started. A `startup_failed stage=...` line
 names the stage that failed (`database_bootstrap`, `router_load` or `bind`).
+
+To check the origin fields and the group (replace `<unit>`):
+
+```
+grep ^Groups /proc/$(systemctl show -p MainPID --value <unit>)/status   # includes 22 (utmp)
+psql -X -At -d <database> -c "select column_name from information_schema.columns where table_schema='engine' and table_name='session' and column_name in ('remoteaddr','remoteaddr_source','tty')"
+```
+
+The column query returns all three names. Inside an SSH session, `python3 -c "from bbsengine6 import utmp;
+print(utmp.current_tty(), utmp.current_origin())"` prints the terminal and the client address.
 
 ## 8. Updating
 
