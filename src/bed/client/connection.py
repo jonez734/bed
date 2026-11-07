@@ -170,6 +170,9 @@ class BedConnection:
         async with self._get_lock():
             try:
                 if self._ws is None or self._is_closed():
+                    # Close the stale socket before dialing, so the replaced one is not left open.
+                    stale, self._ws = self._ws, None
+                    await self._close_socket(stale)
                     self._ws = await self._connect()
                 ws = self._ws
                 if ws is None:
@@ -272,6 +275,9 @@ class BedConnection:
         if self._recv_task is not None and not self._recv_task.done():
             return
         if self._ws is None or self._is_closed():
+            # Close the stale socket before dialing, so the replaced one is not left open.
+            stale, self._ws = self._ws, None
+            await self._close_socket(stale)
             self._ws = await self._connect()
             # The recv loop is not running yet, so send() can read the reply itself.
             await self._report_terminal()
@@ -310,7 +316,10 @@ class BedConnection:
                         # A close started while this redial was in flight: do not keep the socket.
                         await self._close_socket(dialed)
                         return
-                    self._ws = dialed
+                    # Close whatever this replaces, so no dead socket is left for GC to report.
+                    replaced, self._ws = self._ws, dialed
+                    if replaced is not None and replaced is not dialed:
+                        await self._close_socket(replaced)
                     backoff = 0.5
                     # Reporting uses send(), which needs the recv loop to stay free: run it as a
                     # separate task. The server cleared the old caps when the socket closed.
@@ -326,8 +335,9 @@ class BedConnection:
                 except asyncio.TimeoutError:
                     continue
                 except Exception:
-                    # Socket error or closed: drop it and redial on next pass.
-                    self._ws = None
+                    # Socket error or closed: close it, then drop it and redial on next pass.
+                    dropped, self._ws = self._ws, None
+                    await self._close_socket(dropped)
                     continue
                 try:
                     msg = json.loads(raw)
