@@ -12,6 +12,15 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### fix(client): a websocket is closed whenever the client drops or replaces it
+
+`BedConnection` left a live socket open in four places: the recv loop's error path, the
+recv loop's redial, `send()`'s redial, and `_ensure_recv_loop`. Each replaced `self._ws`
+without closing it, so the socket was left for garbage collection, which reported
+`ResourceWarning: unclosed transport` and `Task was destroyed but it is pending` for
+websockets' keepalive task. Each now closes the old socket first. Covered by
+`tests/test_recv_loop_closes_dropped_socket.py`.
+
 ### fix(bank): bank and message calls keep bed's login role
 
 bed's bank, message, and auth connections pass `set_role=False`, so they run as

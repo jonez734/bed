@@ -182,6 +182,11 @@ responsibility, and it is released in one of three ways:
 A failed `send` closes the socket it opened before raising `BedUnavailable`,
 so nothing is left for garbage collection to report.
 
+The client never replaces a live socket without closing it. The recv loop closes a socket
+it drops on a receive error. A redial (from the recv loop, from `send()`, or from
+`_ensure_recv_loop`) closes the stale socket before dialing. A socket that a stop request
+finds open is closed by `aclose()`.
+
 Message-family clients (`BedMessageClient` and its subclasses, such as
 `BedBankClient`) use the connection they are given. A caller that passes a
 `BedConnection` closes the same object the client uses. Passing `args` makes
