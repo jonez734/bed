@@ -380,8 +380,14 @@ ifeq ($(EDITABLE),1)
 	$(MAKE) -C src install
 else
 	$(MAKE) version
-	$(call PREPARE_BUILD,$(CURDIR))
-	$(BUILD_PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(CURDIR)
+	# Build from a scratch copy. setuptools writes build/ and src/bed.egg-info into the tree it
+	# builds, and a deploy run as another account (zoid6) cannot rewrite what a different account
+	# created there. The copy takes the build's output, so the project tree is not written to.
+	@work="$$(mktemp -d)" && \
+	trap 'rm -rf "$$work"' EXIT && \
+	tar -C $(CURDIR) --exclude=./build --exclude='./build.stale.*' --exclude='*.egg-info' \
+		--exclude='*.stale.*' --exclude=__pycache__ --exclude=./dist -cf - . | tar -C "$$work" -xf - && \
+	$(BUILD_PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) "$$work"
 	$(call CHECK_CONFIGURED,$(WHEEL_DIR))
 	$(VENV_DIR)/bin/pip install $(PIP_UPGRADE_FLAG) $(WHEEL_DIR)/*.whl 2>/dev/null
 	# TODO(verify-install): after this `pip install` of bed's wheel,
