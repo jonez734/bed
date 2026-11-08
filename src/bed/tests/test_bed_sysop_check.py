@@ -74,3 +74,18 @@ def test_owner_migration_covers_every_relation_checkmemberflag_reads():
         assert re.search(rf"alter\s+table\s+engine\.{rel}\s+owner\s+to\s+zoid6", migration, re.IGNORECASE), rel
     # engine.member is a view; it must move with the same owner migration.
     assert re.search(r"alter\s+view\s+engine\.member\s+owner\s+to\s+zoid6", migration, re.IGNORECASE), "engine.member"
+
+
+def test_owner_migration_grants_zoid6_read_on_the_flag_tables():
+    # Regression: ownership of engine.map_member_flag moved to zoid6, but zoid6 still could not
+    # SELECT it, so bed_bank_balance failed with "permission denied for table map_member_flag".
+    # The migration must grant the read explicitly, not rely on ownership.
+    import importlib
+    from pathlib import Path as _P
+    bbs = _P(importlib.import_module("bbsengine6").__file__).parent
+    migration = _code((bbs / "sql" / "owner_zoid6_migration.sql").read_text())
+    assert re.search(
+        r"grant\s+select\s+on\s+engine\.member_flag\s*,\s*engine\.map_member_flag\s+to\s+zoid6",
+        migration,
+        re.IGNORECASE,
+    )
