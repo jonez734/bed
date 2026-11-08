@@ -58,6 +58,7 @@ class BedMessageClient:
                     return None
                 return default
             raise BedUnavailable(
-                f"{message.get('type', '?')}: {code}: {reply.get('message')}"
+                f"{message.get('type', '?')}: {code}: {reply.get('message')}",
+                code=code or None,
             )
         return reply
