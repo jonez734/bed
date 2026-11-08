@@ -148,7 +148,13 @@ class BedConnection:
             return bool(closed)
         state = getattr(ws, "state", None)
         if state is not None:
-            return str(state).split(".")[-1] not in ("OPEN", "CONNECTING")
+            # websockets' State is an enum. str() of it is "State.OPEN" in some releases and "1"
+            # in others, so compare the enum member's name, not its string. Matching the string
+            # misread a live socket as closed and redialed on every call.
+            name = getattr(state, "name", None)
+            if name is None:
+                name = str(state).split(".")[-1]
+            return name not in ("OPEN", "CONNECTING")
         return False
 
     async def send(self, message: Dict[str, Any]) -> Dict[str, Any]:
