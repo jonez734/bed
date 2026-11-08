@@ -362,7 +362,7 @@ build-env:
 	fi
 	@$(BUILD_VENV)/bin/python -m pip install --quiet --upgrade build setuptools wheel
 
-deploy-venv: clean clean-egg-info build-env
+deploy-venv: clean stale-build build-env
 	@mkdir -p $(WHEEL_DIR)
 	@rm -f $(WHEEL_DIR)/*.whl
 	$(MAKE) -C $(BBSENGINE_DIR) version
