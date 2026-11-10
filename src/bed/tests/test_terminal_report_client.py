@@ -45,7 +45,7 @@ def test_report_sends_only_the_known_fields():
         conn = BedConnection(_args(), probe_terminal=True)
         conn._ws = MagicMock()
         sent = AsyncMock(return_value={"type": "terminal_caps_ack", "stored": True})
-        with patch("bbsengine6.io.terminal.terminal_report", return_value=REPORT), \
+        with patch("bbsengine6.io.terminal.report", return_value=REPORT), \
                 patch.object(conn, "send", sent):
             await conn._report_terminal()
         msg = sent.await_args.args[0]
@@ -83,7 +83,7 @@ def test_failed_report_is_swallowed():
     async def run():
         conn = BedConnection(_args(), probe_terminal=True)
         conn._ws = MagicMock()
-        with patch("bbsengine6.io.terminal.terminal_report", side_effect=OSError("no tty")):
+        with patch("bbsengine6.io.terminal.report", side_effect=OSError("no tty")):
             await conn._report_terminal()  # must not raise
 
     asyncio.run(run())
@@ -95,7 +95,7 @@ def test_refused_caps_are_logged_not_raised():
         conn._ws = MagicMock()
         sent = AsyncMock(return_value={"type": "terminal_caps_ack", "stored": False, "error": "bad"})
         # Patch echo so the warning does not depend on shared echo state.
-        with patch("bbsengine6.io.terminal.terminal_report", return_value=REPORT), \
+        with patch("bbsengine6.io.terminal.report", return_value=REPORT), \
                 patch.object(conn, "send", sent), \
                 patch("bed.client.connection.io.echo") as echo:
             await conn._report_terminal()  # must not raise

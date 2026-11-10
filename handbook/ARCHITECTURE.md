@@ -204,7 +204,7 @@ stop is requested closes the socket it dials, rather than keeping it.
 enables it, so a mock or a namespace without the attribute never runs a terminal query.
 
 When on, the connection sends one `terminal_caps` message (see
-`bbsengine6/specs/net-layer.md`) with the result of `bbsengine6.io.terminal.terminal_report()`:
+`bbsengine6/specs/net-layer.md`) with the result of `bbsengine6.io.terminal.report()`:
 
 - The first connection reports before the receive loop starts, so `send()` can read the reply.
 - A reconnect reports from a separate task, never from inside the receive loop. The server

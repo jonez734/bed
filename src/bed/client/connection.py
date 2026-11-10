@@ -119,12 +119,12 @@ class BedConnection:
         if not self._probe_terminal or self._ws is None:
             return
         try:
-            from bbsengine6.io.terminal import terminal_report
+            from bbsengine6.io.terminal import report
 
-            report = await asyncio.to_thread(terminal_report)
-            caps = {k: report[k] for k in (
+            terminal = await asyncio.to_thread(report)
+            caps = {k: terminal[k] for k in (
                 "term", "colors", "true_color", "color_256", "source", "ansi",
-            ) if k in report}
+            ) if k in terminal}
             reply = await self.send({"type": "terminal_caps", "caps": caps})
             if reply.get("stored") is not True:
                 io.echo(
