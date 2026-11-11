@@ -266,6 +266,10 @@ PREPARE_BUILD = \
 	if [ -d $(1)/build ] && { [ ! -O $(1)/build ] || [ ! -w $(1)/build ]; }; then \
 		mv $(1)/build $(1)/build.stale.$$$$ || exit 1; \
 	fi; \
+	for e in $(1)/src/*.egg-info; do \
+		[ -e "$$e" ] || continue; \
+		if [ ! -O "$$e" ] || [ ! -w "$$e" ]; then mv "$$e" "$$e.stale.$$$$" || exit 1; fi; \
+	done; \
 	mkdir -p $(1)/build && chmod g-s,g+w,-t $(1)/build
 
 # Identd mapping for the rollback login on the PostgreSQL server (root). Forwards to src.

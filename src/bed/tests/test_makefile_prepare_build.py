@@ -85,3 +85,14 @@ def test_build_directory_clears_setgid_so_staging_does_not_inherit_it():
     subdirectories then come out plain."""
     block = _prepare_build_block()
     assert "g-s" in block, block
+
+
+@pytest.mark.unit
+def test_egg_info_owned_by_someone_else_is_moved_aside():
+    """setuptools rewrites src/<project>.egg-info during the build. An egg-info left by another
+    account (here jam, under a deploy run as zoid6) cannot be rewritten, so the build fails on it
+    before it reaches the version import. PREPARE_BUILD must move such an egg-info aside, the same
+    way it does for build/, so the deploy starts from a clean egg-info."""
+    block = _prepare_build_block()
+    assert "egg-info" in block, block
+    assert "mv " in block and ".stale." in block, block
