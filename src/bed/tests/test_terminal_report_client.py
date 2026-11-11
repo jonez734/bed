@@ -9,9 +9,7 @@ from bed.client.connection import BedConnection
 
 REPORT = {
     "term": "xterm-256color",
-    "colors": 256,
-    "true_color": True,
-    "color_256": True,
+    "color": "truecolor",
     "source": "query",
     "ansi": "\x1b[?62c",
     "extra": "dropped-by-client",

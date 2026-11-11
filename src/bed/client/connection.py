@@ -132,9 +132,7 @@ class BedConnection:
                     return report()
 
             terminal = await asyncio.to_thread(_probe)
-            caps = {k: terminal[k] for k in (
-                "term", "colors", "true_color", "color_256", "source", "ansi",
-            ) if k in terminal}
+            caps = {k: terminal[k] for k in ("term", "color", "source", "ansi") if k in terminal}
             reply = await self.send({"type": "terminal_caps", "caps": caps})
             if reply.get("stored") is not True:
                 io.echo(
