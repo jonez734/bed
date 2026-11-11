@@ -96,3 +96,15 @@ def test_egg_info_owned_by_someone_else_is_moved_aside():
     block = _prepare_build_block()
     assert "egg-info" in block, block
     assert "mv " in block and ".stale." in block, block
+
+
+@pytest.mark.unit
+def test_deploy_venv_clears_build_trees_before_building():
+    """Both trees deploy-venv builds (bbsengine6 and bed) are cleared with rm-stale-builds.sh --build
+    first, so a build never starts over a stale or foreign-owned build/. The cleanup must come
+    before the build step that uses that tree."""
+    text = MAKEFILE.read_text()
+    block = text[text.index("deploy-venv: clean"):text.index("# Umbrella prod install")]
+    assert block.count("$(RM_STALE_BUILDS) --build") == 2, block
+    assert block.index("$(RM_STALE_BUILDS) --build $(BBSENGINE_DIR)") < block.index("$(BUILD_PYTHON) -m build")
+    assert block.index("$(RM_STALE_BUILDS) --build $(CURDIR)") < block.index('mktemp -d')

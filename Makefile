@@ -4,6 +4,8 @@ OUTDIR = /srv/repo/$(PROJECT)/
 # Override WHEELS_DIR when building outside the meta-repo.
 WHEELS_DIR ?= $(CURDIR)/../dist-wheels
 VERSION_SCRIPT ?= $(CURDIR)/../scripts/next_version.sh
+# Removes build.stale.*, dist.stale.*, *.egg-info.stale.*, and (with --build) the live build/.
+RM_STALE_BUILDS ?= $(CURDIR)/../scripts/rm-stale-builds.sh
 VERSION ?= $(shell $(VERSION_SCRIPT) 0.5.0.dev $(WHEELS_DIR))
 
 PYTHON ?= python3.12
@@ -369,6 +371,9 @@ build-env:
 deploy-venv: clean stale-build build-env
 	@mkdir -p $(WHEEL_DIR)
 	@rm -f $(WHEEL_DIR)/*.whl
+	# Clear the stale copies and the live build/ of bbsengine6 before it builds. A failure here stops
+	# the deploy: a build over a tree that could not be cleared would fail later and less clearly.
+	$(RM_STALE_BUILDS) --build $(BBSENGINE_DIR)
 	# bbsengine6 defaults to its 0.4 line; bed and its dependents pin 0.5, so build the 0.5 line.
 	$(MAKE) -C $(BBSENGINE_DIR) version VERSION_PREFIX=0.5.0.dev
 	$(call PREPARE_BUILD,$(BBSENGINE_DIR))
@@ -388,6 +393,7 @@ else
 	# Build from a scratch copy. setuptools writes build/ and src/bed.egg-info into the tree it
 	# builds, and a deploy run as another account (zoid6) cannot rewrite what a different account
 	# created there. The copy takes the build's output, so the project tree is not written to.
+	$(RM_STALE_BUILDS) --build $(CURDIR)
 	@work="$$(mktemp -d)" && \
 	trap 'rm -rf "$$work"' EXIT && \
 	tar -C $(CURDIR) --exclude=./build --exclude='./build.stale.*' --exclude='*.egg-info' \
