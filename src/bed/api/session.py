@@ -119,6 +119,14 @@ class SessionRegistry:
         with self._lock:
             return self._by_websocket.pop(websocket_id, None)
 
+    def drop_by_websocket(self, websocket_id: str) -> None:
+        """Drop the session bound to ``websocket_id``, if any (a disconnect)."""
+        with self._lock:
+            state = self._by_websocket.pop(websocket_id, None)
+            if state is not None:
+                self._by_session.pop(state.session_id, None)
+                self._purge_indices(state)
+
     def drop(self, session_id: str) -> None:
         with self._lock:
             state = self._by_session.pop(session_id, None)
