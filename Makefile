@@ -369,7 +369,8 @@ build-env:
 deploy-venv: clean stale-build build-env
 	@mkdir -p $(WHEEL_DIR)
 	@rm -f $(WHEEL_DIR)/*.whl
-	$(MAKE) -C $(BBSENGINE_DIR) version
+	# bbsengine6 defaults to its 0.4 line; bed and its dependents pin 0.5, so build the 0.5 line.
+	$(MAKE) -C $(BBSENGINE_DIR) version VERSION_PREFIX=0.5.0.dev
 	$(call PREPARE_BUILD,$(BBSENGINE_DIR))
 	$(BUILD_PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(BBSENGINE_DIR)
 	$(VENV_DIR)/bin/pip install $(PIP_UPGRADE_FLAG) $(WHEEL_DIR)/*.whl 2>/dev/null
