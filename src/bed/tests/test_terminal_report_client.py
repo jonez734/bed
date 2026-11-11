@@ -103,3 +103,33 @@ def test_refused_caps_are_logged_not_raised():
         assert echo.call_args.kwargs.get("level") == "warning"
 
     asyncio.run(run())
+
+
+def test_each_connection_probes_its_own_terminal_once():
+    # Two connections in one process: each runs the real report() in its own session, so the
+    # second connection probes again and does not get the first connection's cached result.
+    from bbsengine6.io import common, terminal
+
+    sent = []
+
+    def fake_query(request, reply_re, timeout=0.5):
+        sent.append(request)
+        return None
+
+    async def run(conn):
+        conn._ws = MagicMock()
+        ack = AsyncMock(return_value={"type": "terminal_caps_ack", "stored": True})
+        with patch.object(conn, "send", ack):
+            await conn._report_terminal()
+
+    with patch.object(common, "query_terminal", fake_query), \
+            patch.object(terminal, "_ANSI_PROBE_TIMEOUT", 0.01):
+        first = BedConnection(_args(), probe_terminal=True)
+        second = BedConnection(_args(), probe_terminal=True)
+        asyncio.run(run(first))
+        after_first = len(sent)
+        assert after_first > 0
+        asyncio.run(run(first))
+        assert len(sent) == after_first, "a second report on the same connection must not probe"
+        asyncio.run(run(second))
+        assert len(sent) > after_first, "a second connection must probe for itself"

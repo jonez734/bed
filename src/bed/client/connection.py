@@ -66,6 +66,11 @@ class BedConnection:
         if probe_terminal is None:
             probe_terminal = getattr(args, "probe_terminal", False)
         self._probe_terminal = probe_terminal is True
+        # The terminal probe is cached on a session. Each connection has its own, so every
+        # connected client's terminal is probed for itself, not reused from another connection.
+        from bbsengine6.interaction import new_session
+
+        self._session = new_session(name="bed-connection")
         self._ws: Optional[Any] = None
         self._lock: Optional[asyncio.Lock] = None
         self._request_ids = _RequestId()
@@ -119,9 +124,14 @@ class BedConnection:
         if not self._probe_terminal or self._ws is None:
             return
         try:
+            from bbsengine6.interaction import use_session
             from bbsengine6.io.terminal import report
 
-            terminal = await asyncio.to_thread(report)
+            def _probe() -> dict:
+                with use_session(self._session):
+                    return report()
+
+            terminal = await asyncio.to_thread(_probe)
             caps = {k: terminal[k] for k in (
                 "term", "colors", "true_color", "color_256", "source", "ansi",
             ) if k in terminal}
