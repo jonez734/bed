@@ -708,6 +708,23 @@ def _apply_registration_config(cfg: dict) -> None:
     _bbs_module.set_require_registration(required)
 
 
+def _apply_bbsengine6_config(cfg: dict) -> None:
+    """Apply the ``bbsengine6`` section to the framework (the seam's capacity, expiry, logger name).
+
+    A missing section keeps the defaults. Settings are checked by bbsengine6.seam.configure, which
+    raises ValueError on a bad value, so the daemon stops before it runs.
+    """
+    section = cfg.get("bbsengine6") or {}
+    seam = section.get("seam") or {}
+    # Keys starting with "_" are comments (the config files' convention) and are not settings.
+    settings = {k: v for k, v in seam.items() if not k.startswith("_")}
+    if not settings:
+        return
+    from bbsengine6.seam import config as seam_config
+
+    seam_config.configure(**settings)
+
+
 def _apply_tz_config(cfg: dict) -> None:
     """Apply the top-level ``tz`` key as the default member time zone.
 
@@ -1674,6 +1691,7 @@ async def main_async() -> None:
     _apply_registration_config(loaded_config)
     _apply_message_config(loaded_config)
     _apply_session_config(loaded_config)
+    _apply_bbsengine6_config(loaded_config)
     _apply_bank_config(loaded_config)
     _apply_notify_config(loaded_config)
     # Compute the final bind list after every config source has had
