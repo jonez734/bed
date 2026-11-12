@@ -6,7 +6,9 @@
     "autorestart": false,
     "restart_delay": 5,
     "max_restarts": 10,
-    "restart_on_bind_failure": false
+    "restart_on_bind_failure": false,
+    "token_gc_interval_seconds": 300,
+    "_comment_token_gc_interval_seconds": "How often expired bearer tokens are removed from the token store, in seconds. Default 300."
   },
   "debug": false,
   "database": {

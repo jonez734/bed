@@ -18,8 +18,10 @@ def test_gc_interval_is_300_seconds():
 
 
 def test_gc_loop_sleeps_for_configured_interval():
+    # The interval is per daemon (bed.json bed.token_gc_interval_seconds), so the loop reads it from
+    # the instance, not a constant. A hard-coded 60 or a fixed constant would ignore the config.
     src = inspect.getsource(bed_main.BED._gc_loop)
-    assert "TOKEN_GC_INTERVAL_SECONDS" in src
+    assert "self.gc_interval_seconds" in src
     assert "sleep(60)" not in src
 
 

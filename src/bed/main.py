@@ -42,8 +42,21 @@ from .startup import ensure_startup
 
 _BED_DEFAULTS: Optional[dict] = None
 
-# How often expired bearer tokens are removed from the token store.
+# How often expired bearer tokens are removed from the token store. The default; bed.json's
+# bed.token_gc_interval_seconds overrides it.
 TOKEN_GC_INTERVAL_SECONDS = 300
+
+
+def _token_gc_interval(cfg: dict) -> int:
+    """The token GC interval from bed.json, or the default when the key is absent.
+
+    Must be a positive integer (seconds). A bool, float, or string is rejected.
+    """
+    section = cfg.get("bed") or {}
+    value = section.get("token_gc_interval_seconds", TOKEN_GC_INTERVAL_SECONDS)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError("bed.token_gc_interval_seconds must be a positive integer (seconds)")
+    return value
 
 
 def _get_bed_defaults() -> dict:
@@ -785,6 +798,9 @@ def _apply_websocket_config(args: argparse.Namespace, cfg: dict) -> None:
 
 
 class BED:
+    # Class default, so a BED built without __init__ (for example in tests) still has the interval.
+    gc_interval_seconds: int = TOKEN_GC_INTERVAL_SECONDS
+
     """BBS Engine Daemon - WebSocket server with dynamic router loading."""
 
     DEFAULT_ROUTER_FQCN = "bbsengine6.net.defaultrouter.DefaultRouter"
@@ -810,6 +826,8 @@ class BED:
         self._session_registry: Optional[SessionRegistry] = None
         self._gc_task: Optional[asyncio.Task] = None
         self._running = False
+        # Token GC interval in seconds; _start_auth replaces it with bed.json's value.
+        self.gc_interval_seconds = TOKEN_GC_INTERVAL_SECONDS
 
     def _is_default_router(self) -> bool:
         if self.MessageRouterClass is None:
@@ -1283,6 +1301,9 @@ class BED:
 
         provider = get_provider(getattr(self.args, "credential_provider", "password"))
         ttl = int(getattr(self.args, "token_ttl", 900) or 900)
+        self.gc_interval_seconds = int(
+            getattr(self.args, "token_gc_interval", TOKEN_GC_INTERVAL_SECONDS)
+        )
         self.auth_service = AuthService(
             args=db_args,
             session_registry=self._session_registry,
@@ -1292,6 +1313,7 @@ class BED:
             instance_id=instance_id,
             ttl_seconds=ttl,
             bed_name=getattr(self.args, "bed_name", None),
+            gc_interval_seconds=self.gc_interval_seconds,
         )
         io.echo(
             f"BED AuthService: instance={instance_id[:8]}… "
@@ -1314,7 +1336,7 @@ class BED:
                         f"BED token gc error: {e}",
                         level="warning",
                     )
-                await asyncio.sleep(TOKEN_GC_INTERVAL_SECONDS)
+                await asyncio.sleep(self.gc_interval_seconds)
         except asyncio.CancelledError:
             return
 
@@ -1642,6 +1664,7 @@ async def main_async() -> None:
     bind_bed_log_name(args.bed_name)
     _apply_database_config(args, loaded_config)
     _apply_auth_config(args, loaded_config)
+    args.token_gc_interval = _token_gc_interval(loaded_config)
     _apply_websocket_config(args, loaded_config)
     _apply_startup_log_config(args, loaded_config)
     _open_startup_log(args)

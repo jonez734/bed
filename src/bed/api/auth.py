@@ -258,6 +258,7 @@ class AuthService(BaseService):
         bed_name: Optional[str] = None,
         *,
         clock: Optional[Any] = None,
+        gc_interval_seconds: int = 300,
     ) -> None:
         from .handler import SessionManager
 
@@ -268,6 +269,8 @@ class AuthService(BaseService):
         self.secret = bytes(secret)
         self.instance_id = str(instance_id)
         self.ttl_seconds = max(1, int(ttl_seconds))
+        # How often the token store is swept for expired tokens (bed.json bed.token_gc_interval_seconds).
+        self.gc_interval_seconds = max(1, int(gc_interval_seconds))
         # The daemon's configured name, carried in the login reply for clients.
         self.bed_name = (bed_name or "").strip() or None
         self._clock = clock
