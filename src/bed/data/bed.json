@@ -1,5 +1,14 @@
 {
   "tz": "America/New_York",
+  "io": {
+    "query_settle_seconds": 0.25,
+    "esc_tail_wait_seconds": 0.05,
+    "inputstring_getch_timeout_seconds": 0.015,
+    "inputstring_history_size": 500,
+    "inputstring_pagesize": 10,
+    "paste_max_bytes": 65536,
+    "_comment": "bbsengine6.io timing and size settings. Defaults shown. Read when used; a bad value stops startup."
+  },
   "require_registration": true,
   "bed": {
     "name": "bed",

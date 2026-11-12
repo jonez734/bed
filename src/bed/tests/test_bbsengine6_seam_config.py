@@ -41,3 +41,15 @@ def test_comment_keys_are_not_settings():
             {"bbsengine6": {"seam": {"_comment": "note", "capacity": 500}}}
         )
     cfg.assert_called_once_with(capacity=500)
+
+
+@pytest.mark.unit
+def test_io_section_is_applied_to_bbsengine6_io():
+    from bbsengine6.io import settings as io_settings
+
+    io_settings.reset()
+    try:
+        bed_main._apply_io_config({"io": {"inputstring_pagesize": 4}})
+        assert io_settings.get("inputstring_pagesize") == 4
+    finally:
+        io_settings.reset()

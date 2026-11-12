@@ -708,6 +708,19 @@ def _apply_registration_config(cfg: dict) -> None:
     _bbs_module.set_require_registration(required)
 
 
+def _apply_io_config(cfg: dict) -> None:
+    """Apply the ``io`` section to bbsengine6.io's timing and size settings.
+
+    A missing section keeps the defaults. A bad value raises ValueError, so startup stops.
+    """
+    section = cfg.get("io")
+    if section is None:
+        return
+    from bbsengine6.io import settings as io_settings
+
+    io_settings.configure(section)
+
+
 def _apply_bbsengine6_config(cfg: dict) -> None:
     """Apply the ``bbsengine6`` section to the framework (the seam's capacity, expiry, logger name).
 
@@ -1692,6 +1705,7 @@ async def main_async() -> None:
     _apply_message_config(loaded_config)
     _apply_session_config(loaded_config)
     _apply_bbsengine6_config(loaded_config)
+    _apply_io_config(loaded_config)
     _apply_bank_config(loaded_config)
     _apply_notify_config(loaded_config)
     # Compute the final bind list after every config source has had
