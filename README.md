@@ -336,14 +336,25 @@ port is held by a half-started daemon.
 
 ```json
 {
-  "bed":   {"autorestart": false, "restart_delay": 5, "max_restarts": 10},
+  "bed":   {"autorestart": false, "restart_delay": 5, "max_restarts": 10,
+            "token_gc_interval_seconds": 300},
   "auth":  {"bed_secret_path": "~/.config/bed/bed.secret",
             "token_ttl": 900, "token_persistence": "memory",
             "credential_provider": "password", "bed_instance_id": null},
   "database": {"name": "…", "host": "…", "port": 5432,
-               "user": "bed", "password": "…"}
+               "user": "bed", "password": "…"},
+  "bbsengine6": {"seam": {"capacity": 1000, "idle_seconds": 300,
+                          "logger_name": "bbsengine6.seam"}}
 }
 ```
+
+`bed.token_gc_interval_seconds` is how often expired bearer tokens are removed from the token
+store (default 300). It must be a positive integer; a bool, float, or string stops startup.
+
+`bbsengine6.seam` sets the front-end seam's event settings for the process: `capacity` is the
+number of events kept before a slow front end lags, `idle_seconds` is how long a front end's
+subscription may go unread before it expires, and `logger_name` is where lag and expiry warnings
+are logged. A missing section keeps the defaults shown above. Keys starting with `_` are comments.
 
 The shipped default config (`src/bed/data/bed.json`, the packaged
 configuration) disables

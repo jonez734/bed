@@ -12,6 +12,20 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### feat(config): bed.json and zoid6.json set the token GC interval and the seam settings
+
+`bed.token_gc_interval_seconds` (default 300) sets how often expired bearer tokens are removed. It
+is read at startup and passed to the auth service and the GC loop, replacing a fixed constant. A
+bool, float, or non-positive value stops startup.
+
+A `bbsengine6` section sets the front-end seam's settings: `seam.capacity` (events kept per domain,
+default 1000), `seam.idle_seconds` (subscription expiry, default 300), and `seam.logger_name` (where
+lag and expiry warnings are logged, default `bbsengine6.seam`). Bed passes the section to
+`bbsengine6.seam.configure` at startup; a missing section keeps the defaults, and `_comment` keys are
+ignored. zoid6's packaged `zoid6.json` carries the section with the default values. Covered by
+`tests/test_token_gc_config.py`, `tests/test_token_gc_schedule.py`, and
+`tests/test_bbsengine6_seam_config.py`.
+
 ### fix(client): a websocket is closed whenever the client drops or replaces it
 
 `BedConnection` left a live socket open in four places: the recv loop's error path, the
