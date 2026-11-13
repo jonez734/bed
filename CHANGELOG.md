@@ -12,6 +12,14 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### fix(session): a disconnect drops the bed session bound to that websocket
+
+On every client disconnect the channel router called `unregister_session` on bed's `SessionRegistry`,
+which has no such method, so the transport logged `Router unregister_session error` and the session
+could be left behind. The transport now passes the websocket id, and the router drops the session by
+it (bbsengine6 `388b12d`). `SessionRegistry.drop_by_websocket` removes the session and its table and
+spectator index entries. Covered by `tests/test_disconnect_drops_session.py`.
+
 ### feat(config): bed.json and zoid6.json set the token GC interval and the seam settings
 
 `bed.token_gc_interval_seconds` (default 300) sets how often expired bearer tokens are removed. It
