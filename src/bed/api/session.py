@@ -248,6 +248,16 @@ class SessionRegistry:
                 if state.table_moniker == table_moniker
             )
 
+    def sessions_for_moniker(self, moniker: str) -> list[str]:
+        """Return the ids of every live session bound to ``moniker`` (one player can be on several sockets)."""
+        with self._lock:
+            return [s.session_id for s in self._by_session.values() if s.moniker == moniker]
+
+    def sessions_at_table(self, table_moniker: str) -> list[SessionState]:
+        """Return the live sessions seated at ``table_moniker`` (the fan-out list for a table's players)."""
+        with self._lock:
+            return [s for s in self._by_session.values() if s.table_moniker == table_moniker]
+
     def _purge_indices(self, state: SessionState) -> None:
         """Remove ``state`` from the spectator index when the session is dropped."""
         for table in state.spectator_of:
