@@ -109,6 +109,23 @@ def default_token_path() -> str:
     return fallback
 
 
+def token_path_for_tty(directory: str, *, fd: int = 0, stem: str = "bed") -> str:
+    """The token file for this terminal: ``<directory>/<stem>.<tty>.token``.
+
+    The tty is the device's name with ``/`` replaced by ``_`` (``/dev/pts/4`` becomes ``pts_4``), so two
+    clients on one account, in different terminals, do not share a token. A session with no tty keeps
+    ``<stem>.token``. Readers that do not name a tty still use ``default_token_path()``.
+    """
+    try:
+        device = os.ttyname(fd)
+    except OSError:
+        device = ""
+    if not device:
+        return os.path.join(directory, f"{stem}.token")
+    name = device.replace("/dev/", "", 1).replace("/", "_")
+    return os.path.join(directory, f"{stem}.{name}.token")
+
+
 def _ensure_parent_dir(path: str, *, mode: int) -> None:
     """Create the parent directory of ``path`` with ``mode`` if missing.
 
