@@ -578,6 +578,8 @@ def _apply_database_config(args: argparse.Namespace, cfg: dict) -> None:
     """
     _apply_config_section(args, cfg, "database", DATABASE_FIELDS)
     defaults = _get_bed_defaults()
+    # A config user applies whenever the CLI left the default in place. The default user happens to be
+    # "bed", which is also a valid configured user, so comparing against it is what decides "not set".
     if "databaseuser" in cfg and args.databaseuser == defaults["databaseuser"]:
         args.databaseuser = cfg["databaseuser"]
     if "databasepassword" in cfg and args.databasepassword == defaults["databasepassword"]:
