@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Set
+from typing import Any, Callable, Dict, Optional, Set
 
 
 @dataclass
@@ -53,11 +53,14 @@ class SessionRegistry:
     on demand if it ever falls out of sync.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, seat_lookup: Optional[Callable[[str], Optional[str]]] = None) -> None:
         self._by_session: Dict[str, SessionState] = {}
         self._by_websocket: Dict[str, SessionState] = {}
         self._table_observers: Dict[str, Set[str]] = {}
         self._lock = threading.Lock()
+        # The durable source of a player's table (the database). A session is dropped on disconnect, so a
+        # session recreated after a reconnect takes its seat from here rather than starting unseated.
+        self._seat_lookup = seat_lookup
 
     def bind(
         self,
@@ -79,6 +82,8 @@ class SessionRegistry:
 
             state = self._by_session.get(session_id)
             if state is None:
+                if table_moniker is None and self._seat_lookup is not None:
+                    table_moniker = self._seat_lookup(moniker)
                 state = SessionState(
                     session_id=session_id,
                     websocket_id=websocket_id,

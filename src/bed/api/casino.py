@@ -91,6 +91,19 @@ class CasinoService(BaseService):
     def register_all(self, server: Any) -> None:
         check_claims_routable("CasinoService", self.HANDLED_TYPES, _TYPE_TO_CALL)
         server.register_service(self, list(self.HANDLED_TYPES))
+        # A reconnected session is recreated without its table; the database seat restores it, so a player
+        # who reconnects is still seated without re-joining. The same read the access check uses.
+        if self.sessions is not None and hasattr(self.sessions, "_seat_lookup"):
+            self.sessions._seat_lookup = self._seated_table_for
+
+    def _seated_table_for(self, moniker: str) -> Optional[str]:
+        """The table ``moniker`` is seated at in the database, or None (the registry's seat lookup)."""
+        from casino.dal import table as dal_table
+
+        try:
+            return dal_table.seated_table(self.args, moniker)
+        except Exception:
+            return None
 
     def _turn_seconds_refusal(self, value: Any) -> Optional[Dict[str, Any]]:
         """Refuse a turn_seconds that is not an integer, is negative, or is above the ceiling."""
