@@ -240,9 +240,17 @@ class SessionRegistry:
             return state
 
     def get_table_observers(self, table_moniker: str) -> Set[str]:
-        """Return the set of session ids currently spectating ``table_moniker``."""
+        """The connection ids (websocket ids) of the live sessions spectating ``table_moniker``.
+
+        These are the ids the transport routes on. A spectator whose session is gone is left out.
+        """
         with self._lock:
-            return set(self._table_observers.get(table_moniker, set()))
+            out = set()
+            for session_id in self._table_observers.get(table_moniker, set()):
+                state = self._by_session.get(session_id)
+                if state is not None:
+                    out.add(state.websocket_id)
+            return out
 
     def get_table_player_count(self, table_moniker: str) -> int:
         """Return the number of sessions with ``state.table_moniker == table_moniker``."""
@@ -254,9 +262,12 @@ class SessionRegistry:
             )
 
     def sessions_for_moniker(self, moniker: str) -> list[str]:
-        """Return the ids of every live session bound to ``moniker`` (one player can be on several sockets)."""
+        """The connection ids (websocket ids) of every live session bound to ``moniker``.
+
+        One player can be connected on several sockets; each is listed. These are the ids the transport routes on.
+        """
         with self._lock:
-            return [s.session_id for s in self._by_session.values() if s.moniker == moniker]
+            return [s.websocket_id for s in self._by_session.values() if s.moniker == moniker]
 
     def sessions_at_table(self, table_moniker: str) -> list[SessionState]:
         """Return the live sessions seated at ``table_moniker`` (the fan-out list for a table's players)."""

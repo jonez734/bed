@@ -13,7 +13,7 @@ def test_sessions_for_moniker_lists_every_session_bound_to_it():
     reg.bind("s1", "ws-1", "alice", False)
     reg.bind("s2", "ws-2", "alice", False)
     reg.bind("s3", "ws-3", "bob", False)
-    assert sorted(reg.sessions_for_moniker("alice")) == ["s1", "s2"]
+    assert sorted(reg.sessions_for_moniker("alice")) == ["ws-1", "ws-2"]
 
 
 def test_sessions_for_moniker_is_empty_when_none_is_bound():
@@ -44,3 +44,14 @@ def test_sessions_at_table_is_empty_for_an_idle_table():
     reg = SessionRegistry()
     reg.bind("s1", "ws-1", "alice", False)
     assert reg.sessions_at_table("blackjack-a") == []
+
+
+def test_lookups_return_the_connection_ids_the_transport_routes_on():
+    # The transport routes a message by the connection's websocket id, not by the bed session id, so the
+    # lookups must return the websocket ids (the UUID of each live connection).
+    reg = SessionRegistry()
+    reg.bind("sess-1", "conn-1", "alice", False)
+    reg.bind("sess-2", "conn-2", "alice", False)
+    reg.add_spectator("sess-2", "blackjack-a")
+    assert sorted(reg.sessions_for_moniker("alice")) == ["conn-1", "conn-2"]
+    assert reg.get_table_observers("blackjack-a") == {"conn-2"}

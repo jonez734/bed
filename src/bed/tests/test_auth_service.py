@@ -659,7 +659,7 @@ class TestSessionRegistry(unittest.TestCase):
         r = SessionRegistry()
         r.bind("s1", "w1", "alice", False)
         r.add_spectator("s1", "room-1")
-        self.assertEqual(r.get_table_observers("room-1"), {"s1"})
+        self.assertEqual(r.get_table_observers("room-1"), {"w1"})
         self.assertEqual(r.get_by_session("s1").spectator_of, {"room-1"})
         r.remove_spectator("s1", "room-1")
         self.assertEqual(r.get_table_observers("room-1"), set())
@@ -671,8 +671,8 @@ class TestSessionRegistry(unittest.TestCase):
         r.bind("s1", "w1", "alice", False)
         r.add_spectator("s1", "room-1")
         r.add_spectator("s1", "room-2")
-        self.assertEqual(r.get_table_observers("room-1"), {"s1"})
-        self.assertEqual(r.get_table_observers("room-2"), {"s1"})
+        self.assertEqual(r.get_table_observers("room-1"), {"w1"})
+        self.assertEqual(r.get_table_observers("room-2"), {"w1"})
         self.assertEqual(r.get_by_session("s1").spectator_of, {"room-1", "room-2"})
 
     def test_add_spectator_multi_session(self) -> None:
@@ -681,14 +681,14 @@ class TestSessionRegistry(unittest.TestCase):
         r.bind("s2", "w2", "bob", False)
         r.add_spectator("s1", "room-1")
         r.add_spectator("s2", "room-1")
-        self.assertEqual(r.get_table_observers("room-1"), {"s1", "s2"})
+        self.assertEqual(r.get_table_observers("room-1"), {"w1", "w2"})
 
     def test_add_spectator_idempotent(self) -> None:
         r = SessionRegistry()
         r.bind("s1", "w1", "alice", False)
         r.add_spectator("s1", "room-1")
         r.add_spectator("s1", "room-1")
-        self.assertEqual(r.get_table_observers("room-1"), {"s1"})
+        self.assertEqual(r.get_table_observers("room-1"), {"w1"})
 
     def test_remove_spectator_idempotent(self) -> None:
         r = SessionRegistry()
@@ -741,8 +741,8 @@ class TestSessionRegistry(unittest.TestCase):
         """``bind`` accepts ``spectator_of=`` to seed the spectator set."""
         r = SessionRegistry()
         r.bind("s1", "w1", "alice", False, spectator_of={"room-1", "room-2"})
-        self.assertEqual(r.get_table_observers("room-1"), {"s1"})
-        self.assertEqual(r.get_table_observers("room-2"), {"s1"})
+        self.assertEqual(r.get_table_observers("room-1"), {"w1"})
+        self.assertEqual(r.get_table_observers("room-2"), {"w1"})
 
     def test_bind_initial_table_moniker(self) -> None:
         """``bind`` accepts ``table_moniker=`` to seed the seated table."""
