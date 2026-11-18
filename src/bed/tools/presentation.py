@@ -30,6 +30,14 @@ def _box(title: str, width: int) -> None:
     draw_box(title, width, 1)
 
 
+def _enter_box(height: int = 1) -> None:
+    """Move the cursor from the box's bottom edge to the first interior column, where the field starts.
+
+    draw_box leaves the cursor at the end of the bottom edge and does not move it; the caller does, as the demo does.
+    """
+    io.echo(f"{{cursorup:{max(1, height)}}}{{cha:1}}{{cursorright:2}}", end="")
+
+
 def _plain(title: str) -> None:
     if title:
         io.echo(f"{title}")
@@ -52,6 +60,8 @@ def prompt_credentials(*, title: str = "login", header: Optional[str] = None, wi
         _box(title, width)
     else:
         _plain(title)
+    if ansi:
+        _enter_box(1)
     try:
         moniker = ""
         while not moniker.strip():

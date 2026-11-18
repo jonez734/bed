@@ -102,3 +102,27 @@ class TestAnsiDetection(unittest.TestCase):
         with patch.object(presentation.io.terminal, "has_ansi", return_value=True) as probe:
             self.assertTrue(presentation._has_ansi())
         probe.assert_called_once_with()
+
+
+class TestCursorInsideTheBox(unittest.TestCase):
+    """The caller moves the cursor into the box (demo_box_inputstring does the same); draw_box does not."""
+
+    def setUp(self):
+        patcher = patch.object(presentation, "_has_ansi", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_cursor_moves_into_the_box_before_the_field_is_read(self):
+        order = []
+        with patch.object(presentation, "_box", side_effect=lambda t, w: order.append("box")), \
+             patch.object(presentation, "_enter_box", side_effect=lambda h: order.append("enter")), \
+             patch.object(presentation, "_read_field", side_effect=lambda p, w: order.append("field") or "jam"), \
+             patch.object(presentation, "_read_password", side_effect=lambda p, w: order.append("pw") or "pw"), \
+             patch.object(presentation, "_plain"):
+            presentation.prompt_credentials(title="zoid6 auth")
+        self.assertEqual(order[:3], ["box", "enter", "field"])
+
+    def test_the_cursor_is_moved_with_the_same_sequence_the_demo_uses(self):
+        with patch.object(presentation.io, "echo") as echo:
+            presentation._enter_box(1)
+        echo.assert_called_once_with("{cursorup:1}{cha:1}{cursorright:2}", end="")
