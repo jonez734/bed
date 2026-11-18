@@ -122,7 +122,9 @@ class TestCursorInsideTheBox(unittest.TestCase):
             presentation.prompt_credentials(title="zoid6 auth")
         self.assertEqual(order[:3], ["box", "enter", "field"])
 
-    def test_the_cursor_is_moved_with_the_same_sequence_the_demo_uses(self):
+    def test_the_cursor_moves_up_two_rows_to_the_first_field_row(self):
+        # Two rows up from the bottom edge puts the field on the second interior row. The demo moves one row; the prompt
+        # keeps two so the field sits inside the box, as the prompt was approved.
         with patch.object(presentation.io, "echo") as echo:
             presentation._enter_box(1)
-        echo.assert_called_once_with("{cursorup:1}{cha:1}{cursorright:2}", end="")
+        echo.assert_called_once_with("{cursorup:2}{cha:1}{cursorright:2}", end="")

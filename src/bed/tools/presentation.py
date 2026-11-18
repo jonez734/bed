@@ -35,7 +35,7 @@ def _enter_box(height: int = 1) -> None:
 
     draw_box leaves the cursor at the end of the bottom edge and does not move it; the caller does, as the demo does.
     """
-    io.echo(f"{{cursorup:{max(1, height)}}}{{cha:1}}{{cursorright:2}}", end="")
+    io.echo(f"{{cursorup:{max(2, height)}}}{{cha:1}}{{cursorright:2}}", end="")
 
 
 def _plain(title: str) -> None:
