@@ -20,6 +20,13 @@ from bbsengine6.seam.requests import LoginRequest
 from bed.tools import presentation, store, token_name
 
 
+def token_directory(args=None) -> str:
+    """The directory holding the per-player token files: bed's own token directory (the parent of the default token)."""
+    from bed.tools import _token
+
+    return os.path.dirname(_token.default_token_path())
+
+
 def _login(moniker: str, password: str) -> tuple[str, str, str]:
     """Send the login through the seam; return (status, token, moniker). The status is "ok" or a refusal code."""
     from bed.api.login import handle_login
