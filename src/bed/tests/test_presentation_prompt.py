@@ -93,3 +93,12 @@ class TestPromptCredentials(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAnsiDetection(unittest.TestCase):
+    def test_the_box_check_asks_the_terminal_and_waits_for_the_answer(self):
+        # has_ansi(block=False) returns False without probing, so every terminal got the plain line. The check must
+        # wait for the terminal's answer, as the rest of bbsengine6 does.
+        with patch.object(presentation.io.terminal, "has_ansi", return_value=True) as probe:
+            self.assertTrue(presentation._has_ansi())
+        probe.assert_called_once_with()

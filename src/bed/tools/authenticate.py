@@ -15,7 +15,6 @@ import warnings
 from typing import Optional
 
 from bbsengine6.seam.codes import ErrorCode
-from bbsengine6.seam.requests import LoginRequest
 
 from bed.tools import presentation, store, token_name
 
@@ -27,16 +26,38 @@ def token_directory(args=None) -> str:
     return os.path.dirname(_token.default_token_path())
 
 
-def _login(moniker: str, password: str) -> tuple[str, str, str]:
-    """Send the login through the seam; return (status, token, moniker). The status is "ok" or a refusal code."""
-    from bed.api.login import handle_login
+def _wire_login_client(args=None):
+    """The client that logs in with the running bed, the same one ``bed auth login`` uses."""
+    from bed.client.authservice import BedAuthServiceClient
+    from bed.client.singleton import get_bed_connection
 
-    from bed.tools.login_service import login_service
+    return BedAuthServiceClient(get_bed_connection(args if args is not None else _default_bed_args()))
 
-    result = handle_login(login_service(), LoginRequest(moniker=moniker, password=password))
-    if not result.ok:
-        return result.code, "", moniker
-    return result.code, str(result.data.get("token", "")), str(result.data.get("moniker", moniker))
+
+def _default_bed_args():
+    """The bed endpoint for a front end: the defaults ``bed auth login`` uses (host, port, path, timeouts)."""
+    import argparse
+
+    return argparse.Namespace(bed_host="localhost", bed_port=8765, bed_path="/", bed_call_timeout=5.0,
+                              bed_probe_timeout=0.25, debug=False)
+
+
+def _login(moniker: str, password: str, args=None) -> tuple[str, str, str]:
+    """Check the password with the running bed, over the wire. Returns (status, token, moniker).
+
+    The password is checked by the daemon, which holds the member store. A front end never checks it locally, so it
+    needs no database configuration of its own. The status is "ok" or the refusal code bed returned.
+    """
+    import asyncio
+
+    svc = _wire_login_client(args)
+    reply = asyncio.run(svc.login(moniker, password))
+    if not reply.get("ok"):
+        return str(reply.get("code") or "invalid_credentials"), "", moniker
+    token = str(reply.get("token") or "")
+    if not token:
+        return "invalid_credentials", "", moniker
+    return "ok", token, str(reply.get("moniker") or moniker)
 
 
 def authenticate(*, directory: str, title: str = "login", header: Optional[str] = None, fd: int = 0,

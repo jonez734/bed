@@ -21,7 +21,9 @@ class CredentialsCancelled(Exception):
 
 
 def _has_ansi() -> bool:
-    return io.terminal.has_ansi(block=False)
+    # Wait for the terminal's answer. The non-blocking form returns False without probing, which put every terminal on
+    # the plain-text line.
+    return io.terminal.has_ansi()
 
 
 def _box(title: str, width: int) -> None:
