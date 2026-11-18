@@ -12,6 +12,21 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### feat(auth): one shared login for every front end; version 0.5.1.dev
+
+Login is now one call for every front end. `authenticate` prompts for the moniker and password (the boxed prompt
+in `presentation.py`, with blank re-prompt and a plain-text fallback), sends a `LoginRequest` through the seam's
+login handler (`api/login.py`, which refuses a blank and records a failed login as before), and stores the token
+with `store.store_token` (mode 0600). The token file for a player is named per player and terminal
+(`token_name.py`), with the same rule for every project. The seam's `auth` scope and its codes are in bbsengine6.
+
+Deprecated, removed in 0.5.2: `auth_login` (use `authenticate`, through `auth_login_alias`). The casino
+`auth_prompt` and round-view's `ensure_token` are aliases of the same call, in casino.
+
+`bed auth login` still logs in over the wire; moving it onto the seam handler is a follow-up.
+
+Version: the build base moves from 0.5.0.dev to 0.5.1.dev (next patch).
+
 ### fix(session): a disconnect drops the bed session bound to that websocket
 
 On every client disconnect the channel router called `unregister_session` on bed's `SessionRegistry`,

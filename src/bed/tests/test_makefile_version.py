@@ -29,9 +29,9 @@ def test_version_is_not_minute_resolution():
 
 
 @pytest.mark.unit
-def test_version_prefix_is_0_5_0_dev():
+def test_version_prefix_is_0_5_1_dev():
     text = _text()
-    assert "0.5.0.dev" in text
+    assert "0.5.1.dev" in text
     assert "0.4.0.dev" not in text
     assert "0.0.3.dev" not in text
 
@@ -79,8 +79,8 @@ def test_venv_dir_is_the_single_source_of_truth():
 
 @pytest.mark.unit
 def test_deploy_venv_builds_bbsengine6_on_the_0_5_line():
-    """bed pins bbsengine6>=0.5.0.dev, and so does every dependent project. bbsengine6's own
-    default prefix is 0.4, so the deploy's bbsengine6 build must pass the 0.5 prefix; otherwise pip
+    """bed pins bbsengine6 on the 0.5 line, and so does every dependent project. bbsengine6's own
+    default prefix is 0.4, so the deploy's bbsengine6 build must pass the 0.5.1 prefix; otherwise pip
     cannot satisfy bed's pin and the venv install fails."""
     block = _deploy_venv_block()
-    assert "$(MAKE) -C $(BBSENGINE_DIR) version VERSION_PREFIX=0.5.0.dev" in block, block
+    assert "$(MAKE) -C $(BBSENGINE_DIR) version VERSION_PREFIX=0.5.1.dev" in block, block

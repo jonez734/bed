@@ -1,12 +1,12 @@
 PROJECT = bed
 OUTDIR = /srv/repo/$(PROJECT)/
-# Build version: 0.5.0.dev<YYYYMMDDHHMMSS>, unique per build (shared script in the meta-repo).
+# Build version: 0.5.1.dev<YYYYMMDDHHMMSS>, unique per build (shared script in the meta-repo).
 # Override WHEELS_DIR when building outside the meta-repo.
 WHEELS_DIR ?= $(CURDIR)/../dist-wheels
 VERSION_SCRIPT ?= $(CURDIR)/../scripts/next_version.sh
 # Removes build.stale.*, dist.stale.*, *.egg-info.stale.*, and (with --build) the live build/.
 RM_STALE_BUILDS ?= $(CURDIR)/../scripts/rm-stale-builds.sh
-VERSION ?= $(shell $(VERSION_SCRIPT) 0.5.0.dev $(WHEELS_DIR))
+VERSION ?= $(shell $(VERSION_SCRIPT) 0.5.1.dev $(WHEELS_DIR))
 
 PYTHON ?= python3.12
 # Interpreter for the --no-isolation wheel builds: a private build venv that holds
@@ -375,7 +375,7 @@ deploy-venv: clean stale-build build-env
 	# the deploy: a build over a tree that could not be cleared would fail later and less clearly.
 	$(RM_STALE_BUILDS) --build $(BBSENGINE_DIR)
 	# bbsengine6 defaults to its 0.4 line; bed and its dependents pin 0.5, so build the 0.5 line.
-	$(MAKE) -C $(BBSENGINE_DIR) version VERSION_PREFIX=0.5.0.dev
+	$(MAKE) -C $(BBSENGINE_DIR) version VERSION_PREFIX=0.5.1.dev
 	$(call PREPARE_BUILD,$(BBSENGINE_DIR))
 	$(BUILD_PYTHON) -m build --no-isolation --wheel --outdir $(WHEEL_DIR) $(BBSENGINE_DIR)
 	$(VENV_DIR)/bin/pip install $(PIP_UPGRADE_FLAG) $(WHEEL_DIR)/*.whl 2>/dev/null

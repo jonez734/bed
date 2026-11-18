@@ -953,6 +953,33 @@ any subcommand work:
    and does not bind a session.
 3. Dispatch to the subcommand handler.
 
+### 11.3a Shared login for front ends (scope `auth`)
+
+Every front end signs a player in the same way. The pieces are in `bed/src/bed/tools/`:
+
+- **`presentation.prompt_credentials(title=..., header=...)`** (`presentation.py`): the one prompt. It draws
+  the boxed frame (`draw_box`) and reads the moniker as text and the password masked. A blank field is asked
+  again, so a blank is never returned. Ctrl-D raises `CredentialsCancelled`. On a terminal without ANSI the
+  box prints as plain text. `title` and `header` are the only per-project customization.
+- **`bed.api.login.handle_login(service, LoginRequest)`** (`api/login.py`): the login core, answering the
+  seam's `LoginRequest` (bbsengine6 section 7-auth). It refuses a blank moniker or password before any
+  check, checks the credentials, records a failed login as the wire path does, and mints a token. It returns
+  an `ActionResult`: `ok` with the token, or `invalid_credentials`. It binds no socket and writes no file.
+- **`store.store_token(path, token)`** (`store.py`): the one public way to write a token file. Owner-only (0600).
+  Only a front end calls it, after a successful login.
+- **`token_name.token_file_path(directory, moniker)`** (`token_name.py`): the per-player, per-terminal file name,
+  `<prefix>.<moniker>.<tty-or-notty>.<hash>.token`. The moniker is lowercased and validated. The hash covers the
+  tty, or the PID when there is no tty, so two processes for one player never share a file.
+- **`authenticate(directory=..., title=..., header=...)`** (`authenticate.py`): prompt, log in, and store the
+  token. Returns `(moniker, token)`; the token is `""` on a refusal and nothing is stored. `store_token=False`
+  for a headless caller that keeps the token in memory.
+
+The older names are deprecated aliases for one release: `auth_login` (this section's `authenticate`, through
+`auth_login_alias`), the casino `auth_prompt`, and round-view's `ensure_token`. Each is removed in the next release.
+
+The `bed auth login` subcommand (11.6) still logs in over the wire. Moving it onto `handle_login` is a follow-up
+that is verified against the running daemon first.
+
 ### 11.4 Token file
 
 `auth.py` owns the token-file lifecycle:
@@ -963,7 +990,8 @@ any subcommand work:
   parent directory at mode 0700.
 - `_check_token_file_perms(path)` — refuse to use a token file
   with group/world access (parallels `_read_secret_file`).
-- `_write_token_file(path, token)` — write the token, mode 0600.
+- `_write_token_file(path, token)` — write the token, mode 0600. Front ends use the public `store.store_token`.
+- The per-player file name is `token_name.token_file_path` (11.3a), not `--token-file`, for the round viewer.
 - `_read_token_file(path)` — return the token string or `""`.
 - `_truncate_token_file(path)` — clear the file on `revoke` so a
   subsequent subcommand does not reuse a dead token.

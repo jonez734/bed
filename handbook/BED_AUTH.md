@@ -1,5 +1,7 @@
 # BED Auth — Bearer Tokens for the BBS Engine Daemon
 
+> The canonical spec is `specs/auth.md`. This handbook describes the same design in prose; where they differ, `specs/auth.md` is right.
+
 ## What it is
 
 `bed` ships an `AuthService` that issues short-lived signed bearer
