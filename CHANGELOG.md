@@ -12,6 +12,23 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### feat(auth): the sign-in grows a password box below the moniker on Enter
+
+The sign-in draws a frame with the moniker field inside it. Enter accepts the moniker and grows the frame with a
+password box under it at the same width (bbsengine6 `extend_frame`). The password is read masked with nothing shown.
+The plain-text fallback prints the prompts without a frame (`74e9b55`; spec `specs/auth.md`, 11.3a).
+
+### fix(auth): the sign-in logs in with the running bed, and the box waits for the terminal
+
+The sign-in checks the password over the wire with the running bed, the same call `bed auth login` makes. It no
+longer opens a local credential store, which retried a placeholder database and flooded the terminal (`dbac34d`).
+The box check waits for the terminal's answer (`has_ansi()`), so a real terminal gets the box.
+
+### fix(auth): the prompt moves the cursor up two rows into the box, and the field is placed from the frame
+
+The field starts on the second interior row (`6460bbe`, `0749e1e`). The cursor position now comes from the frame's
+geometry, so the hand-written cursor move is gone (`74e9b55`).
+
 ### feat(auth): one shared login for every front end; version 0.5.1.dev
 
 Login is now one call for every front end. `authenticate` prompts for the moniker and password (the boxed prompt

@@ -957,10 +957,18 @@ any subcommand work:
 
 Every front end signs a player in the same way. The pieces are in `bed/src/bed/tools/`:
 
-- **`presentation.prompt_credentials(title=..., header=...)`** (`presentation.py`): the one prompt. It draws
-  the boxed frame (`draw_box`) and reads the moniker as text and the password masked. A blank field is asked
-  again, so a blank is never returned. Ctrl-D raises `CredentialsCancelled`. On a terminal without ANSI the
-  box prints as plain text. `title` and `header` are the only per-project customization.
+- **`presentation.prompt_credentials(title=..., header=..., width=25)`** (`presentation.py`): the one prompt.
+  It draws a frame (bbsengine6 `draw_frame`) with the moniker field inside it, and reads the moniker as text.
+  Enter accepts the moniker and grows the frame with a password box under it at the same width
+  (bbsengine6 `extend_frame`, which writes the join between the two). The password is read masked with nothing
+  shown (`mask=""`). A blank field is asked again, so a blank is never returned. Ctrl-D raises
+  `CredentialsCancelled`. On a terminal without ANSI the prompts print as plain text, with no frame and no
+  save or restore sequences. `title` and `header` are the only per-project customization.
+- The frame's geometry is in bbsengine6 `specs/util.md` (Frames). The field is placed from the frame's
+  geometry, not by hand-written cursor moves. The join and the cursor moves use the terminal's own save and
+  restore (`ESC 7` / `ESC 8`).
+- Tab and Shift-Tab between the fields are not implemented; see
+  `bbsengine6/handbook/todo/auth-frame-tab-between-fields.md`.
 - **`bed.api.login.handle_login(service, LoginRequest)`** (`api/login.py`): the login core, answering the
   seam's `LoginRequest` (bbsengine6 section 7-auth). It refuses a blank moniker or password before any
   check, checks the credentials, records a failed login as the wire path does, and mints a token. It returns
