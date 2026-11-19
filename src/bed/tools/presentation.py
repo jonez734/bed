@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Optional
 
 from bbsengine6 import io
-from bbsengine6.util import draw_box, inputpassword
+from bbsengine6.util import Child, draw_frame, extend_frame, inputpassword
 
 
 class CredentialsCancelled(Exception):
@@ -26,21 +26,20 @@ def _has_ansi() -> bool:
     return io.terminal.has_ansi()
 
 
-def _box(title: str, width: int) -> None:
-    draw_box(title, width, 1)
-
-
-def _enter_box(height: int = 1) -> None:
-    """Move the cursor from the box's bottom edge to the first interior column, where the field starts.
-
-    draw_box leaves the cursor at the end of the bottom edge and does not move it; the caller does, as the demo does.
-    """
-    io.echo(f"{{cursorup:{max(2, height)}}}{{cha:1}}{{cursorright:2}}", end="")
-
-
 def _plain(title: str) -> None:
     if title:
         io.echo(f"{title}")
+
+
+def _field_at(frame, index: int):
+    """The column and row where the field of child ``index`` starts, from the frame's geometry."""
+    place = frame.children[index]
+    return place.column, place.top
+
+
+def _extend(frame, child: Child, *, width: int):
+    """Grow the frame with ``child`` below it, at the frame's width (see bbsengine6 extend_frame)."""
+    return extend_frame(frame, child, width=width)
 
 
 def _read_field(prompt: str, width: int) -> str:
@@ -52,20 +51,28 @@ def _read_password(prompt: str, width: int) -> str:
 
 
 def prompt_credentials(*, title: str = "login", header: Optional[str] = None, width: int = 25) -> tuple[str, str]:
-    """Ask for a moniker and password; return them. Blank fields are asked again. Raises CredentialsCancelled on Ctrl-D."""
+    """Ask for a moniker, then a password in a box grown below it. Blank fields are asked again. Ctrl-D cancels.
+
+    The moniker box is drawn first. Enter accepts the moniker and adds the password box under it at the same width, then
+    the password is read there. On a terminal without ANSI there are no boxes; the prompts are printed as plain text.
+    """
     if header:
         io.echo(header)
     ansi = _has_ansi()
-    if ansi:
-        _box(title, width)
-    else:
+    if not ansi:
         _plain(title)
-    if ansi:
-        _enter_box(1)
     try:
+        if ansi:
+            frame = draw_frame(title, width, children=[Child(title="moniker")])
+            moniker_col, moniker_row = _field_at(frame, 0)
+            io.echo(f"{{curpos:{moniker_row},{moniker_col}}}", end="")
         moniker = ""
         while not moniker.strip():
             moniker = _read_field("{promptcolor}moniker: {inputcolor}", width)
+        if ansi:
+            frame = _extend(frame, Child(title="password"), width=width)
+            password_col, password_row = _field_at(frame, len(frame.children) - 1)
+            io.echo(f"{{curpos:{password_row},{password_col}}}", end="")
         password = ""
         while not password:
             password = _read_password("{promptcolor}password: {inputcolor}", width)

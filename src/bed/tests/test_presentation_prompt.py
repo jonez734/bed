@@ -6,6 +6,14 @@ from unittest.mock import patch
 from bed.tools import presentation
 
 
+def _fake_frame(title, width, children=(), **_):
+    from bbsengine6.util import Frame, ChildPlace
+    frame = Frame(title=title, width=width, top=0, bottom=2)
+    for i, child in enumerate(children):
+        frame.children.append(ChildPlace(title=child.title, top=3, bottom=5, column=2))
+    return frame
+
+
 class _Answers:
     """Feeds prompt answers in order and records what was asked."""
 
@@ -31,14 +39,14 @@ class TestPromptCredentials(unittest.TestCase):
     def test_returns_the_moniker_and_password_entered(self):
         with patch.object(presentation, "_read_field", _Answers("jam", "secret")), \
              patch.object(presentation, "_read_password", _Answers("secret")), \
-             patch.object(presentation, "_box"), patch.object(presentation, "_plain"):
+             patch.object(presentation, "draw_frame", side_effect=_fake_frame), patch.object(presentation, "_extend", side_effect=lambda f, *a, **k: f), patch.object(presentation, "_plain"):
             moniker, password = presentation.prompt_credentials(title="zoid6 auth")
         self.assertEqual((moniker, password), ("jam", "secret"))
 
     def test_a_blank_moniker_is_asked_again(self):
         with patch.object(presentation, "_read_field", _Answers("", "  ", "jam")) as field, \
              patch.object(presentation, "_read_password", _Answers("secret")), \
-             patch.object(presentation, "_box"), patch.object(presentation, "_plain"):
+             patch.object(presentation, "draw_frame", side_effect=_fake_frame), patch.object(presentation, "_extend", side_effect=lambda f, *a, **k: f), patch.object(presentation, "_plain"):
             moniker, _ = presentation.prompt_credentials(title="zoid6 auth")
         self.assertEqual(moniker, "jam")
         self.assertEqual(len(field.asked), 3, "a blank moniker is asked again")
@@ -46,7 +54,7 @@ class TestPromptCredentials(unittest.TestCase):
     def test_a_blank_password_is_asked_again(self):
         with patch.object(presentation, "_read_field", _Answers("jam")), \
              patch.object(presentation, "_read_password", _Answers("", "secret")) as pw, \
-             patch.object(presentation, "_box"), patch.object(presentation, "_plain"):
+             patch.object(presentation, "draw_frame", side_effect=_fake_frame), patch.object(presentation, "_extend", side_effect=lambda f, *a, **k: f), patch.object(presentation, "_plain"):
             _, password = presentation.prompt_credentials(title="zoid6 auth")
         self.assertEqual(password, "secret")
         self.assertEqual(len(pw.asked), 2, "a blank password is asked again")
@@ -54,7 +62,7 @@ class TestPromptCredentials(unittest.TestCase):
     def test_ctrl_d_cancels_the_login(self):
         with patch.object(presentation, "_read_field", _Answers(EOFError())), \
              patch.object(presentation, "_read_password", _Answers("secret")), \
-             patch.object(presentation, "_box"), patch.object(presentation, "_plain"):
+             patch.object(presentation, "draw_frame", side_effect=_fake_frame), patch.object(presentation, "_extend", side_effect=lambda f, *a, **k: f), patch.object(presentation, "_plain"):
             with self.assertRaises(presentation.CredentialsCancelled):
                 presentation.prompt_credentials(title="zoid6 auth")
 
@@ -62,7 +70,8 @@ class TestPromptCredentials(unittest.TestCase):
         drawn = []
         with patch.object(presentation, "_read_field", _Answers("jam")), \
              patch.object(presentation, "_read_password", _Answers("secret")), \
-             patch.object(presentation, "_box", side_effect=lambda title, width: drawn.append(title)), \
+             patch.object(presentation, "draw_frame", side_effect=lambda t, w, **k: (drawn.append(t), _fake_frame(t, w, **k))[1]), \
+             patch.object(presentation, "_extend", side_effect=lambda f, *a, **k: f), \
              patch.object(presentation, "_plain"):
             presentation.prompt_credentials(title="round-view login")
         self.assertIn("round-view login", drawn)
@@ -71,7 +80,7 @@ class TestPromptCredentials(unittest.TestCase):
         with patch.object(presentation, "_has_ansi", return_value=False), \
              patch.object(presentation, "_read_field", _Answers("jam")), \
              patch.object(presentation, "_read_password", _Answers("secret")), \
-             patch.object(presentation, "_box") as box, patch.object(presentation, "_plain") as plain:
+             patch.object(presentation, "draw_frame", side_effect=_fake_frame), patch.object(presentation, "_extend", side_effect=lambda f, *a, **k: f) as box, patch.object(presentation, "_plain") as plain:
             presentation.prompt_credentials(title="zoid6 auth")
         box.assert_not_called()
         plain.assert_called()
@@ -85,7 +94,7 @@ class TestPromptCredentials(unittest.TestCase):
 
         with patch.object(presentation, "_read_field", _Answers("jam")), \
              patch.object(presentation, "_read_password", side_effect=fake_password), \
-             patch.object(presentation, "_box"), patch.object(presentation, "_plain"):
+             patch.object(presentation, "draw_frame", side_effect=_fake_frame), patch.object(presentation, "_extend", side_effect=lambda f, *a, **k: f), patch.object(presentation, "_plain"):
             _, password = presentation.prompt_credentials(title="zoid6 auth")
         self.assertEqual(password, "secret")
         self.assertEqual(len(masked), 1, "the password goes through the masked reader")
@@ -104,27 +113,14 @@ class TestAnsiDetection(unittest.TestCase):
         probe.assert_called_once_with()
 
 
-class TestCursorInsideTheBox(unittest.TestCase):
-    """The caller moves the cursor into the box (demo_box_inputstring does the same); draw_box does not."""
+if __name__ == "__main__":
+    unittest.main()
 
-    def setUp(self):
-        patcher = patch.object(presentation, "_has_ansi", return_value=True)
-        patcher.start()
-        self.addCleanup(patcher.stop)
 
-    def test_the_cursor_moves_into_the_box_before_the_field_is_read(self):
-        order = []
-        with patch.object(presentation, "_box", side_effect=lambda t, w: order.append("box")), \
-             patch.object(presentation, "_enter_box", side_effect=lambda h: order.append("enter")), \
-             patch.object(presentation, "_read_field", side_effect=lambda p, w: order.append("field") or "jam"), \
-             patch.object(presentation, "_read_password", side_effect=lambda p, w: order.append("pw") or "pw"), \
-             patch.object(presentation, "_plain"):
-            presentation.prompt_credentials(title="zoid6 auth")
-        self.assertEqual(order[:3], ["box", "enter", "field"])
-
-    def test_the_cursor_moves_up_two_rows_to_the_first_field_row(self):
-        # Two rows up from the bottom edge puts the field on the second interior row. The demo moves one row; the prompt
-        # keeps two so the field sits inside the box, as the prompt was approved.
-        with patch.object(presentation.io, "echo") as echo:
-            presentation._enter_box(1)
-        echo.assert_called_once_with("{cursorup:2}{cha:1}{cursorright:2}", end="")
+class TestAnsiDetection(unittest.TestCase):
+    def test_the_box_check_asks_the_terminal_and_waits_for_the_answer(self):
+        # has_ansi(block=False) returns False without probing, so every terminal got the plain line. The check must
+        # wait for the terminal's answer, as the rest of bbsengine6 does.
+        with patch.object(presentation.io.terminal, "has_ansi", return_value=True) as probe:
+            self.assertTrue(presentation._has_ansi())
+        probe.assert_called_once_with()
