@@ -12,6 +12,16 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### change(auth): the sign-in is one frame with a moniker row and a password row
+
+`presentation.prompt_credentials` draws one frame with two interior rows (`draw_frame(height=2)`). The moniker is read on
+the first row, `after_field()` records the line break, and the password is read on the second (`place_row(1)`). The
+grow-below step (`extend_frame`) and the absolute `{curpos}` moves are removed. The plain-text fallback is unchanged.
+Tests: `test_prompt_one_frame.py`; `test_auth_frame.py` and `test_presentation_prompt.py` updated to the one-frame contract.
+Spec `specs/auth.md` 11.3a updated.
+
+## Unreleased
+
 ### feat(auth): the sign-in grows a password box below the moniker on Enter
 
 The sign-in draws a frame with the moniker field inside it. Enter accepts the moniker and grows the frame with a

@@ -958,15 +958,15 @@ any subcommand work:
 Every front end signs a player in the same way. The pieces are in `bed/src/bed/tools/`:
 
 - **`presentation.prompt_credentials(title=..., header=..., width=25)`** (`presentation.py`): the one prompt.
-  It draws a frame (bbsengine6 `draw_frame`) with the moniker field inside it, and reads the moniker as text.
-  Enter accepts the moniker and grows the frame with a password box under it at the same width
-  (bbsengine6 `extend_frame`, which writes the join between the two). The password is read masked with nothing
-  shown (`mask=""`). A blank field is asked again, so a blank is never returned. Ctrl-D raises
+  It draws one frame (bbsengine6 `draw_frame(height=2)`) with two interior rows: the moniker on the first, the
+  password on the second. The moniker is read as text; its Enter leaves the cursor one row below the field
+  (`after_field()`), and `place_row(1)` moves to the password row. No box is grown below, and no absolute position is
+  sent. The password is read masked with nothing shown (`mask=""`). A blank field is asked again, so a blank is never returned. Ctrl-D raises
   `CredentialsCancelled`. On a terminal without ANSI the prompts print as plain text, with no frame and no
   save or restore sequences. `title` and `header` are the only per-project customization.
 - The frame's geometry is in bbsengine6 `specs/util.md` (Frames). The field is placed from the frame's
-  geometry, not by hand-written cursor moves. The join and the cursor moves use the terminal's own save and
-  restore (`ESC 7` / `ESC 8`).
+  geometry, not by hand-written cursor moves. Every move is relative to the frame's own rows (`place_row`,
+  `after_field`); the frame reads no terminal state and sends no save or restore.
 - Tab and Shift-Tab between the fields are not implemented; see
   `bbsengine6/handbook/todo/auth-frame-tab-between-fields.md`.
 - **`bed.api.login.handle_login(service, LoginRequest)`** (`api/login.py`): the login core, answering the

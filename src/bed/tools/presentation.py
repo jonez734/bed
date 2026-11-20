@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Optional
 
 from bbsengine6 import io
-from bbsengine6.util import Child, draw_frame, extend_frame, inputpassword
+from bbsengine6.util import draw_frame, inputpassword
 
 
 class CredentialsCancelled(Exception):
@@ -31,17 +31,6 @@ def _plain(title: str) -> None:
         io.echo(f"{title}")
 
 
-def _field_at(frame, index: int):
-    """The column and row where the field of child ``index`` starts, from the frame's geometry."""
-    place = frame.children[index]
-    return place.column, place.top
-
-
-def _extend(frame, child: Child, *, width: int):
-    """Grow the frame with ``child`` below it, at the frame's width (see bbsengine6 extend_frame)."""
-    return extend_frame(frame, child, width=width)
-
-
 def _read_field(prompt: str, width: int) -> str:
     return io.inputstring(prompt, "", max_width=width - 1, bottombar=False)
 
@@ -51,28 +40,28 @@ def _read_password(prompt: str, width: int) -> str:
 
 
 def prompt_credentials(*, title: str = "login", header: Optional[str] = None, width: int = 25) -> tuple[str, str]:
-    """Ask for a moniker, then a password in a box grown below it. Blank fields are asked again. Ctrl-D cancels.
+    """Ask for a moniker and a password in one frame, with a row for each. Blank fields are asked again. Ctrl-D cancels.
 
-    The moniker box is drawn first. Enter accepts the moniker and adds the password box under it at the same width, then
-    the password is read there. On a terminal without ANSI there are no boxes; the prompts are printed as plain text.
+    The frame is drawn once with two interior rows. The moniker is read on the first row; its Enter leaves the cursor one
+    row below the field (after_field), and the password is read on the second row. No box is grown and no absolute
+    position is sent. On a terminal without ANSI the prompts are printed as plain text.
     """
     if header:
         io.echo(header)
     ansi = _has_ansi()
     if not ansi:
         _plain(title)
+    frame = None
     try:
         if ansi:
-            frame = draw_frame(title, width, children=[Child(title="moniker")])
-            moniker_col, moniker_row = _field_at(frame, 0)
-            io.echo(f"{{curpos:{moniker_row},{moniker_col}}}", end="")
+            frame = draw_frame(title, width, height=2)
+            frame.place_row(0)
         moniker = ""
         while not moniker.strip():
             moniker = _read_field("{promptcolor}moniker: {inputcolor}", width)
         if ansi:
-            frame = _extend(frame, Child(title="password"), width=width)
-            password_col, password_row = _field_at(frame, len(frame.children) - 1)
-            io.echo(f"{{curpos:{password_row},{password_col}}}", end="")
+            frame.after_field()
+            frame.place_row(1)
         password = ""
         while not password:
             password = _read_password("{promptcolor}password: {inputcolor}", width)
