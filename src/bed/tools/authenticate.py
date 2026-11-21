@@ -16,6 +16,8 @@ from typing import Optional
 
 from bbsengine6.seam.codes import ErrorCode
 
+from bbsengine6 import io
+
 from bed.tools import presentation, store, token_name
 
 
@@ -61,12 +63,16 @@ def _login(moniker: str, password: str, args=None) -> tuple[str, str, str]:
 
 
 def authenticate(*, directory: str, title: str = "login", header: Optional[str] = None, fd: int = 0,
-                 store_token: bool = True, moniker: str = "", **kwargs) -> tuple[str, str]:
+                 store_token: bool = True, moniker: str = "", debug: bool = False, **kwargs) -> tuple[str, str]:
     """Prompt, log in, and (when ``store_token``) store the token. Returns ``(moniker, token)``; token is "" on refusal.
 
-    ``**kwargs`` is accepted so the configured callable (``auth.authenticate``) keeps matching the contract when a caller
+    ``debug=True`` echoes the bed URL and the terminal report (level "debug"). ``**kwargs`` is accepted so the configured callable (``auth.authenticate``) keeps matching the contract when a caller
     passes an option this version does not use. Extra options are ignored.
     """
+    if debug:
+        endpoint = _default_bed_args()
+        io.echo(f"bed url: ws://{endpoint.bed_host}:{endpoint.bed_port}{endpoint.bed_path}", level="debug")
+        io.echo(f"terminal: {io.terminal.report()}", level="debug")
     name, password = presentation.prompt_credentials(title=title, header=header) if not moniker else (
         moniker, presentation.prompt_credentials(title=title, header=header)[1])
     status, token, logged_in = _login(name, password)

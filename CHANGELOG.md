@@ -12,6 +12,12 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### feat(auth): debug echoes the bed URL and the terminal report at sign-in
+
+`authenticate(..., debug=True)` echoes the bed URL it will dial (`ws://host:port/path`) and `io.terminal.report()` at
+debug level, before the prompt. The contract declares `debug` (bbsengine6 `_stub_authenticate`). Tests:
+`test_authenticate_echoes_url_and_terminal.py`. Spec 11.3a updated.
+
 ### feat(auth): the sign-in callable is configured in bed.json (`auth.authenticate`)
 
 `bed.json` names the sign-in callable as `"module:attr"` (default `bed.tools.authenticate:authenticate`). Front ends resolve
