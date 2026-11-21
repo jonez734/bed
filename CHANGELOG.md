@@ -12,6 +12,12 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### test(auth): the debug time line is checked in several local zones
+
+`test_authenticate_time_other_zones.py` sets `TZ` for Los Angeles (PST), New York (EST), London (GMT), Kolkata (+05:30),
+and Chatham (+13:45, numeric abbreviation), and checks the local clock, zone name, and UTC for each. It fails when the
+expectation is wrong.
+
 ### change(auth): the debug time echo is formatted by util.datestamp
 
 `authenticate`'s debug time line formats the local and UTC values with bbsengine6 `util.datestamp` (24-hour format), instead
