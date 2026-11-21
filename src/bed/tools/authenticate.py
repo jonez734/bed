@@ -25,12 +25,20 @@ from bed.tools import presentation, store, token_name
 datetime = dt.datetime
 
 
+_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
 def time_line() -> str:
-    """The local time with its zone name, then UTC in parentheses: ``2026-11-20 14:03:22 EST (2026-11-20 19:03:22 UTC)``."""
+    """The local time with its zone name, then UTC in parentheses: ``2026-11-20 14:03:22 EST (2026-11-20 19:03:22 UTC)``.
+
+    Both values are formatted by bbsengine6 ``util.datestamp``.
+    """
+    from bbsengine6 import util
+
     local = datetime.now().astimezone()
     utc = local.astimezone(dt.timezone.utc)
     zone = local.tzname() or local.strftime("%z")
-    return f"{local:%Y-%m-%d %H:%M:%S} {zone} ({utc:%Y-%m-%d %H:%M:%S} UTC)"
+    return f"{util.datestamp(local, format=_TIME_FORMAT)} {zone} ({util.datestamp(utc, format=_TIME_FORMAT)} UTC)"
 
 
 def ping_lines(pong: dict) -> list[str]:

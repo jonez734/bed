@@ -26,11 +26,22 @@ class _Clock(dt.datetime):
 
 class TestTimeEcho(unittest.TestCase):
     def test_the_local_time_and_utc_are_echoed_in_the_documented_form(self):
-        echoes = []
-        with patch.object(auth, "datetime", _Clock), \
-             patch.object(auth.io, "echo", side_effect=lambda t="", *a, **k: echoes.append(str(t))):
+        with patch.object(auth, "datetime", _Clock):
             text = auth.time_line()
         self.assertEqual(text, "2026-11-20 14:03:22 EST (2026-11-20 19:03:22 UTC)")
+
+    def test_the_time_is_formatted_by_bbsengine6_datestamp(self):
+        from bbsengine6 import util
+        calls = []
+        real = util.datestamp
+
+        def spy(t=None, format="%Y-%m-%d %I:%M%P %Z (%a)"):
+            calls.append(format)
+            return real(t, format=format)
+
+        with patch.object(auth, "datetime", _Clock), patch.object(util, "datestamp", side_effect=spy):
+            auth.time_line()
+        self.assertGreaterEqual(len(calls), 2, "local and UTC are both formatted by util.datestamp")
 
 
 class TestPingEcho(unittest.TestCase):

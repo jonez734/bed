@@ -12,6 +12,11 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### change(auth): the debug time echo is formatted by util.datestamp
+
+`authenticate`'s debug time line formats the local and UTC values with bbsengine6 `util.datestamp` (24-hour format), instead
+of `strftime`. The output is unchanged. Test: `test_authenticate_debug_time_and_ping.py` (`test_the_time_is_formatted_by_bbsengine6_datestamp`).
+
 ### feat(auth): debug also echoes the local time and the bed ping result
 
 With `debug=True`, `authenticate` echoes the local time with its zone name and UTC in parentheses, then runs a bed ping on
