@@ -12,6 +12,12 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### feat(auth): the sign-in callable is configured in bed.json (`auth.authenticate`)
+
+`bed.json` names the sign-in callable as `"module:attr"` (default `bed.tools.authenticate:authenticate`). Front ends resolve
+it with bbsengine6 `resolve_callable` against the contract stub. `authenticate` now takes `**kwargs` so it matches the
+contract; extra options are ignored. Tests: `test_auth_authenticate_config.py`. Spec 11.3a updated.
+
 ### change(auth): the sign-in is one frame with a moniker row and a password row
 
 `presentation.prompt_credentials` draws one frame with two interior rows (`draw_frame(height=2)`). The moniker is read on

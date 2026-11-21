@@ -967,6 +967,13 @@ Every front end signs a player in the same way. The pieces are in `bed/src/bed/t
 - The frame's geometry is in bbsengine6 `specs/util.md` (Frames). The field is placed from the frame's
   geometry, not by hand-written cursor moves. Every move is relative to the frame's own rows (`place_row`,
   `after_field`); the frame reads no terminal state and sends no save or restore.
+- **The configured sign-in callable** (`bed.json` `auth.authenticate`, default `"bed.tools.authenticate:authenticate"`).
+  Front ends resolve it once at startup with bbsengine6 `module.resolve_callable(spec, _stub_authenticate)`, which imports
+  the `module:attr` and checks it against the contract stub with the same rule the loader uses for `access()` and `init()`.
+  Contract: keyword-only `directory, title="login", header=None, fd=0, store_token=True, moniker=""`, extra keywords
+  allowed (`**kwargs`), returns `(moniker, token)`. A callable that does not match fails at the front end's own startup
+  with the spec and the expected and found signatures. The daemon does not call it. Known gap: the return check compares a
+  generic's origin and arguments as a set, so a tuple of other element types passes.
 - Tab and Shift-Tab between the fields are not implemented; see
   `bbsengine6/handbook/todo/auth-frame-tab-between-fields.md`.
 - **`bed.api.login.handle_login(service, LoginRequest)`** (`api/login.py`): the login core, answering the

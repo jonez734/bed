@@ -61,8 +61,12 @@ def _login(moniker: str, password: str, args=None) -> tuple[str, str, str]:
 
 
 def authenticate(*, directory: str, title: str = "login", header: Optional[str] = None, fd: int = 0,
-                 store_token: bool = True, moniker: str = "") -> tuple[str, str]:
-    """Prompt, log in, and (when ``store_token``) store the token. Returns ``(moniker, token)``; token is "" on refusal."""
+                 store_token: bool = True, moniker: str = "", **kwargs) -> tuple[str, str]:
+    """Prompt, log in, and (when ``store_token``) store the token. Returns ``(moniker, token)``; token is "" on refusal.
+
+    ``**kwargs`` is accepted so the configured callable (``auth.authenticate``) keeps matching the contract when a caller
+    passes an option this version does not use. Extra options are ignored.
+    """
     name, password = presentation.prompt_credentials(title=title, header=header) if not moniker else (
         moniker, presentation.prompt_credentials(title=title, header=header)[1])
     status, token, logged_in = _login(name, password)
