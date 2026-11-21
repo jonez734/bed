@@ -971,7 +971,9 @@ Every front end signs a player in the same way. The pieces are in `bed/src/bed/t
   Front ends resolve it once at startup with bbsengine6 `module.resolve_callable(spec, _stub_authenticate)`, which imports
   the `module:attr` and checks it against the contract stub with the same rule the loader uses for `access()` and `init()`.
   Contract: keyword-only `directory, title="login", header=None, fd=0, store_token=True, moniker="", debug=False`
-  (`debug=True` echoes the bed URL `ws://host:port/path` and `io.terminal.report()` at debug level), extra keywords
+  (`debug=True` echoes, at debug level and in this order: the bed URL `ws://host:port/path`; `io.terminal.report()`;
+  the local time with its zone, UTC in parentheses; and the bed ping result, the pong laid out one key per line, or
+  `bed ping: unavailable (...)` when the daemon is down, after which the prompt still runs), extra keywords
   allowed (`**kwargs`), returns `(moniker, token)`. A callable that does not match fails at the front end's own startup
   with the spec and the expected and found signatures. The daemon does not call it. Known gap: the return check compares a
   generic's origin and arguments as a set, so a tuple of other element types passes.

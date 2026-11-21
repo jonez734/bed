@@ -12,6 +12,13 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### feat(auth): debug also echoes the local time and the bed ping result
+
+With `debug=True`, `authenticate` echoes the local time with its zone name and UTC in parentheses, then runs a bed ping on
+the front end's endpoint and echoes the pong one key per line (`{labelcolor}`/`{valuecolor}`). A daemon that is down is
+reported as `bed ping: unavailable (...)` and the sign-in continues to the prompt. Tests:
+`test_authenticate_debug_time_and_ping.py`. Also wraps an over-long docstring line.
+
 ### feat(auth): debug echoes the bed URL and the terminal report at sign-in
 
 `authenticate(..., debug=True)` echoes the bed URL it will dial (`ws://host:port/path`) and `io.terminal.report()` at

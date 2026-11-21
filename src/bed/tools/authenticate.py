@@ -10,6 +10,7 @@ this function and are removed in the next release.
 
 from __future__ import annotations
 
+import datetime as dt
 import os
 import warnings
 from typing import Optional
@@ -19,6 +20,36 @@ from bbsengine6.seam.codes import ErrorCode
 from bbsengine6 import io
 
 from bed.tools import presentation, store, token_name
+
+
+datetime = dt.datetime
+
+
+def time_line() -> str:
+    """The local time with its zone name, then UTC in parentheses: ``2026-11-20 14:03:22 EST (2026-11-20 19:03:22 UTC)``."""
+    local = datetime.now().astimezone()
+    utc = local.astimezone(dt.timezone.utc)
+    zone = local.tzname() or local.strftime("%z")
+    return f"{local:%Y-%m-%d %H:%M:%S} {zone} ({utc:%Y-%m-%d %H:%M:%S} UTC)"
+
+
+def ping_lines(pong: dict) -> list[str]:
+    """The pong dict laid out one key per line, with the colour tokens, under a ``bed ping:`` header."""
+    lines = ["bed ping:"]
+    for key, value in pong.items():
+        lines.append(f"{{labelcolor}}{key}: {{valuecolor}}{value}")
+    return lines
+
+
+def _bed_ping(args=None) -> dict:
+    """Ping the running bed on the front end's endpoint, synchronously. Raises PingUnavailable when it is down."""
+    import asyncio
+
+    from bed.tools.ping import send_ping
+
+    endpoint = args if args is not None else _default_bed_args()
+    return asyncio.run(send_ping(endpoint.bed_host, endpoint.bed_port, path=endpoint.bed_path,
+                                 timeout=endpoint.bed_call_timeout, prog="bed"))
 
 
 def token_directory(args=None) -> str:
@@ -62,17 +93,33 @@ def _login(moniker: str, password: str, args=None) -> tuple[str, str, str]:
     return "ok", token, str(reply.get("moniker") or moniker)
 
 
+def _echo_ping() -> None:
+    """Echo the bed ping result at debug level. A down daemon is reported, and the sign-in continues."""
+    from bed.tools.ping import PingUnavailable
+
+    try:
+        pong = _bed_ping()
+    except PingUnavailable as exc:
+        io.echo(f"bed ping: unavailable ({exc})", level="debug")
+        return
+    for line in ping_lines(pong):
+        io.echo(line, level="debug")
+
+
 def authenticate(*, directory: str, title: str = "login", header: Optional[str] = None, fd: int = 0,
                  store_token: bool = True, moniker: str = "", debug: bool = False, **kwargs) -> tuple[str, str]:
     """Prompt, log in, and (when ``store_token``) store the token. Returns ``(moniker, token)``; token is "" on refusal.
 
-    ``debug=True`` echoes the bed URL and the terminal report (level "debug"). ``**kwargs`` is accepted so the configured callable (``auth.authenticate``) keeps matching the contract when a caller
-    passes an option this version does not use. Extra options are ignored.
+    ``debug=True`` echoes the bed URL, the terminal report, the local time (UTC in parentheses) and the bed ping result,
+    all at level "debug". ``**kwargs`` is accepted so the configured callable (``auth.authenticate``) keeps matching the
+    contract when a caller passes an option this version does not use. Extra options are ignored.
     """
     if debug:
         endpoint = _default_bed_args()
         io.echo(f"bed url: ws://{endpoint.bed_host}:{endpoint.bed_port}{endpoint.bed_path}", level="debug")
         io.echo(f"terminal: {io.terminal.report()}", level="debug")
+        io.echo(f"time: {time_line()}", level="debug")
+        _echo_ping()
     name, password = presentation.prompt_credentials(title=title, header=header) if not moniker else (
         moniker, presentation.prompt_credentials(title=title, header=header)[1])
     status, token, logged_in = _login(name, password)
