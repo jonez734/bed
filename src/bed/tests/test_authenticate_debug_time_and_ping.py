@@ -57,8 +57,8 @@ class TestPingEcho(unittest.TestCase):
         args = auth._default_bed_args()
         with patch.object(auth, "_default_bed_args", return_value=args), \
              patch.object(auth, "_bed_ping", side_effect=PingUnavailable("localhost", 8765, OSError("refused"))), \
-             patch.object(auth.presentation, "prompt_credentials",
-                          side_effect=lambda **k: prompted.append(k) or ("jam", "pw")), \
+             patch.object(auth, "_presentation",
+                          return_value=lambda **k: prompted.append(k) or ("jam", "pw")), \
              patch.object(auth, "_login", return_value=("ok", "tok", "jam")), \
              patch.object(auth.store, "store_token"), \
              patch.object(auth.io, "echo", side_effect=lambda t="", *a, **k: echoes.append((str(t), k.get("level")))), \

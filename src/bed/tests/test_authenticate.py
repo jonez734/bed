@@ -12,7 +12,7 @@ from bed.tools import authenticate as auth_mod
 class TestAuthenticate(unittest.TestCase):
     def test_a_good_login_stores_the_token_and_returns_it(self):
         with tempfile.TemporaryDirectory() as d, \
-             patch.object(auth_mod.presentation, "prompt_credentials", return_value=("jam", "secret")), \
+             patch.object(auth_mod, "_presentation", return_value=lambda **k: ("jam", "secret")), \
              patch.object(auth_mod, "_login", return_value=("ok", "tok-1", "jam")):
             moniker, token = auth_mod.authenticate(directory=d, title="zoid6 auth", fd=0)
             self.assertEqual((moniker, token), ("jam", "tok-1"))
@@ -20,7 +20,7 @@ class TestAuthenticate(unittest.TestCase):
 
     def test_a_refused_login_stores_nothing_and_returns_no_token(self):
         with tempfile.TemporaryDirectory() as d, \
-             patch.object(auth_mod.presentation, "prompt_credentials", return_value=("jam", "wrong")), \
+             patch.object(auth_mod, "_presentation", return_value=lambda **k: ("jam", "wrong")), \
              patch.object(auth_mod, "_login", return_value=("invalid_credentials", "", "jam")):
             moniker, token = auth_mod.authenticate(directory=d, title="zoid6 auth", fd=0)
             self.assertEqual(token, "")

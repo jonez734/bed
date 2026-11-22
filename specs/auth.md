@@ -967,6 +967,11 @@ Every front end signs a player in the same way. The pieces are in `bed/src/bed/t
 - The frame's geometry is in bbsengine6 `specs/util.md` (Frames). The field is placed from the frame's
   geometry, not by hand-written cursor moves. Every move is relative to the frame's own rows (`place_row`,
   `after_field`); the frame reads no terminal state and sends no save or restore.
+- **The configured login presentation** (`bed.json` `auth.presentation`, default `"bed.tools.presentation:prompt_credentials"`).
+  `authenticate` asks it for the moniker and password. It is resolved on each sign-in against bbsengine6
+  `_stub_prompt_credentials`: keyword-only `title, header, width`, extra keywords allowed (`**kwargs`), returning
+  `(moniker, password)`, and raising `CredentialsCancelled` on cancel. A value that does not match fails when it is
+  resolved, with the key named, before the prompt.
 - **The configured sign-in callable** (`bed.json` `auth.authenticate`, default `"bed.tools.authenticate:authenticate"`).
   Front ends resolve it once at startup with bbsengine6 `module.resolve_callable(spec, _stub_authenticate)`, which imports
   the `module:attr` and checks it against the contract stub with the same rule the loader uses for `access()` and `init()`.

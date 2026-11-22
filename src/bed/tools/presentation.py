@@ -39,12 +39,14 @@ def _read_password(prompt: str, width: int) -> str:
     return inputpassword(prompt, args=None, bottombar=False)
 
 
-def prompt_credentials(*, title: str = "login", header: Optional[str] = None, width: int = 25) -> tuple[str, str]:
+def prompt_credentials(*, title: str = "login", header: Optional[str] = None, width: int = 25,
+                       **kwargs) -> tuple[str, str]:
     """Ask for a moniker and a password in one frame, with a row for each. Blank fields are asked again. Ctrl-D cancels.
 
     The frame is drawn once with two interior rows. The moniker is read on the first row; its Enter leaves the cursor one
     row below the field (after_field), and the password is read on the second row. No box is grown and no absolute
-    position is sent. On a terminal without ANSI the prompts are printed as plain text.
+    position is sent. On a terminal without ANSI the prompts are printed as plain text. ``**kwargs`` is accepted so the
+    configured presentation keeps matching the contract; extra options are ignored.
     """
     if header:
         io.echo(header)

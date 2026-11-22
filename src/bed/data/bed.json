@@ -34,6 +34,8 @@
     "credential_provider": "password",
     "bed_instance_id": null,
     "authenticate": "bed.tools.authenticate:authenticate",
+    "presentation": "bed.tools.presentation:prompt_credentials",
+    "_comment_presentation": "The login presentation: 'module:attribute' resolved against bbsengine6's _stub_prompt_credentials (keyword-only title, header, width; returns (moniker, password); raises CredentialsCancelled on cancel). The default is the terminal presentation.",
     "_comment_authenticate": "The sign-in callable front ends use: 'module:attribute', resolved with bbsengine6 module.resolve_callable against _stub_authenticate (keyword-only directory, title, header, fd, store_token, moniker; returns a tuple). A front end that cannot resolve it fails at its own startup."
   },
   "echo": {

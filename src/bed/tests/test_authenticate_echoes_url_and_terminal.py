@@ -14,7 +14,7 @@ class TestEchoes(unittest.TestCase):
     def _run(self, debug):
         echoes = []
         with patch.object(auth, "_default_bed_args", return_value=auth._default_bed_args()), \
-             patch.object(auth.presentation, "prompt_credentials", return_value=("jam", "pw")), \
+             patch.object(auth, "_presentation", return_value=lambda **k: ("jam", "pw")), \
              patch.object(auth, "_login", return_value=("ok", "tok", "jam")), \
              patch.object(auth.store, "store_token"), \
              patch.object(auth.io, "echo", side_effect=lambda t="", *a, **k: echoes.append((str(t), k.get("level")))), \

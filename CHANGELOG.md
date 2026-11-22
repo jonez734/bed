@@ -12,6 +12,13 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### feat(auth): the login presentation is configured in bed.json (`auth.presentation`)
+
+`authenticate` asks the presentation named by `auth.presentation` for the moniker and password, instead of calling the
+terminal prompt directly. The default is unchanged (`bed.tools.presentation:prompt_credentials`). `prompt_credentials`
+accepts `**kwargs` so it matches the contract. Tests: `test_authenticate_presentation_config.py`; the authenticate tests
+now patch `_presentation()`, the callable production code uses.
+
 ### test(auth): the debug time line is checked in several local zones
 
 `test_authenticate_time_other_zones.py` sets `TZ` for Los Angeles (PST), New York (EST), London (GMT), Kolkata (+05:30),

@@ -114,6 +114,33 @@ def _echo_ping() -> None:
         io.echo(line, level="debug")
 
 
+def _presentation():
+    """The login presentation named by bed.json ``auth.presentation``, resolved against the contract stub.
+
+    The shipped value is the terminal presentation. A value that does not match the contract raises when resolved, with
+    the key named, before any prompt.
+    """
+    from bbsengine6 import module as be6_module
+
+    spec = _configured_auth_value("presentation", "bed.tools.presentation:prompt_credentials")
+    try:
+        return be6_module.resolve_callable(spec, be6_module._stub_prompt_credentials)
+    except (ValueError, TypeError) as exc:
+        raise type(exc)(f"auth.presentation in bed.json: {exc}") from exc
+
+
+def _configured_auth_value(key: str, default: str) -> str:
+    """The ``auth`` section value for ``key`` from the shipped bed.json, or ``default`` when it is absent."""
+    import json
+    from pathlib import Path
+
+    import bed
+
+    path = Path(bed.__file__).resolve().parent / "data" / "bed.json"
+    auth_section = json.loads(path.read_text(encoding="utf-8")).get("auth", {})
+    return auth_section.get(key) or default
+
+
 def authenticate(*, directory: str, title: str = "login", header: Optional[str] = None, fd: int = 0,
                  store_token: bool = True, moniker: str = "", debug: bool = False, **kwargs) -> tuple[str, str]:
     """Prompt, log in, and (when ``store_token``) store the token. Returns ``(moniker, token)``; token is "" on refusal.
@@ -128,8 +155,9 @@ def authenticate(*, directory: str, title: str = "login", header: Optional[str] 
         io.echo(f"terminal: {io.terminal.report()}", level="debug")
         io.echo(f"time: {time_line()}", level="debug")
         _echo_ping()
-    name, password = presentation.prompt_credentials(title=title, header=header) if not moniker else (
-        moniker, presentation.prompt_credentials(title=title, header=header)[1])
+    prompt = _presentation()
+    name, password = prompt(title=title, header=header) if not moniker else (
+        moniker, prompt(title=title, header=header)[1])
     status, token, logged_in = _login(name, password)
     if status != ErrorCode.OK.value or not token:
         return logged_in, ""
