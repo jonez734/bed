@@ -12,6 +12,13 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### feat(auth): a Tk login presentation (`bed.tools.presentation_tk`)
+
+A Tk window for the sign-in, selectable with `auth.presentation`. One window per sign-in, with the header, `moniker:` and
+`password:` entries and a Login button. Same contract as the terminal presentation; Escape or closing the window cancels.
+It does not check the password (the daemon login does). Tests are headless (`test_presentation_tk.py`, tkinter stubbed);
+the window itself is not tested here and needs a display.
+
 ### feat(auth): the login presentation is configured in bed.json (`auth.presentation`)
 
 `authenticate` asks the presentation named by `auth.presentation` for the moniker and password, instead of calling the

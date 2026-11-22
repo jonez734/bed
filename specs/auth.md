@@ -972,6 +972,13 @@ Every front end signs a player in the same way. The pieces are in `bed/src/bed/t
   `_stub_prompt_credentials`: keyword-only `title, header, width`, extra keywords allowed (`**kwargs`), returning
   `(moniker, password)`, and raising `CredentialsCancelled` on cancel. A value that does not match fails when it is
   resolved, with the key named, before the prompt.
+- **The Tk login presentation** (`bed.tools.presentation_tk:prompt_credentials`). Set `auth.presentation` to it to use a
+  Tk window in place of the terminal prompt. One window per sign-in: a header label, `moniker:` and `password:` entries
+  (the password masked with `*`), and a Login button. Enter in the password field or Login returns the two values; a blank
+  field keeps the window open; Escape or closing the window raises `CredentialsCancelled`; the window is destroyed on every
+  path. The presentation does not check the password: the caller logs in over the wire. `tkinter` is imported only when the
+  prompt runs. Tests stub `tkinter` (`test_presentation_tk.py`); a real window needs a display and is checked by hand.
+  Tk and the terminal presentation are not run in the same process at the same time.
 - **The configured sign-in callable** (`bed.json` `auth.authenticate`, default `"bed.tools.authenticate:authenticate"`).
   Front ends resolve it once at startup with bbsengine6 `module.resolve_callable(spec, _stub_authenticate)`, which imports
   the `module:attr` and checks it against the contract stub with the same rule the loader uses for `access()` and `init()`.
