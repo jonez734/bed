@@ -12,6 +12,12 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### feat(auth): the sign-in paints both labels before the first read
+
+`prompt_credentials` paints `moniker:` and `password:` on their rows first (`Frame.paint_label`), then moves back to the first
+child before reading the moniker. Text starts one space after the left border. Tests: `test_prompt_paints_labels_first.py`;
+`test_prompt_one_frame.py` and `test_auth_frame.py` updated to the new order.
+
 ### feat(auth): a Tk login presentation (`bed.tools.presentation_tk`)
 
 A Tk window for the sign-in, selectable with `auth.presentation`. One window per sign-in, with the header, `moniker:` and

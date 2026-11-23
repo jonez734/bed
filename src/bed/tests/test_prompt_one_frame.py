@@ -38,6 +38,9 @@ class TestOneFrame(unittest.TestCase):
         frame_calls = []
 
         class _Frame:
+            def paint_label(self, index, text):
+                frame_calls.append(("label", index, text))
+
             def place_row(self, index):
                 frame_calls.append(("place_row", index))
 
@@ -49,7 +52,8 @@ class TestOneFrame(unittest.TestCase):
              patch.object(presentation, "_read_password", side_effect=lambda p, w: frame_calls.append(("password",)) or "pw"):
             presentation.prompt_credentials(title="zoid6 auth")
         self.assertEqual(frame_calls, [
-            ("place_row", 0), ("moniker",), ("after_field",), ("place_row", 1), ("password",),
+            ("label", 0, "moniker:"), ("label", 1, "password:"), ("place_row", 0), ("moniker",),
+            ("after_field",), ("place_row", 1), ("password",),
         ])
 
     def test_extend_frame_is_not_used(self):

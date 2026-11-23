@@ -57,6 +57,9 @@ def prompt_credentials(*, title: str = "login", header: Optional[str] = None, wi
     try:
         if ansi:
             frame = draw_frame(title, width, height=2)
+            # Paint every child's label before the first read, then move back to the first child.
+            frame.paint_label(0, "moniker:")
+            frame.paint_label(1, "password:")
             frame.place_row(0)
         moniker = ""
         while not moniker.strip():
