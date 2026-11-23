@@ -12,6 +12,11 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### fix(auth): the moniker and password labels are one width, so their values line up
+
+`LABEL_MONIKER` and `LABEL_PASSWORD` are both 10 characters, so the typed values start in the same column (13). The painted
+labels and the read prompts use the same constants. Test: `test_prompt_paints_labels_first.py`.
+
 ### feat(auth): the sign-in paints both labels before the first read
 
 `prompt_credentials` paints `moniker:` and `password:` on their rows first (`Frame.paint_label`), then moves back to the first

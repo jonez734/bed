@@ -52,7 +52,7 @@ class TestOneFrame(unittest.TestCase):
              patch.object(presentation, "_read_password", side_effect=lambda p, w: frame_calls.append(("password",)) or "pw"):
             presentation.prompt_credentials(title="zoid6 auth")
         self.assertEqual(frame_calls, [
-            ("label", 0, "moniker:"), ("label", 1, "password:"), ("place_row", 0), ("moniker",),
+            ("label", 0, presentation.LABEL_MONIKER), ("label", 1, presentation.LABEL_PASSWORD), ("place_row", 0), ("moniker",),
             ("after_field",), ("place_row", 1), ("password",),
         ])
 

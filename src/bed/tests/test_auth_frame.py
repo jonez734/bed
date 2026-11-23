@@ -48,7 +48,7 @@ class TestAuthFrameIsOne(unittest.TestCase):
              patch.object(presentation, "_read_field", _Answers("jam")), \
              patch.object(presentation, "_read_password", _Answers("pw")):
             presentation.prompt_credentials(title="zoid6 auth", width=25)
-        self.assertEqual(rows, [("label", 0, "moniker:"), ("label", 1, "password:"), 0, "after", 1])
+        self.assertEqual(rows, [("label", 0, presentation.LABEL_MONIKER), ("label", 1, presentation.LABEL_PASSWORD), 0, "after", 1])
 
     def test_the_password_is_read_masked_inside_the_frame(self):
         prompts = []

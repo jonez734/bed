@@ -39,6 +39,11 @@ def _read_password(prompt: str, width: int) -> str:
     return inputpassword(prompt, args=None, bottombar=False)
 
 
+#: The sign-in labels, padded to one width so the values after them start in the same column.
+LABEL_MONIKER = "moniker:  "
+LABEL_PASSWORD = "password: "
+
+
 def prompt_credentials(*, title: str = "login", header: Optional[str] = None, width: int = 25,
                        **kwargs) -> tuple[str, str]:
     """Ask for a moniker and a password in one frame, with a row for each. Blank fields are asked again. Ctrl-D cancels.
@@ -58,18 +63,18 @@ def prompt_credentials(*, title: str = "login", header: Optional[str] = None, wi
         if ansi:
             frame = draw_frame(title, width, height=2)
             # Paint every child's label before the first read, then move back to the first child.
-            frame.paint_label(0, "moniker:")
-            frame.paint_label(1, "password:")
+            frame.paint_label(0, LABEL_MONIKER)
+            frame.paint_label(1, LABEL_PASSWORD)
             frame.place_row(0)
         moniker = ""
         while not moniker.strip():
-            moniker = _read_field("{promptcolor}moniker: {inputcolor}", width)
+            moniker = _read_field("{promptcolor}" + LABEL_MONIKER + "{inputcolor}", width)
         if ansi:
             frame.after_field()
             frame.place_row(1)
         password = ""
         while not password:
-            password = _read_password("{promptcolor}password: {inputcolor}", width)
+            password = _read_password("{promptcolor}" + LABEL_PASSWORD + "{inputcolor}", width)
     except EOFError as exc:
         raise CredentialsCancelled() from exc
     return moniker.strip(), password
