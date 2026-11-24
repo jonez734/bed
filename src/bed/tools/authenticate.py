@@ -141,6 +141,13 @@ def _configured_auth_value(key: str, default: str) -> str:
     return auth_section.get(key) or default
 
 
+def signin_form(*, title: str = "login"):
+    """The sign-in as a Form: the moniker textbox, then the password textbox, shown as nothing (mask "")."""
+    from bed.tools.presentation import _default_form
+
+    return _default_form(title)
+
+
 def authenticate(*, directory: str, title: str = "login", header: Optional[str] = None, fd: int = 0,
                  store_token: bool = True, moniker: str = "", debug: bool = False, **kwargs) -> tuple[str, str]:
     """Prompt, log in, and (when ``store_token``) store the token. Returns ``(moniker, token)``; token is "" on refusal.

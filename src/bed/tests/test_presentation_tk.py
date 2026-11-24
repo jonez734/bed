@@ -75,6 +75,7 @@ class FakeRoot:
         self.title_text = None
         self.entries = {}
         self.buttons = {}
+        self.idle_callbacks = []
         FakeRoot.instances.append(self)
 
     def title(self, text):
@@ -85,6 +86,9 @@ class FakeRoot:
 
     def protocol(self, name, func):
         self.protocol_handler = func
+
+    def after_idle(self, func, *args):
+        self.idle_callbacks.append((func, args))
 
     def mainloop(self):
         if self.script:
@@ -203,3 +207,106 @@ class TestNoPasswordCheck(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFocus(unittest.TestCase):
+    """The moniker entry takes focus once the window is drawn, so the first key goes to it on every window manager."""
+
+    def test_the_moniker_focus_is_deferred_until_the_window_is_idle(self):
+        seen = {}
+
+        def script(root):
+            seen["idle"] = list(root.idle_callbacks)
+            root.entries["moniker"].set("jam")
+            root.entries["password"].set("pw")
+            root.bindings["<Return>"](None)
+
+        _run(script)
+        self.assertEqual(len(seen["idle"]), 1, "exactly one focus call is queued before mainloop")
+        func, _args = seen["idle"][0]
+        self.assertEqual(getattr(func, "__name__", ""), "focus_set")
+
+
+class TestFormContract(unittest.TestCase):
+    """The Tk presentation declares form last (the contract's position) and reads its labels and password mask from it."""
+
+    def test_the_signature_declares_form_after_the_original_keywords(self):
+        names = list(inspect.signature(tk_mod.prompt_credentials).parameters)
+        self.assertEqual(names[:3], ["title", "header", "width"])
+        self.assertEqual(names[3], "form")
+
+    def test_the_shipped_presentation_passes_the_contract(self):
+        from bbsengine6 import module as be6
+        self.assertIsNone(be6.check_signature(tk_mod.prompt_credentials, be6._stub_prompt_credentials,
+                                              name="prompt_credentials"))
+
+    def test_the_labels_come_from_the_form(self):
+        from bbsengine6.form import Form, FormItemTextbox
+        form = Form("zoid6 auth", [FormItemTextbox(label="Name:", name="moniker"),
+                                   FormItemTextbox(label="Secret:", name="password", mask="")])
+        labels = []
+
+        def script(root):
+            root.entries["moniker"].set("jam")
+            root.entries["password"].set("pw")
+            root.bindings["<Return>"](None)
+
+        FakeRoot.instances.clear()
+        fake_tk = types.SimpleNamespace(W="w", E="e", END="end")
+        fake_ttk = types.SimpleNamespace(Label=FakeWidgetLabel(labels), Entry=FakeWidget, Button=FakeButton)
+
+        def make_root(*a, **k):
+            return FakeRoot(script)
+
+        with patch.object(tk_mod, "_tk_components", return_value=(make_root, FakeVar, (fake_tk, fake_ttk))):
+            tk_mod.prompt_credentials(title="zoid6 auth", header="v1", width=25, form=form)
+        self.assertIn("Name:", labels)
+        self.assertIn("Secret:", labels)
+
+
+class FakeWidgetLabel:
+    """A Label that records its text, so a test can see the labels the window was given."""
+
+    def __init__(self, sink):
+        self.sink = sink
+
+    def __call__(self, root=None, text="", **kwargs):
+        self.sink.append(text)
+        return FakeWidget(root, **kwargs)
+
+
+class TestPasswordMaskFromTheForm(unittest.TestCase):
+    """The password entry's show option comes from the form's password textbox: "*" shows asterisks, "" shows nothing."""
+
+    def _show_for(self, mask):
+        from bbsengine6.form import Form, FormItemTextbox
+        form = Form("zoid6 auth", [FormItemTextbox(label="moniker: ", name="moniker"),
+                                   FormItemTextbox(label="password: ", name="password", mask=mask)])
+        shows = []
+
+        class Entry(FakeWidget):
+            def __init__(self, root=None, **kwargs):
+                super().__init__(root, **kwargs)
+                shows.append(kwargs.get("show"))
+
+        def script(root):
+            root.entries["moniker"].set("jam")
+            root.entries["password"].set("pw")
+            root.bindings["<Return>"](None)
+
+        FakeRoot.instances.clear()
+        fake_tk = types.SimpleNamespace(W="w", E="e", END="end")
+        fake_ttk = types.SimpleNamespace(Label=FakeWidget, Entry=Entry, Button=FakeButton)
+
+        def make_root(*a, **k):
+            return FakeRoot(script)
+
+        with patch.object(tk_mod, "_tk_components", return_value=(make_root, FakeVar, (fake_tk, fake_ttk))):
+            tk_mod.prompt_credentials(title="zoid6 auth", header="v1", width=25, form=form)
+        return shows[1]
+
+    def test_an_asterisk_mask_shows_asterisks(self):
+        self.assertEqual(self._show_for("*"), "*")
+
+    def test_an_empty_mask_shows_nothing(self):
+        self.assertEqual(self._show_for(""), "")

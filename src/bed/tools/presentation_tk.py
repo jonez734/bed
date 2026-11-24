@@ -25,12 +25,20 @@ def _tk():
 
 
 def prompt_credentials(*, title: str = "login", header: Optional[str] = None, width: int = 25,
-                       **kwargs) -> tuple[str, str]:
+                       form=None, **kwargs) -> tuple[str, str]:
     """Ask for a moniker and a password in one Tk window. Returns ``(moniker, password)``.
+
+    ``form`` gives the two textboxes (moniker, then password): their labels, and the password's mask (a "*" shows an
+    asterisk per character, "" shows nothing). When not given, the sign-in form is used.
 
     Raises CredentialsCancelled on Escape or when the window is closed. ``**kwargs`` is accepted so the configured
     presentation keeps matching the contract; extra options are ignored.
     """
+    if form is None:
+        from bed.tools.presentation import _default_form
+
+        form = _default_form(title)
+    moniker_box, password_box = form[0], form[1]
     make_root, make_var, (tk, ttk) = _tk_components()
     root = make_root()
     outcome: dict = {}
@@ -43,13 +51,13 @@ def prompt_credentials(*, title: str = "login", header: Optional[str] = None, wi
         password_var = make_var()
         entries: dict = {}
 
-        ttk.Label(root, text="moniker:").grid(column=0, row=1, sticky=tk.W, padx=5, pady=5)
+        ttk.Label(root, text=moniker_box.label).grid(column=0, row=1, sticky=tk.W, padx=5, pady=5)
         moniker_entry = ttk.Entry(root, textvariable=moniker_var, width=max(8, width - 6))
         moniker_entry.grid(column=1, row=1, sticky=tk.E, padx=5, pady=5)
         entries["moniker"] = moniker_var
 
-        ttk.Label(root, text="password:").grid(column=0, row=2, sticky=tk.W, padx=5, pady=5)
-        password_entry = ttk.Entry(root, textvariable=password_var, show="*", width=max(8, width - 6))
+        ttk.Label(root, text=password_box.label).grid(column=0, row=2, sticky=tk.W, padx=5, pady=5)
+        password_entry = ttk.Entry(root, textvariable=password_var, show=(password_box.mask or ""), width=max(8, width - 6))
         password_entry.grid(column=1, row=2, sticky=tk.E, padx=5, pady=5)
         entries["password"] = password_var
 
@@ -72,7 +80,9 @@ def prompt_credentials(*, title: str = "login", header: Optional[str] = None, wi
         root.bind("<Return>", submit)
         root.bind("<Escape>", cancel)
         root.protocol("WM_DELETE_WINDOW", cancel)
-        moniker_entry.focus_set()
+        # Defer the focus until the window is drawn: a focus call made before the window is mapped can land on the wrong
+        # window on some window managers.
+        root.after_idle(moniker_entry.focus_set)
 
         # Test hook: a fake root that exposes ``entries`` receives the field variables. A real Tk root has no such attribute.
         if hasattr(root, "entries"):

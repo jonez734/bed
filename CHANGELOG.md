@@ -12,6 +12,13 @@ short hashes are the ones from this repository's history.
 
 ## Unreleased
 
+### feat(auth): the sign-in is a Form; both presentations read their fields and password mask from it
+
+`signin_form()` describes the sign-in as a moniker textbox and a password textbox (mask `""`, so nothing is shown). The terminal
+and Tk presentations declare `form` last (the contract's position) and take their labels and the password mask from it; the old
+keywords still build the same form. The Tk window takes its moniker focus through `after_idle`, so it lands once the window is
+drawn. Tests: `test_signin_form.py`; `test_presentation_tk.py` (focus, labels, and mask).
+
 ### fix(auth): the moniker and password labels are one width, so their values line up
 
 `LABEL_MONIKER` and `LABEL_PASSWORD` are both 10 characters, so the typed values start in the same column (13). The painted
